@@ -103,9 +103,9 @@ describe( 'FlowMcpCli.validationImport', () => {
 } )
 
 
-describe( 'FlowMcpCli.validationGroupAdd', () => {
+describe( 'FlowMcpCli.validationGroupAppend', () => {
     it( 'rejects missing name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: undefined } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: undefined, tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
         expect( messages[ 0 ] ).toContain( 'Missing value' )
@@ -113,15 +113,15 @@ describe( 'FlowMcpCli.validationGroupAdd', () => {
 
 
     it( 'rejects empty name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: '  ' } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: '  ', tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
         expect( messages[ 0 ] ).toContain( 'Must not be empty' )
     } )
 
 
-    it( 'accepts valid name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: 'test-group' } )
+    it( 'accepts valid name and tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: 'test-group', tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( true )
         expect( messages.length ).toBe( 0 )

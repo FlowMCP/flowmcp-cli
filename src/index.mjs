@@ -67,16 +67,17 @@ const main = async () => {
         const subCommand = positionals[ 1 ]
         const groupName = positionals[ 2 ]
 
-        if( subCommand === 'set' ) {
+        if( subCommand === 'append' ) {
             const tools = values[ 'tools' ]
-            const { result } = await FlowMcpCli.groupSet( { 'name': groupName, tools, cwd } )
+            const { result } = await FlowMcpCli.groupAppend( { 'name': groupName, tools, cwd } )
             output( { result } )
 
             return
         }
 
-        if( subCommand === 'add' ) {
-            const { result } = await FlowMcpCli.groupAdd( { 'name': groupName, cwd } )
+        if( subCommand === 'remove' ) {
+            const tools = values[ 'tools' ]
+            const { result } = await FlowMcpCli.groupRemove( { 'name': groupName, tools, cwd } )
             output( { result } )
 
             return

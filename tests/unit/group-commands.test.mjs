@@ -21,45 +21,109 @@ afterAll( async () => {
 } )
 
 
-describe( 'FlowMcpCli.validationGroupAdd', () => {
+describe( 'FlowMcpCli.validationGroupAppend', () => {
     it( 'rejects missing name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: undefined } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: undefined, tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
-        expect( messages.length ).toBe( 1 )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
         expect( messages[ 0 ] ).toContain( 'Missing value' )
     } )
 
 
     it( 'rejects null name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: null } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: null, tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
-        expect( messages.length ).toBe( 1 )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
         expect( messages[ 0 ] ).toContain( 'Missing value' )
     } )
 
 
     it( 'rejects non-string name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: 42 } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: 42, tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
-        expect( messages.length ).toBe( 1 )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
         expect( messages[ 0 ] ).toContain( 'Must be a string' )
     } )
 
 
     it( 'rejects empty name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: '   ' } )
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: '   ', tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( false )
-        expect( messages.length ).toBe( 1 )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
         expect( messages[ 0 ] ).toContain( 'Must not be empty' )
     } )
 
 
-    it( 'accepts valid name', () => {
-        const { status, messages } = FlowMcpCli.validationGroupAdd( { name: 'my-group' } )
+    it( 'rejects missing tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: 'my-group', tools: undefined } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Missing value' )
+    } )
+
+
+    it( 'rejects empty tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: 'my-group', tools: '   ' } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Must not be empty' )
+    } )
+
+
+    it( 'accepts valid name and tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupAppend( { name: 'my-group', tools: 'demo/ping.mjs' } )
+
+        expect( status ).toBe( true )
+        expect( messages.length ).toBe( 0 )
+    } )
+} )
+
+
+describe( 'FlowMcpCli.validationGroupRemove', () => {
+    it( 'rejects missing name', () => {
+        const { status, messages } = FlowMcpCli.validationGroupRemove( { name: undefined, tools: 'demo/ping.mjs' } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Missing value' )
+    } )
+
+
+    it( 'rejects non-string name', () => {
+        const { status, messages } = FlowMcpCli.validationGroupRemove( { name: 123, tools: 'demo/ping.mjs' } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Must be a string' )
+    } )
+
+
+    it( 'rejects missing tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupRemove( { name: 'my-group', tools: undefined } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Missing value' )
+    } )
+
+
+    it( 'rejects empty tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupRemove( { name: 'my-group', tools: '' } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBeGreaterThanOrEqual( 1 )
+        expect( messages[ 0 ] ).toContain( 'Must not be empty' )
+    } )
+
+
+    it( 'accepts valid name and tools', () => {
+        const { status, messages } = FlowMcpCli.validationGroupRemove( { name: 'my-group', tools: 'demo/ping.mjs' } )
 
         expect( status ).toBe( true )
         expect( messages.length ).toBe( 0 )
@@ -159,5 +223,93 @@ describe( 'FlowMcpCli.groupSetDefault', () => {
         expect( result[ 'status' ] ).toBe( false )
         expect( result[ 'messages' ] ).toBeDefined()
         expect( result[ 'messages' ][ 0 ] ).toContain( 'Missing value' )
+    } )
+} )
+
+
+describe( 'FlowMcpCli.groupRemove', () => {
+    it( 'returns error when no local config exists', async () => {
+        const emptyCwd = join( tmpdir(), 'flowmcp-cli-group-remove-empty' )
+        await mkdir( emptyCwd, { recursive: true } )
+
+        const { result } = await FlowMcpCli.groupRemove( { name: 'test', tools: 'demo/ping.mjs', cwd: emptyCwd } )
+
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'No local config found' )
+
+        await rm( emptyCwd, { recursive: true, force: true } )
+    } )
+
+
+    it( 'returns error when group does not exist', async () => {
+        const { result } = await FlowMcpCli.groupRemove( { name: 'nonexistent', tools: 'demo/ping.mjs', cwd: TEST_CWD } )
+
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'not found' )
+    } )
+
+
+    it( 'removes a tool from an existing group', async () => {
+        const removeCwd = join( tmpdir(), 'flowmcp-cli-group-remove-test' )
+        const removeConfigDir = join( removeCwd, '.flowmcp' )
+        const removeConfigPath = join( removeConfigDir, 'config.json' )
+
+        const config = {
+            'root': '~/.flowmcp',
+            'defaultGroup': 'test-group',
+            'groups': {
+                'test-group': {
+                    'description': 'Test group',
+                    'tools': [
+                        'demo/ping.mjs',
+                        'demo/other.mjs',
+                        'demo/third.mjs'
+                    ]
+                }
+            }
+        }
+
+        await mkdir( removeConfigDir, { recursive: true } )
+        await writeFile( removeConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+
+        const { result } = await FlowMcpCli.groupRemove( { name: 'test-group', tools: 'demo/ping.mjs', cwd: removeCwd } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( 'test-group' )
+        expect( result[ 'toolCount' ] ).toBe( 2 )
+        expect( result[ 'tools' ] ).toEqual( [ 'demo/other.mjs', 'demo/third.mjs' ] )
+        expect( result[ 'removed' ] ).toEqual( [ 'demo/ping.mjs' ] )
+
+        await rm( removeCwd, { recursive: true, force: true } )
+    } )
+
+
+    it( 'reports only actually removed tools', async () => {
+        const removeCwd = join( tmpdir(), 'flowmcp-cli-group-remove-partial' )
+        const removeConfigDir = join( removeCwd, '.flowmcp' )
+        const removeConfigPath = join( removeConfigDir, 'config.json' )
+
+        const config = {
+            'root': '~/.flowmcp',
+            'defaultGroup': 'test-group',
+            'groups': {
+                'test-group': {
+                    'description': '',
+                    'tools': [ 'demo/ping.mjs' ]
+                }
+            }
+        }
+
+        await mkdir( removeConfigDir, { recursive: true } )
+        await writeFile( removeConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+
+        const { result } = await FlowMcpCli.groupRemove( { name: 'test-group', tools: 'demo/ping.mjs,demo/nonexistent.mjs', cwd: removeCwd } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'toolCount' ] ).toBe( 0 )
+        expect( result[ 'tools' ] ).toEqual( [] )
+        expect( result[ 'removed' ] ).toEqual( [ 'demo/ping.mjs' ] )
+
+        await rm( removeCwd, { recursive: true, force: true } )
     } )
 } )

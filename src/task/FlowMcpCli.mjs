@@ -699,7 +699,7 @@ class FlowMcpCli {
     }
 
 
-    static async groupAdd( { name, cwd } ) {
+    static async groupAppend( { name, tools, cwd } ) {
         const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
         if( !initialized ) {
             const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
@@ -707,100 +707,12 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { status: validStatus, messages: validMessages } = FlowMcpCli.validationGroupAdd( { name } )
-        if( !validStatus ) {
-            const result = { 'status': false, 'messages': validMessages }
-
-            return { result }
-        }
-
-        const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
-
-        if( availableTools.length === 0 ) {
-            const result = FlowMcpCli.#error( { error: `No tools available. Run: ${appConfig[ 'cliCommand' ]} import <url>` } )
-
-            return { result }
-        }
-
-        const choices = availableTools
-            .map( ( tool ) => {
-                const { toolRef, toolName, description: toolDescription } = tool
-                const label = `${toolName}  ${chalk.gray( toolDescription || '' )}`
-                const choice = { 'name': label, 'value': toolRef }
-
-                return choice
-            } )
-
-        const { selectedTools } = await inquirer.prompt( [
-            {
-                'type': 'checkbox',
-                'name': 'selectedTools',
-                'message': `Select tools for group "${name}":`,
-                choices,
-                validate: ( input ) => {
-                    if( input.length === 0 ) {
-                        return 'Select at least one tool.'
-                    }
-
-                    return true
-                }
-            }
-        ] )
-
-        const { description } = await inquirer.prompt( [
-            {
-                'type': 'input',
-                'name': 'description',
-                'message': 'Group description (optional):',
-                'default': ''
-            }
-        ] )
-
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-        const config = localConfig || { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
-
-        if( !config[ 'groups' ] ) {
-            config[ 'groups' ] = {}
-        }
-
-        config[ 'groups' ][ name ] = {
-            'description': description.trim() || '',
-            'tools': selectedTools
-        }
-
-        if( !config[ 'defaultGroup' ] ) {
-            config[ 'defaultGroup' ] = name
-        }
-
-        await mkdir( join( cwd, appConfig[ 'localConfigDirName' ] ), { recursive: true } )
-        await writeFile( localConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
-
-        const result = {
-            'status': true,
-            'group': name,
-            'toolCount': selectedTools.length,
-            'isDefault': config[ 'defaultGroup' ] === name
-        }
-
-        return { result }
-    }
-
-
-    static async groupSet( { name, tools, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
-        if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
-
-            return { result }
-        }
-
-        const { status: validStatus, messages } = FlowMcpCli.validationGroupSet( { name, tools } )
+        const { status: validStatus, messages } = FlowMcpCli.validationGroupAppend( { name, tools } )
         if( !validStatus ) {
             const result = {
                 'status': false,
                 messages,
-                'fix': `Provide: ${appConfig[ 'cliCommand' ]} group set <name> --tools "source/file.mjs::route1,source/file.mjs::route2"`
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} group append <name> --tools "source/file.mjs::route1,source/file.mjs::route2"`
             }
 
             return { result }
@@ -858,8 +770,25 @@ class FlowMcpCli {
             config[ 'groups' ] = {}
         }
 
+        const existingTools = config[ 'groups' ][ name ]
+            ? ( config[ 'groups' ][ name ][ 'tools' ] || config[ 'groups' ][ name ][ 'schemas' ] || [] )
+            : []
+
+        const merged = [ ...new Set( [ ...existingTools, ...toolRefs ] ) ]
+        const added = toolRefs
+            .filter( ( ref ) => {
+                const isNew = !existingTools.includes( ref )
+
+                return isNew
+            } )
+
+        const existingDescription = config[ 'groups' ][ name ]
+            ? ( config[ 'groups' ][ name ][ 'description' ] || '' )
+            : ''
+
         config[ 'groups' ][ name ] = {
-            'tools': toolRefs
+            'description': existingDescription,
+            'tools': merged
         }
 
         if( !config[ 'defaultGroup' ] ) {
@@ -872,9 +801,99 @@ class FlowMcpCli {
         const result = {
             'status': true,
             'group': name,
-            'toolCount': toolRefs.length,
-            'tools': toolRefs,
+            'toolCount': merged.length,
+            'tools': merged,
+            'added': added,
             'isDefault': config[ 'defaultGroup' ] === name
+        }
+
+        return { result }
+    }
+
+
+    static async groupRemove( { name, tools, cwd } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const { status: validStatus, messages } = FlowMcpCli.validationGroupRemove( { name, tools } )
+        if( !validStatus ) {
+            const result = {
+                'status': false,
+                messages,
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} group remove <name> --tools "source/file.mjs::route1,source/file.mjs::route2"`
+            }
+
+            return { result }
+        }
+
+        const toolRefs = tools
+            .split( ',' )
+            .map( ( s ) => {
+                const trimmed = s.trim()
+
+                return trimmed
+            } )
+            .filter( ( s ) => {
+                const hasLength = s.length > 0
+
+                return hasLength
+            } )
+
+        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
+        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+
+        if( !localConfig ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'No local config found.',
+                'fix': `Run ${appConfig[ 'cliCommand' ]} init first.`
+            } )
+
+            return { result }
+        }
+
+        if( !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ name ] ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Group "${name}" not found.`,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} group list to see available groups.`
+            } )
+
+            return { result }
+        }
+
+        const existingTools = localConfig[ 'groups' ][ name ][ 'tools' ] || localConfig[ 'groups' ][ name ][ 'schemas' ] || []
+        const removeSet = new Set( toolRefs )
+        const remaining = existingTools
+            .filter( ( ref ) => {
+                const keep = !removeSet.has( ref )
+
+                return keep
+            } )
+
+        const removed = toolRefs
+            .filter( ( ref ) => {
+                const wasPresent = existingTools.includes( ref )
+
+                return wasPresent
+            } )
+
+        localConfig[ 'groups' ][ name ][ 'tools' ] = remaining
+
+        if( localConfig[ 'groups' ][ name ][ 'schemas' ] ) {
+            delete localConfig[ 'groups' ][ name ][ 'schemas' ]
+        }
+
+        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+
+        const result = {
+            'status': true,
+            'group': name,
+            'toolCount': remaining.length,
+            'tools': remaining,
+            'removed': removed
         }
 
         return { result }
@@ -2005,7 +2024,7 @@ class FlowMcpCli {
     }
 
 
-    static validationGroupAdd( { name } ) {
+    static validationGroupAppend( { name, tools } ) {
         const struct = { 'status': false, 'messages': [] }
 
         if( name === undefined || name === null ) {
@@ -2014,6 +2033,14 @@ class FlowMcpCli {
             struct[ 'messages' ].push( 'name: Must be a string.' )
         } else if( name.trim().length === 0 ) {
             struct[ 'messages' ].push( 'name: Must not be empty.' )
+        }
+
+        if( tools === undefined || tools === null ) {
+            struct[ 'messages' ].push( 'tools: Missing value. Provide --tools "source/file.mjs::route1,source/file.mjs::route2".' )
+        } else if( typeof tools !== 'string' ) {
+            struct[ 'messages' ].push( 'tools: Must be a string.' )
+        } else if( tools.trim().length === 0 ) {
+            struct[ 'messages' ].push( 'tools: Must not be empty.' )
         }
 
         if( struct[ 'messages' ].length > 0 ) {
@@ -2026,7 +2053,7 @@ class FlowMcpCli {
     }
 
 
-    static validationGroupSet( { name, tools } ) {
+    static validationGroupRemove( { name, tools } ) {
         const struct = { 'status': false, 'messages': [] }
 
         if( name === undefined || name === null ) {
@@ -2220,17 +2247,20 @@ class FlowMcpCli {
         // Level 3: Schemas
         const schemasDir = FlowMcpCli.#schemasDir()
         let schemaSourceCount = 0
+        let sourceDirs = []
         try {
             const entries = await readdir( schemasDir )
-            schemaSourceCount = await entries
-                .reduce( ( promise, entry ) => promise.then( async ( count ) => {
+            const entryResults = await entries
+                .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
                     const entryStat = await stat( join( schemasDir, entry ) )
                     if( entryStat.isDirectory() ) {
-                        return count + 1
+                        acc.push( entry )
                     }
 
-                    return count
-                } ), Promise.resolve( 0 ) )
+                    return acc
+                } ), Promise.resolve( [] ) )
+            sourceDirs = entryResults
+            schemaSourceCount = sourceDirs.length
         } catch {
             schemaSourceCount = 0
         }
@@ -2244,6 +2274,71 @@ class FlowMcpCli {
             'detail': `${schemaSourceCount} source(s)`,
             'fix': `Run: ${appConfig[ 'cliCommand' ]} import <github-url>`
         } )
+
+        // Level 3b: Env Params
+        if( envOk && schemaSourceCount > 0 ) {
+            const envContent = await readFile( envPath, 'utf-8' )
+            const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+
+            const allRequiredParams = new Set()
+            const paramsByNamespace = {}
+
+            await sourceDirs
+                .reduce( ( promise, sourceDir ) => promise.then( async () => {
+                    const registryPath = join( schemasDir, sourceDir, '_registry.json' )
+                    const { data: registry } = await FlowMcpCli.#readJson( { filePath: registryPath } )
+
+                    if( registry && Array.isArray( registry[ 'schemas' ] ) ) {
+                        registry[ 'schemas' ]
+                            .forEach( ( entry ) => {
+                                const { requiredServerParams, namespace } = entry
+                                if( Array.isArray( requiredServerParams ) && requiredServerParams.length > 0 ) {
+                                    requiredServerParams
+                                        .forEach( ( param ) => {
+                                            allRequiredParams.add( param )
+                                            if( !paramsByNamespace[ param ] ) {
+                                                paramsByNamespace[ param ] = []
+                                            }
+                                            paramsByNamespace[ param ].push( namespace )
+                                        } )
+                                }
+                            } )
+                    }
+                } ), Promise.resolve() )
+
+            const missingParams = [ ...allRequiredParams ]
+                .filter( ( param ) => {
+                    const isMissing = envObject[ param ] === undefined || envObject[ param ].trim() === ''
+
+                    return isMissing
+                } )
+
+            const envParamsOk = missingParams.length === 0
+            const envParamsWarnings = missingParams
+                .map( ( param ) => {
+                    const namespaces = paramsByNamespace[ param ].join( ', ' )
+
+                    return `Missing "${param}" (needed by: ${namespaces})`
+                } )
+
+            const envParamsCheck = {
+                'level': 3,
+                'name': 'envParams',
+                'ok': envParamsOk,
+                'detail': envParamsOk
+                    ? `${allRequiredParams.size} env var(s) verified`
+                    : `${missingParams.length}/${allRequiredParams.size} env var(s) missing`,
+                'fix': missingParams.length > 0
+                    ? `Add missing env vars to ${envPath}: ${missingParams.join( ', ' )}`
+                    : null
+            }
+
+            if( envParamsWarnings.length > 0 ) {
+                envParamsCheck[ 'warnings' ] = envParamsWarnings
+            }
+
+            checks.push( envParamsCheck )
+        }
 
         // Level 4: Local Config
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
@@ -2931,10 +3026,10 @@ Setup (run once, interactive - for humans):
 
 AI Commands (non-interactive, JSON output):
   schemas                           List all imported sources and schemas
-  group set <name> --tools <list>   Create or update a tool group
-  group add <name>                  Interactively create a tool group (human fallback)
-  group list                        List all groups and their tools
-  group set-default <name>          Set the default group
+  group append <name> --tools <list>  Add tools to a group (creates group if needed)
+  group remove <name> --tools <list>  Remove tools from a group
+  group list                          List all groups and their tools
+  group set-default <name>            Set the default group
   import <github-url>               Import schemas from a GitHub repository
   import-registry <url>             Import schemas from a custom registry URL
   validate [path]                   Validate schema(s) structurally
