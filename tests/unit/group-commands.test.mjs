@@ -31,10 +31,6 @@ beforeAll( async () => {
 
 afterAll( async () => {
     await rm( TEST_CWD, { recursive: true, force: true } )
-
-    if( !globalConfigExistedBefore ) {
-        await rm( GLOBAL_CONFIG_PATH, { force: true } )
-    }
 } )
 
 
