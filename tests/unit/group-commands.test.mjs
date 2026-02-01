@@ -1,23 +1,40 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
-import { writeFile, mkdir, rm } from 'node:fs/promises'
+import { writeFile, mkdir, rm, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
-import { VALID_LOCAL_CONFIG_WITH_GROUPS } from '../helpers/config.mjs'
+import { VALID_LOCAL_CONFIG_WITH_GROUPS, VALID_GLOBAL_CONFIG } from '../helpers/config.mjs'
 
 
 const TEST_CWD = join( tmpdir(), 'flowmcp-cli-group-test' )
 const LOCAL_CONFIG_DIR = join( TEST_CWD, '.flowmcp' )
 const LOCAL_CONFIG_PATH = join( LOCAL_CONFIG_DIR, 'config.json' )
 
+const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
+const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
+let globalConfigExistedBefore = false
+
 beforeAll( async () => {
+    try {
+        await access( GLOBAL_CONFIG_PATH )
+        globalConfigExistedBefore = true
+    } catch {
+        globalConfigExistedBefore = false
+        await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
+        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
+    }
+
     await mkdir( LOCAL_CONFIG_DIR, { recursive: true } )
     await writeFile( LOCAL_CONFIG_PATH, JSON.stringify( VALID_LOCAL_CONFIG_WITH_GROUPS, null, 4 ), 'utf-8' )
 } )
 
 afterAll( async () => {
     await rm( TEST_CWD, { recursive: true, force: true } )
+
+    if( !globalConfigExistedBefore ) {
+        await rm( GLOBAL_CONFIG_PATH, { force: true } )
+    }
 } )
 
 
