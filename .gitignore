@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Test Coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temp
+tmp/
+temp/
+.tmp/
+
+# Local FlowMCP config
+.flowmcp/
+
+# Environment
+.env
+.env.local
+.env.*.local
