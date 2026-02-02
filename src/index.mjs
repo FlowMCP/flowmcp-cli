@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util'
 
 import { FlowMcpCli } from './task/FlowMcpCli.mjs'
+import { agentCommands, MODE_AGENT, MODE_DEVELOPMENT } from './data/config.mjs'
 
 
 const args = parseArgs( {
@@ -26,120 +27,63 @@ const output = ( { result } ) => {
     process.stdout.write( JSON.stringify( result, null, 4 ) + '\n' )
 }
 
-const main = async () => {
-    if( values[ 'help' ] || !command ) {
-        await FlowMcpCli.help( { cwd } )
-
-        return
-    }
-
-    if( command === 'init' ) {
-        await FlowMcpCli.init( { cwd } )
-
-        return
-    }
-
-    if( command === 'import' ) {
-        const url = positionals[ 1 ]
-        const branch = values[ 'branch' ] || 'main'
-        const { result } = await FlowMcpCli.import( { url, branch } )
+const runAgentCommands = async () => {
+    if( command === 'search' ) {
+        const query = positionals[ 1 ]
+        const { result } = await FlowMcpCli.search( { query } )
         output( { result } )
 
-        return
+        return true
     }
 
-    if( command === 'import-registry' ) {
-        const registryUrl = positionals[ 1 ]
-        const { result } = await FlowMcpCli.importRegistry( { registryUrl } )
+    if( command === 'add' ) {
+        const toolName = positionals[ 1 ]
+        const { result } = await FlowMcpCli.add( { toolName, cwd } )
         output( { result } )
 
-        return
+        return true
     }
 
-    if( command === 'schemas' ) {
-        const { result } = await FlowMcpCli.schemas()
+    if( command === 'remove' ) {
+        const toolName = positionals[ 1 ]
+        const { result } = await FlowMcpCli.remove( { toolName, cwd } )
         output( { result } )
 
-        return
+        return true
     }
 
-    if( command === 'group' ) {
+    if( command === 'list' ) {
+        const { result } = await FlowMcpCli.list( { cwd } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'call' ) {
         const subCommand = positionals[ 1 ]
-        const groupName = positionals[ 2 ]
 
-        if( subCommand === 'append' ) {
-            const tools = values[ 'tools' ]
-            const { result } = await FlowMcpCli.groupAppend( { 'name': groupName, tools, cwd } )
+        if( subCommand === 'list-tools' ) {
+            const group = values[ 'group' ]
+            const { result } = await FlowMcpCli.callListTools( { group, cwd } )
             output( { result } )
 
-            return
+            return true
         }
 
-        if( subCommand === 'remove' ) {
-            const tools = values[ 'tools' ]
-            const { result } = await FlowMcpCli.groupRemove( { 'name': groupName, tools, cwd } )
-            output( { result } )
-
-            return
-        }
-
-        if( subCommand === 'list' ) {
-            const { result } = await FlowMcpCli.groupList( { cwd } )
-            output( { result } )
-
-            return
-        }
-
-        if( subCommand === 'set-default' ) {
-            const { result } = await FlowMcpCli.groupSetDefault( { 'name': groupName, cwd } )
-            output( { result } )
-
-            return
-        }
-
-        await FlowMcpCli.help( { cwd } )
-
-        return
-    }
-
-    if( command === 'validate' ) {
+        const toolName = subCommand
+        const jsonArgs = positionals[ 2 ] || null
         const group = values[ 'group' ]
-        const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
+        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd } )
         output( { result } )
 
-        return
+        return true
     }
 
-    if( command === 'test' ) {
-        const subCommand = positionals[ 1 ]
-        const route = values[ 'route' ]
-        const group = values[ 'group' ]
+    if( command === 'status' ) {
+        const { result } = await FlowMcpCli.status( { cwd } )
+        output( { result } )
 
-        if( subCommand === 'project' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false } )
-            output( { result } )
-
-            return
-        }
-
-        if( subCommand === 'user' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true } )
-            output( { result } )
-
-            return
-        }
-
-        if( subCommand === 'single' ) {
-            const filePath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false } )
-            output( { result } )
-
-            return
-        }
-
-        await FlowMcpCli.help( { cwd } )
-
-        return
+        return true
     }
 
     if( command === 'run' ) {
@@ -151,37 +95,180 @@ const main = async () => {
             process.exit( 1 )
         }
 
+        return true
+    }
+
+    if( command === 'mode' ) {
+        const modeArg = positionals[ 1 ]
+
+        if( !modeArg ) {
+            const { result } = await FlowMcpCli.getMode( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        const resolvedMode = modeArg === 'dev' ? MODE_DEVELOPMENT : modeArg
+        const { result } = await FlowMcpCli.setMode( { 'mode': resolvedMode, cwd } )
+        output( { result } )
+
+        return true
+    }
+
+    return false
+}
+
+const runDevCommands = async () => {
+    if( command === 'init' ) {
+        await FlowMcpCli.init( { cwd } )
+
+        return true
+    }
+
+    if( command === 'import' ) {
+        const url = positionals[ 1 ]
+        const branch = values[ 'branch' ] || 'main'
+        const { result } = await FlowMcpCli.import( { url, branch } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'import-registry' ) {
+        const registryUrl = positionals[ 1 ]
+        const { result } = await FlowMcpCli.importRegistry( { registryUrl } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'schemas' ) {
+        const { result } = await FlowMcpCli.schemas()
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'group' ) {
+        const subCommand = positionals[ 1 ]
+        const groupName = positionals[ 2 ]
+
+        if( subCommand === 'append' ) {
+            const tools = values[ 'tools' ]
+            const { result } = await FlowMcpCli.groupAppend( { 'name': groupName, tools, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'remove' ) {
+            const tools = values[ 'tools' ]
+            const { result } = await FlowMcpCli.groupRemove( { 'name': groupName, tools, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'list' ) {
+            const { result } = await FlowMcpCli.groupList( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'set-default' ) {
+            const { result } = await FlowMcpCli.groupSetDefault( { 'name': groupName, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        await FlowMcpCli.help( { cwd } )
+
+        return true
+    }
+
+    if( command === 'validate' ) {
+        const group = values[ 'group' ]
+        const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'test' ) {
+        const subCommand = positionals[ 1 ]
+        const route = values[ 'route' ]
+        const group = values[ 'group' ]
+
+        if( subCommand === 'project' ) {
+            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'user' ) {
+            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'single' ) {
+            const filePath = positionals[ 2 ]
+            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false } )
+            output( { result } )
+
+            return true
+        }
+
+        await FlowMcpCli.help( { cwd } )
+
+        return true
+    }
+
+    return false
+}
+
+const main = async () => {
+    if( values[ 'help' ] || !command ) {
+        const { result: { mode } } = await FlowMcpCli.getMode( { cwd } )
+        if( mode === MODE_DEVELOPMENT ) {
+            await FlowMcpCli.help( { cwd } )
+        } else {
+            await FlowMcpCli.helpAgent()
+        }
+
         return
     }
 
-    if( command === 'call' ) {
-        const subCommand = positionals[ 1 ]
+    const { result: { mode } } = await FlowMcpCli.getMode( { cwd } )
 
-        if( subCommand === 'list-tools' ) {
-            const group = values[ 'group' ]
-            const { result } = await FlowMcpCli.callListTools( { group, cwd } )
-            output( { result } )
+    const agentHandled = await runAgentCommands()
+    if( agentHandled ) {
+        return
+    }
 
+    if( mode === MODE_DEVELOPMENT ) {
+        const devHandled = await runDevCommands()
+        if( devHandled ) {
             return
         }
 
-        const toolName = subCommand
-        const jsonArgs = positionals[ 2 ] || null
-        const group = values[ 'group' ]
-        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd } )
-        output( { result } )
+        await FlowMcpCli.help( { cwd } )
 
         return
     }
 
-    if( command === 'status' ) {
-        const { result } = await FlowMcpCli.status( { cwd } )
-        output( { result } )
-
-        return
+    const result = {
+        'status': false,
+        'error': `Unknown command "${command}".`,
+        'available': [ 'search', 'add', 'remove', 'list', 'call', 'status', 'mode' ],
+        'fix': `Run: flowmcp --help`
     }
 
-    await FlowMcpCli.help( { cwd } )
+    output( { result } )
 }
 
 main()

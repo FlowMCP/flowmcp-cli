@@ -9,5 +9,18 @@ const appConfig = {
     'schemaSpec': '1.2.0'
 }
 
+const MODE_AGENT = 'agent'
+const MODE_DEVELOPMENT = 'development'
 
-export { appConfig }
+const agentCommands = [
+    'search',
+    'add',
+    'remove',
+    'list',
+    'call',
+    'status',
+    'mode'
+]
+
+
+export { appConfig, MODE_AGENT, MODE_DEVELOPMENT, agentCommands }
