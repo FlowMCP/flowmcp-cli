@@ -2020,38 +2020,55 @@ class FlowMcpCli {
         }
 
         const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
-        const lowerQuery = query.toLowerCase()
+        const queryTokens = query.toLowerCase().trim().split( /\s+/ )
 
-        const matchedTools = allTools
-            .filter( ( tool ) => {
-                const { toolName, description } = tool
-                const nameMatch = toolName.toLowerCase().includes( lowerQuery )
-                const descMatch = description.toLowerCase().includes( lowerQuery )
-
-                return nameMatch || descMatch
-            } )
+        const scoredTools = allTools
             .map( ( tool ) => {
-                const { toolName, description } = tool
+                const { score } = FlowMcpCli.#scoreToolMatch( { tool, queryTokens } )
+                const { toolName, description, namespace, tags } = tool
                 const entry = {
                     'name': toolName,
                     description,
+                    namespace,
+                    tags,
+                    score,
                     'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`
                 }
 
                 return entry
             } )
+            .filter( ( tool ) => {
+                const { score } = tool
+
+                return score > 0
+            } )
+            .sort( ( a, b ) => {
+                const result = b[ 'score' ] - a[ 'score' ]
+
+                return result
+            } )
 
         const maxResults = 10
-        const showing = Math.min( matchedTools.length, maxResults )
-        const limitedTools = matchedTools.slice( 0, maxResults )
+        const matchCount = scoredTools.length
+        const showing = Math.min( matchCount, maxResults )
+        const limitedTools = scoredTools.slice( 0, maxResults )
+
+        let hint = ''
+        if( matchCount === 0 ) {
+            hint = 'No matches. Try broader terms or single keywords.'
+        } else if( matchCount > maxResults ) {
+            hint = `${matchCount} matches found, showing top ${maxResults} by relevance. Refine with: ${appConfig[ 'cliCommand' ]} search "more specific query"`
+        }
 
         const result = {
             'status': true,
             query,
-            'matchCount': matchedTools.length,
+            matchCount,
             showing,
             'tools': limitedTools
         }
+
+        if( hint.length > 0 ) { result[ 'hint' ] = hint }
 
         return { result }
     }
@@ -2991,7 +3008,9 @@ Switch to development mode for advanced commands:
                                         schemaRef,
                                         routeName,
                                         namespace,
-                                        'description': routeDescription
+                                        'description': routeDescription,
+                                        'tags': schema[ 'tags' ] || [],
+                                        'schemaName': schema[ 'name' ] || ''
                                     } )
                                 } )
                         }
@@ -2999,6 +3018,46 @@ Switch to development mode for advanced commands:
             } ), Promise.resolve() )
 
         return { tools }
+    }
+
+
+    static #scoreToolMatch( { tool, queryTokens } ) {
+        const { toolName, namespace, description, tags, schemaName } = tool
+        const lowerName = toolName.toLowerCase()
+        const lowerNamespace = namespace.toLowerCase()
+        const lowerDesc = description.toLowerCase()
+        const lowerSchemaName = schemaName.toLowerCase()
+        const lowerTags = tags
+            .map( ( tag ) => {
+                const lower = tag.toLowerCase()
+
+                return lower
+            } )
+        const nameSegments = lowerName.split( '_' )
+
+        let totalScore = 0
+
+        const allTokensMatch = queryTokens
+            .every( ( token ) => {
+                let tokenScore = 0
+                const wordBoundary = new RegExp( `\\b${token}\\b` )
+
+                if( lowerNamespace === token ) { tokenScore += 20 }
+                if( nameSegments.includes( token ) ) { tokenScore += 15 }
+                if( lowerTags.includes( token ) ) { tokenScore += 12 }
+                if( wordBoundary.test( lowerSchemaName ) ) { tokenScore += 8 }
+                if( wordBoundary.test( lowerDesc ) ) { tokenScore += 5 }
+
+                totalScore += tokenScore
+
+                return tokenScore > 0
+            } )
+
+        if( !allTokensMatch ) {
+            return { 'score': 0 }
+        }
+
+        return { 'score': totalScore }
     }
 
 
