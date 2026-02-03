@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, readdir, stat, access, unlink } from 'node:
 import { join, resolve, basename, extname, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { constants, existsSync } from 'node:fs'
 
 import chalk from 'chalk'
@@ -423,6 +424,26 @@ class FlowMcpCli {
         const sourceDir = join( FlowMcpCli.#schemasDir(), sourceName )
         await mkdir( sourceDir, { recursive: true } )
 
+        const registryShared = registry[ 'shared' ]
+        if( Array.isArray( registryShared ) && registryShared.length > 0 ) {
+            await registryShared
+                .reduce( ( promise, sharedEntry, index ) => promise.then( async () => {
+                    const { file } = sharedEntry
+                    const remotePath = baseDir
+                        ? `${baseDir}/${file}`
+                        : file
+
+                    const fileUrl = FlowMcpCli.#buildRawUrl( { owner, repo, branch, 'path': remotePath } )
+                    const targetPath = join( sourceDir, file )
+
+                    process.stdout.write( `  Shared ${index + 1}/${registryShared.length}: ${file}\r` )
+
+                    await FlowMcpCli.#downloadSchema( { url: fileUrl, targetPath } )
+                } ), Promise.resolve() )
+
+            process.stdout.write( ' '.repeat( 80 ) + '\r' )
+        }
+
         let schemasImported = 0
         let schemasFailed = 0
         const errors = []
@@ -546,6 +567,26 @@ class FlowMcpCli {
 
         const sourceDir = join( FlowMcpCli.#schemasDir(), sourceName )
         await mkdir( sourceDir, { recursive: true } )
+
+        const registryShared = registry[ 'shared' ]
+        if( Array.isArray( registryShared ) && registryShared.length > 0 ) {
+            await registryShared
+                .reduce( ( promise, sharedEntry, index ) => promise.then( async () => {
+                    const { file } = sharedEntry
+                    const remotePath = ( baseDir && !baseDirAlreadyInUrl )
+                        ? `${baseDir}/${file}`
+                        : file
+
+                    const fileUrl = `${registryBaseUrl}/${remotePath}`
+                    const targetPath = join( sourceDir, file )
+
+                    process.stdout.write( `  Shared ${index + 1}/${registryShared.length}: ${file}\r` )
+
+                    await FlowMcpCli.#downloadSchema( { 'url': fileUrl, targetPath } )
+                } ), Promise.resolve() )
+
+            process.stdout.write( ' '.repeat( 80 ) + '\r' )
+        }
 
         let schemasImported = 0
         let schemasFailed = 0
@@ -2022,9 +2063,27 @@ class FlowMcpCli {
         const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
         const queryTokens = query.toLowerCase().trim().split( /\s+/ )
 
+        const { aliasIndex } = await FlowMcpCli.#loadSharedAliases()
+        const sharedMatchRefs = new Set()
+        aliasIndex
+            .forEach( ( { searchTerms, schemaRefs } ) => {
+                const hasMatch = queryTokens
+                    .some( ( token ) => {
+                        const found = searchTerms
+                            .some( ( term ) => term.includes( token ) )
+
+                        return found
+                    } )
+
+                if( hasMatch ) {
+                    schemaRefs
+                        .forEach( ( ref ) => { sharedMatchRefs.add( ref ) } )
+                }
+            } )
+
         const scoredTools = allTools
             .map( ( tool ) => {
-                const { score } = FlowMcpCli.#scoreToolMatch( { tool, queryTokens } )
+                const { score } = FlowMcpCli.#scoreToolMatch( { tool, queryTokens, sharedMatchRefs } )
                 const { toolName, description, namespace, tags } = tool
                 const entry = {
                     'name': toolName,
@@ -3021,7 +3080,71 @@ Switch to development mode for advanced commands:
     }
 
 
-    static #scoreToolMatch( { tool, queryTokens } ) {
+    static async #loadSharedAliases() {
+        const { sources } = await FlowMcpCli.#listSources()
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const aliasIndex = []
+
+        await sources
+            .reduce( ( promise, source ) => promise.then( async () => {
+                const { name: sourceName } = source
+                const registryPath = join( schemasBaseDir, sourceName, '_registry.json' )
+                const { data: registry } = await FlowMcpCli.#readJson( { filePath: registryPath } )
+
+                if( !registry || !Array.isArray( registry[ 'shared' ] ) ) { return }
+
+                await registry[ 'shared' ]
+                    .reduce( ( p, sharedEntry ) => p.then( async () => {
+                        const { file: sharedFile } = sharedEntry
+                        const filePath = join( schemasBaseDir, sourceName, sharedFile )
+
+                        try {
+                            const mod = await import( pathToFileURL( filePath ).href )
+                            const exportedArray = Object.values( mod )
+                                .find( ( v ) => Array.isArray( v ) )
+
+                            if( !exportedArray ) { return }
+
+                            const searchTerms = exportedArray
+                                .reduce( ( acc, obj ) => {
+                                    const alias = obj[ 'alias' ] || obj[ 'code' ] || obj[ 'alpha2' ] || ''
+                                    const name = obj[ 'name' ] || ''
+
+                                    if( alias ) { acc.push( alias.toLowerCase() ) }
+                                    if( name ) { acc.push( name.toLowerCase() ) }
+
+                                    return acc
+                                }, [] )
+
+                            const matchingSchemaRefs = ( registry[ 'schemas' ] || [] )
+                                .filter( ( s ) => {
+                                    const schemaShared = s[ 'shared' ] || []
+                                    const matches = schemaShared.includes( sharedFile )
+
+                                    return matches
+                                } )
+                                .map( ( s ) => {
+                                    const ref = `${sourceName}/${s[ 'file' ]}`
+
+                                    return ref
+                                } )
+
+                            aliasIndex.push( {
+                                'sharedFile': sharedFile,
+                                searchTerms,
+                                'schemaRefs': matchingSchemaRefs
+                            } )
+                        } catch {
+                            // _shared file could not be loaded — skip
+                        }
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        return { aliasIndex }
+    }
+
+
+    static #scoreToolMatch( { tool, queryTokens, sharedMatchRefs } ) {
         const { toolName, namespace, description, tags, schemaName } = tool
         const lowerName = toolName.toLowerCase()
         const lowerNamespace = namespace.toLowerCase()
@@ -3053,8 +3176,12 @@ Switch to development mode for advanced commands:
                 return tokenScore > 0
             } )
 
-        if( !allTokensMatch ) {
+        if( !allTokensMatch && !( sharedMatchRefs && sharedMatchRefs.has( tool[ 'schemaRef' ] ) ) ) {
             return { 'score': 0 }
+        }
+
+        if( sharedMatchRefs && sharedMatchRefs.has( tool[ 'schemaRef' ] ) ) {
+            totalScore += 10
         }
 
         return { 'score': totalScore }
