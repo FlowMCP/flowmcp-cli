@@ -2333,7 +2333,18 @@ class FlowMcpCli {
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
         const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
 
-        if( !localConfig || !localConfig[ 'tools' ] || localConfig[ 'tools' ].length === 0 ) {
+        let toolRefs = []
+        if( localConfig && Array.isArray( localConfig[ 'tools' ] ) && localConfig[ 'tools' ].length > 0 ) {
+            toolRefs = localConfig[ 'tools' ]
+        } else if( localConfig && localConfig[ 'defaultGroup' ] ) {
+            const groupName = localConfig[ 'defaultGroup' ]
+            const group = localConfig[ 'groups' ] && localConfig[ 'groups' ][ groupName ]
+            if( group ) {
+                toolRefs = group[ 'tools' ] || group[ 'schemas' ] || []
+            }
+        }
+
+        if( toolRefs.length === 0 ) {
             const result = {
                 'status': true,
                 'toolCount': 0,
@@ -2343,7 +2354,6 @@ class FlowMcpCli {
             return { result }
         }
 
-        const toolRefs = localConfig[ 'tools' ]
         const { schemas } = await FlowMcpCli.#resolveToolRefs( { toolRefs } )
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
