@@ -137,6 +137,7 @@ class FlowMcpCli {
             const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
 
             const localConfigUpdates = {
+                'mode': MODE_AGENT,
                 'root': `~/${appConfig[ 'globalConfigDirName' ]}`
             }
 
@@ -278,7 +279,11 @@ class FlowMcpCli {
                     const localGroupConfigPath = join( localGroupDir, 'config.json' )
 
                     const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localGroupConfigPath } )
-                    const updatedLocalConfig = currentLocalConfig || { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+                    const updatedLocalConfig = currentLocalConfig || { 'mode': MODE_AGENT, 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+
+                    if( !updatedLocalConfig[ 'mode' ] ) {
+                        updatedLocalConfig[ 'mode' ] = MODE_AGENT
+                    }
 
                     if( !updatedLocalConfig[ 'groups' ] ) {
                         updatedLocalConfig[ 'groups' ] = {}
@@ -1981,6 +1986,8 @@ class FlowMcpCli {
 
         let matchedFunc = null
         let matchedToolName = null
+        let matchedRouteName = null
+        let matchedSchema = null
 
         resolvedSchemas
             .forEach( ( { schema } ) => {
@@ -2008,6 +2015,8 @@ class FlowMcpCli {
                             if( prepared[ 'toolName' ] === toolName ) {
                                 matchedFunc = prepared[ 'func' ]
                                 matchedToolName = prepared[ 'toolName' ]
+                                matchedRouteName = routeName
+                                matchedSchema = schema
                             }
                         } catch {
                             // skip
@@ -2022,6 +2031,34 @@ class FlowMcpCli {
             const result = FlowMcpCli.#error( {
                 'error': `Tool "${toolName}" not found in ${errorContext}.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} ${mode === MODE_AGENT ? 'list' : 'call list-tools'} to see available tool names.`
+            } )
+
+            return { result }
+        }
+
+        const matchedRouteConfig = matchedSchema[ 'routes' ][ matchedRouteName ]
+        const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
+        const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters } )
+
+        const missingParams = Object.entries( expectedParameters )
+            .filter( ( [ , paramDef ] ) => {
+                const isMissing = paramDef[ 'required' ] === true
+
+                return isMissing
+            } )
+            .filter( ( [ paramKey ] ) => {
+                const isProvided = userParams[ paramKey ] !== undefined
+
+                return !isProvided
+            } )
+            .map( ( [ paramKey ] ) => {
+                return paramKey
+            } )
+
+        if( missingParams.length > 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Missing required parameter(s): ${missingParams.join( ', ' )}`,
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} call ${toolName} '${JSON.stringify( expectedParameters, null, 0 )}'`
             } )
 
             return { result }
@@ -2263,10 +2300,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { toolRefs, source, groupName } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
 
-        if( !localConfig || !localConfig[ 'tools' ] || localConfig[ 'tools' ].length === 0 ) {
+        if( toolRefs.length === 0 ) {
             const result = FlowMcpCli.#error( {
                 'error': 'No active tools found.',
                 'fix': `Use ${appConfig[ 'cliCommand' ]} add <tool-name> to activate tools first.`
@@ -2293,21 +2329,35 @@ class FlowMcpCli {
         }
 
         const { toolRef } = matched
-        const previousLength = localConfig[ 'tools' ].length
-        localConfig[ 'tools' ] = localConfig[ 'tools' ]
-            .filter( ( ref ) => {
-                const shouldKeep = ref !== toolRef
 
-                return shouldKeep
-            } )
-
-        if( localConfig[ 'tools' ].length === previousLength ) {
+        if( !toolRefs.includes( toolRef ) ) {
             const result = FlowMcpCli.#error( {
                 'error': `Tool "${toolName}" is not in active tools list.`,
                 'fix': `Use ${appConfig[ 'cliCommand' ]} list to see active tools.`
             } )
 
             return { result }
+        }
+
+        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
+        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+
+        if( source === 'group' ) {
+            const group = localConfig[ 'groups' ][ groupName ]
+            const toolsKey = Array.isArray( group[ 'tools' ] ) ? 'tools' : 'schemas'
+            group[ toolsKey ] = group[ toolsKey ]
+                .filter( ( ref ) => {
+                    const shouldKeep = ref !== toolRef
+
+                    return shouldKeep
+                } )
+        } else {
+            localConfig[ 'tools' ] = localConfig[ 'tools' ]
+                .filter( ( ref ) => {
+                    const shouldKeep = ref !== toolRef
+
+                    return shouldKeep
+                } )
         }
 
         await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
@@ -2330,19 +2380,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-
-        let toolRefs = []
-        if( localConfig && Array.isArray( localConfig[ 'tools' ] ) && localConfig[ 'tools' ].length > 0 ) {
-            toolRefs = localConfig[ 'tools' ]
-        } else if( localConfig && localConfig[ 'defaultGroup' ] ) {
-            const groupName = localConfig[ 'defaultGroup' ]
-            const group = localConfig[ 'groups' ] && localConfig[ 'groups' ][ groupName ]
-            if( group ) {
-                toolRefs = group[ 'tools' ] || group[ 'schemas' ] || []
-            }
-        }
+        const { toolRefs } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
 
         if( toolRefs.length === 0 ) {
             const result = {
@@ -2372,6 +2410,7 @@ class FlowMcpCli {
                 }
 
                 const routes = schema[ 'routes' ]
+                const schemaTags = schema[ 'tags' ] || []
                 const requiredServerParams = schema[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
@@ -2384,8 +2423,11 @@ class FlowMcpCli {
                                 routeName
                             } )
 
-                            const schemaPath = join( appConfig[ 'localConfigDirName' ], 'tools', `${name}.json` )
-                            tools.push( { name, description, 'schema': schemaPath } )
+                            const routeConfig = routes[ routeName ]
+                            const routeParameters = routeConfig[ 'parameters' ] || []
+                            const { parameters } = FlowMcpCli.#extractParameters( { routeParameters } )
+
+                            tools.push( { name, description, 'tags': schemaTags, parameters } )
                         } catch {
                             // skip broken tools
                         }
@@ -3941,11 +3983,37 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    static async #resolveAgentSchemas( { cwd } ) {
+    static async #resolveActiveToolRefs( { cwd } ) {
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
         const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
 
-        if( !localConfig || !localConfig[ 'tools' ] || localConfig[ 'tools' ].length === 0 ) {
+        if( !localConfig ) {
+            return { 'toolRefs': [], 'source': null }
+        }
+
+        if( Array.isArray( localConfig[ 'tools' ] ) && localConfig[ 'tools' ].length > 0 ) {
+            return { 'toolRefs': localConfig[ 'tools' ], 'source': 'tools' }
+        }
+
+        if( localConfig[ 'defaultGroup' ] ) {
+            const groupName = localConfig[ 'defaultGroup' ]
+            const group = localConfig[ 'groups' ] && localConfig[ 'groups' ][ groupName ]
+            if( group ) {
+                const groupTools = group[ 'tools' ] || group[ 'schemas' ] || []
+                if( groupTools.length > 0 ) {
+                    return { 'toolRefs': groupTools, 'source': 'group', 'groupName': groupName }
+                }
+            }
+        }
+
+        return { 'toolRefs': [], 'source': null }
+    }
+
+
+    static async #resolveAgentSchemas( { cwd } ) {
+        const { toolRefs } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
+
+        if( toolRefs.length === 0 ) {
             return {
                 'schemas': null,
                 'error': 'No active tools.',
@@ -3953,7 +4021,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             }
         }
 
-        const toolRefs = localConfig[ 'tools' ]
         const { schemas } = await FlowMcpCli.#resolveToolRefs( { toolRefs } )
 
         return { schemas, 'error': null, 'fix': null }

@@ -234,7 +234,7 @@ const runDevCommands = async () => {
 const main = async () => {
     if( values[ 'help' ] || !command ) {
         const { result: { mode } } = await FlowMcpCli.getMode( { cwd } )
-        if( mode === MODE_DEVELOPMENT ) {
+        if( mode === MODE_DEVELOPMENT || mode === null ) {
             await FlowMcpCli.help( { cwd } )
         } else {
             await FlowMcpCli.helpAgent()
@@ -250,7 +250,7 @@ const main = async () => {
         return
     }
 
-    if( mode === MODE_DEVELOPMENT ) {
+    if( mode === MODE_DEVELOPMENT || mode === null ) {
         const devHandled = await runDevCommands()
         if( devHandled ) {
             return
@@ -264,7 +264,7 @@ const main = async () => {
     const result = {
         'status': false,
         'error': `Unknown command "${command}".`,
-        'available': [ 'search', 'add', 'remove', 'list', 'call', 'status', 'mode' ],
+        'available': agentCommands,
         'fix': `Run: flowmcp --help`
     }
 

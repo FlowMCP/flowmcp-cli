@@ -42,6 +42,18 @@ Interactive commands for humans. These use prompts, colored output, and guided w
 | `flowmcp init` | Interactive setup — creates global and local config |
 | `flowmcp help` | Show available commands and usage |
 
+### Mode Availability
+
+`init` and other development commands are available based on the current mode:
+
+| Situation | Mode | `init` | `validate`/`test` | `search`/`add` |
+|-----------|------|--------|--------------------|-----------------|
+| No local config | `null` | Yes | Yes | Yes |
+| Config with `mode: "agent"` | `agent` | No | No | Yes |
+| Config with `mode: "dev"` | `development` | Yes | Yes | Yes |
+
+When no local config exists, all commands are available so that `flowmcp init` can be run to bootstrap a project. Once the config is set to `agent` mode, only agent commands remain accessible.
+
 ## Agent Commands
 
 JSON-output commands designed for programmatic consumption by AI agents and scripts.
