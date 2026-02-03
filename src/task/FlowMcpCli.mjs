@@ -273,7 +273,11 @@ class FlowMcpCli {
                         }
                     ] )
 
-                    const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+                    const localGroupDir = join( cwd, appConfig[ 'localConfigDirName' ] )
+                    await mkdir( localGroupDir, { recursive: true } )
+                    const localGroupConfigPath = join( localGroupDir, 'config.json' )
+
+                    const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localGroupConfigPath } )
                     const updatedLocalConfig = currentLocalConfig || { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
 
                     if( !updatedLocalConfig[ 'groups' ] ) {
@@ -290,7 +294,7 @@ class FlowMcpCli {
                         updatedLocalConfig[ 'defaultGroup' ] = trimmedGroupName
                     }
 
-                    await writeFile( localConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
+                    await writeFile( localGroupConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
 
                     console.log( `  ${chalk.green( '\u2713' )} Group "${trimmedGroupName}" created with ${selectedTools.length} tool(s)` )
                     if( updatedLocalConfig[ 'defaultGroup' ] === trimmedGroupName ) {
