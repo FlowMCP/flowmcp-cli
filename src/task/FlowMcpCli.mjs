@@ -576,6 +576,9 @@ class FlowMcpCli {
                 return hasRegistryUrl && matchesName
             } )
 
+        console.log( '' )
+        console.log( `  ${chalk.cyan( 'Checking for updates...' )}` )
+
         if( sourceEntries.length === 0 ) {
             const errorMessage = sourceName
                 ? `Source "${sourceName}" not found or has no registry URL.`
@@ -593,6 +596,8 @@ class FlowMcpCli {
         await sourceEntries
             .reduce( ( promise, [ name, sourceConfig ] ) => promise.then( async () => {
                 const { registryUrl } = sourceConfig
+                console.log( '' )
+                console.log( `  ${chalk.white( name )} ${chalk.gray( `(${registryUrl})` )}` )
                 const { updateResult } = await FlowMcpCli.#updateSource( { 'sourceName': name, registryUrl } )
                 results.push( updateResult )
             } ), Promise.resolve() )
@@ -629,6 +634,9 @@ class FlowMcpCli {
         updatedGlobalConfig[ 'updatedAt' ] = new Date().toISOString()
 
         await FlowMcpCli.#writeGlobalConfig( { 'config': updatedGlobalConfig } )
+
+        console.log( '' )
+        console.log( `  ${chalk.green( 'Update complete.' )} ${totalDownloaded} new, ${totalUpdated} updated, ${totalSkipped} up to date${totalFailed > 0 ? chalk.red( `, ${totalFailed} failed` ) : ''}` )
 
         const result = {
             'status': totalFailed === 0,
@@ -3286,6 +3294,7 @@ class FlowMcpCli {
     static async #updateSource( { sourceName, registryUrl } ) {
         const { data: registryText, error: fetchError } = await FlowMcpCli.#fetchUrl( { 'url': registryUrl } )
         if( !registryText ) {
+            console.log( `    ${chalk.red( '✗' )} Failed to fetch registry: ${fetchError}` )
             const updateResult = {
                 sourceName,
                 'status': false,
@@ -3304,6 +3313,7 @@ class FlowMcpCli {
         try {
             remoteRegistry = JSON.parse( registryText )
         } catch {
+            console.log( `    ${chalk.red( '✗' )} Invalid JSON in remote registry` )
             const updateResult = {
                 sourceName,
                 'status': false,
@@ -3321,6 +3331,7 @@ class FlowMcpCli {
         const { schemas: remoteSchemas, baseDir, shared: remoteShared } = remoteRegistry
 
         if( !Array.isArray( remoteSchemas ) ) {
+            console.log( `    ${chalk.red( '✗' )} Remote registry missing "schemas" array` )
             const updateResult = {
                 sourceName,
                 'status': false,
@@ -3358,7 +3369,7 @@ class FlowMcpCli {
 
         if( Array.isArray( remoteShared ) && remoteShared.length > 0 ) {
             await remoteShared
-                .reduce( ( promise, sharedEntry ) => promise.then( async () => {
+                .reduce( ( promise, sharedEntry, index ) => promise.then( async () => {
                     const { file } = sharedEntry
                     const remotePath = ( baseDir && !baseDirAlreadyInUrl )
                         ? `${baseDir}/${file}`
@@ -3366,15 +3377,17 @@ class FlowMcpCli {
 
                     const fileUrl = `${registryBaseUrl}/${remotePath}`
                     const targetPath = join( sourceDir, file )
+                    process.stdout.write( `    Shared ${index + 1}/${remoteShared.length}: ${file}\r` )
 
                     await FlowMcpCli.#downloadSchema( { 'url': fileUrl, targetPath, 'allowOverwrite': true } )
                 } ), Promise.resolve() )
+            process.stdout.write( ' '.repeat( 80 ) + '\r' )
         }
 
         const allSchemaFiles = [ ...newSchemas, ...existingSchemas ]
 
         await allSchemaFiles
-            .reduce( ( promise, file ) => promise.then( async () => {
+            .reduce( ( promise, file, index ) => promise.then( async () => {
                 const schemaEntry = remoteSchemas
                     .find( ( entry ) => {
                         const isMatch = entry[ 'file' ] === file
@@ -3392,6 +3405,7 @@ class FlowMcpCli {
 
                 const fileUrl = `${registryBaseUrl}/${remotePath}`
                 const targetPath = join( sourceDir, file )
+                process.stdout.write( `    Checking ${index + 1}/${allSchemaFiles.length}: ${file}\r` )
 
                 const { success, downloadStatus, hash, error: dlError } = await FlowMcpCli.#downloadSchema( {
                     'url': fileUrl,
@@ -3416,6 +3430,7 @@ class FlowMcpCli {
                     errors.push( `${file}: ${dlError}` )
                 }
             } ), Promise.resolve() )
+        process.stdout.write( ' '.repeat( 80 ) + '\r' )
 
         const registryCopy = {
             'name': remoteRegistry[ 'name' ],
@@ -3449,6 +3464,12 @@ class FlowMcpCli {
         await FlowMcpCli.#writeGlobalConfig( { 'config': globalConfig } )
 
         const totalSchemas = downloaded + updated + skipped
+
+        console.log( `    ${chalk.green( '✓' )} ${totalSchemas} schemas: ${downloaded} new, ${updated} updated, ${skipped} up to date${failed > 0 ? chalk.red( `, ${failed} failed` ) : ''}` )
+
+        if( removedSchemas.length > 0 ) {
+            console.log( `    ${chalk.yellow( '⚠' )} ${removedSchemas.length} schema(s) removed from remote (local files kept)` )
+        }
 
         const updateResult = {
             sourceName,
