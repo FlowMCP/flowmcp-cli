@@ -153,3 +153,47 @@ describe( 'FlowMcpCli.validationGroupSetDefault', () => {
         expect( messages.length ).toBe( 0 )
     } )
 } )
+
+
+describe( 'FlowMcpCli.validationUpdate', () => {
+    it( 'accepts undefined sourceName (update all)', () => {
+        const { status, messages } = FlowMcpCli.validationUpdate( { sourceName: undefined } )
+
+        expect( status ).toBe( true )
+        expect( messages.length ).toBe( 0 )
+    } )
+
+
+    it( 'accepts null sourceName (update all)', () => {
+        const { status, messages } = FlowMcpCli.validationUpdate( { sourceName: null } )
+
+        expect( status ).toBe( true )
+        expect( messages.length ).toBe( 0 )
+    } )
+
+
+    it( 'accepts valid string sourceName', () => {
+        const { status, messages } = FlowMcpCli.validationUpdate( { sourceName: 'flowmcp-schemas' } )
+
+        expect( status ).toBe( true )
+        expect( messages.length ).toBe( 0 )
+    } )
+
+
+    it( 'rejects non-string sourceName', () => {
+        const { status, messages } = FlowMcpCli.validationUpdate( { sourceName: 123 } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBe( 1 )
+        expect( messages[ 0 ] ).toContain( 'Must be a string' )
+    } )
+
+
+    it( 'rejects empty string sourceName', () => {
+        const { status, messages } = FlowMcpCli.validationUpdate( { sourceName: '  ' } )
+
+        expect( status ).toBe( false )
+        expect( messages.length ).toBe( 1 )
+        expect( messages[ 0 ] ).toContain( 'Must not be empty' )
+    } )
+} )

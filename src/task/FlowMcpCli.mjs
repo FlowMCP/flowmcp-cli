@@ -1,16 +1,17 @@
-import { readFile, writeFile, mkdir, readdir, stat, access, unlink } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, readdir, stat, access, unlink, rename } from 'node:fs/promises'
 import { join, resolve, basename, extname, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { constants, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
 import { FlowMCP } from 'flowmcp'
 
-import { appConfig, MODE_AGENT, MODE_DEVELOPMENT, agentCommands } from '../data/config.mjs'
+import { appConfig } from '../data/config.mjs'
 
 
 class FlowMcpCli {
@@ -56,258 +57,26 @@ class FlowMcpCli {
         console.log( '' )
 
         if( !healthy ) {
-            // Step 2: .env Path
-            const globalConfigPath = FlowMcpCli.#globalConfigPath()
-            const { data: existingGlobalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
-            let envPath
-
-            if( existingGlobalConfig && existingGlobalConfig[ 'envPath' ] ) {
-                envPath = existingGlobalConfig[ 'envPath' ]
-                console.log( `  ${chalk.green( '\u2713' )} Using existing .env path: ${chalk.gray( envPath )}` )
-            } else {
-                const { envPath: promptedEnvPath } = await FlowMcpCli.#promptEnvPath()
-                envPath = promptedEnvPath
-            }
-
-            // Step 3: Global Config (merge, never overwrite)
-            const globalDir = FlowMcpCli.#globalConfigDir()
-            await mkdir( globalDir, { recursive: true } )
-
-            const now = new Date().toISOString()
-            const globalConfigUpdates = {
-                envPath,
-                'flowmcpCore': {
-                    version,
-                    commit,
-                    schemaSpec
-                },
-                'initialized': now,
-                'sources': {
-                    'demo': {
-                        'type': 'builtin',
-                        'schemaCount': 1
-                    }
-                }
-            }
-
-            const { config: mergedGlobalConfig } = FlowMcpCli.#mergeConfig( {
-                'existing': existingGlobalConfig || {},
-                'updates': globalConfigUpdates
-            } )
-
-            // Ensure envPath is always current (user may re-run to update it)
-            mergedGlobalConfig[ 'envPath' ] = envPath
-
-            await FlowMcpCli.#writeGlobalConfig( { 'config': mergedGlobalConfig } )
-
-            // Step 4: Schema Auto-Scan
-            const schemasDir = FlowMcpCli.#schemasDir()
-            let schemaSourceCount = 0
-            try {
-                const entries = await readdir( schemasDir )
-                schemaSourceCount = await entries
-                    .reduce( ( promise, entry ) => promise.then( async ( count ) => {
-                        const entryStat = await stat( join( schemasDir, entry ) )
-                        if( entryStat.isDirectory() ) {
-                            return count + 1
-                        }
-
-                        return count
-                    } ), Promise.resolve( 0 ) )
-            } catch {
-                schemaSourceCount = 0
-            }
-
-            if( schemaSourceCount > 0 ) {
-                console.log( `  ${chalk.green( '\u2713' )} ${schemaSourceCount} schema source(s) found` )
-            } else {
-                const demoDir = join( schemasDir, 'demo' )
-                await mkdir( demoDir, { recursive: true } )
-
-                const { content: demoContent } = FlowMcpCli.#createDemoSchema()
-                await writeFile( join( demoDir, 'ping.mjs' ), demoContent, 'utf-8' )
-                console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
-            }
-
-            // Step 5: Local Config (merge, never overwrite)
-            const localDir = join( cwd, appConfig[ 'localConfigDirName' ] )
-            await mkdir( localDir, { recursive: true } )
-
-            const localConfigPath = join( localDir, 'config.json' )
-            const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-
-            const localConfigUpdates = {
-                'mode': MODE_AGENT,
-                'root': `~/${appConfig[ 'globalConfigDirName' ]}`
-            }
-
-            const { config: mergedLocalConfig } = FlowMcpCli.#mergeConfig( {
-                'existing': existingLocalConfig || {},
-                'updates': localConfigUpdates
-            } )
-
-            await writeFile( localConfigPath, JSON.stringify( mergedLocalConfig, null, 4 ), 'utf-8' )
-
-            // Step 6: Summary
-            console.log( '' )
-            console.log( `  ${chalk.green( '\u2713' )} Global config saved to ${chalk.gray( FlowMcpCli.#globalConfigPath() )}` )
-            console.log( `  ${chalk.green( '\u2713' )} Local config saved to ${chalk.gray( localConfigPath )}` )
-            console.log( '' )
-        }
-
-        // Step 7: Interactive guidance - Import schemas
-        const { wantImport } = await inquirer.prompt( [
-            {
-                'type': 'confirm',
-                'name': 'wantImport',
-                'message': 'Import schemas?',
-                'default': true
-            }
-        ] )
-
-        if( wantImport ) {
-            const { registryUrl } = await inquirer.prompt( [
+            const { setupMode } = await inquirer.prompt( [
                 {
-                    'type': 'input',
-                    'name': 'registryUrl',
-                    'message': 'Registry URL (flowmcp-registry.json):',
-                    'default': appConfig[ 'defaultRegistryUrl' ],
-                    validate: ( input ) => {
-                        if( !input || input.trim().length === 0 ) {
-                            return 'Please provide a URL.'
-                        }
-
-                        if( !input.startsWith( 'http://' ) && !input.startsWith( 'https://' ) ) {
-                            return 'Must be a valid HTTP or HTTPS URL.'
-                        }
-
-                        return true
-                    }
+                    'type': 'list',
+                    'name': 'setupMode',
+                    'message': 'How would you like to set up?',
+                    'choices': [
+                        { 'name': 'Quick install (recommended)', 'value': 'quick' },
+                        { 'name': 'Manual setup', 'value': 'manual' }
+                    ]
                 }
             ] )
 
-            const { result: importResult } = await FlowMcpCli.importRegistry( {
-                'registryUrl': registryUrl.trim()
-            } )
-
-            if( importResult[ 'status' ] ) {
-                console.log( `  ${chalk.green( '\u2713' )} Imported ${importResult[ 'schemasImported' ]} schema(s) from "${importResult[ 'source' ]}"` )
-            } else if( importResult[ 'upToDate' ] ) {
-                console.log( `  ${chalk.green( '\u2713' )} Schemas already up to date (${importResult[ 'registryHash' ].slice( 0, 7 )})` )
+            if( setupMode === 'quick' ) {
+                await FlowMcpCli.#quickInstall( { cwd, version, commit, schemaSpec } )
             } else {
-                const importError = importResult[ 'error' ] || importResult[ 'errors' ]?.join( ', ' ) || 'Unknown error'
-                console.log( `  ${chalk.yellow( '!' )} Import failed: ${importError}` )
+                await FlowMcpCli.#manualInstall( { cwd, version, commit, schemaSpec } )
             }
-
+        } else {
+            console.log( `  ${chalk.green( '\u2713' )} All checks passed. Run '${appConfig[ 'cliCommand' ]} update' to check for schema updates.` )
             console.log( '' )
-        }
-
-        // Step 8: Interactive guidance - Create group
-        const { checks: latestChecks } = await FlowMcpCli.#healthCheck( { cwd } )
-        const latestGroupsCheck = latestChecks
-            .find( ( { name } ) => {
-                const isGroups = name === 'groups'
-
-                return isGroups
-            } )
-
-        if( latestGroupsCheck && !latestGroupsCheck[ 'ok' ] ) {
-            const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
-
-            if( availableTools.length > 0 ) {
-                const toolChoices = availableTools
-                    .map( ( tool ) => {
-                        const { toolRef, toolName, description: toolDescription } = tool
-                        const label = `${toolName}  ${chalk.gray( toolDescription || '' )}`
-                        const choice = { 'name': label, 'value': toolRef }
-
-                        return choice
-                    } )
-
-                const { wantGroup } = await inquirer.prompt( [
-                    {
-                        'type': 'confirm',
-                        'name': 'wantGroup',
-                        'message': 'Create a tool group now?',
-                        'default': true
-                    }
-                ] )
-
-                if( wantGroup ) {
-                    const { groupName } = await inquirer.prompt( [
-                        {
-                            'type': 'input',
-                            'name': 'groupName',
-                            'message': 'Group name:',
-                            validate: ( input ) => {
-                                if( !input || input.trim().length === 0 ) {
-                                    return 'Please provide a group name.'
-                                }
-
-                                return true
-                            }
-                        }
-                    ] )
-
-                    const { selectedTools } = await inquirer.prompt( [
-                        {
-                            'type': 'checkbox',
-                            'name': 'selectedTools',
-                            'message': `Select tools for group "${groupName.trim()}":`,
-                            'choices': toolChoices,
-                            validate: ( input ) => {
-                                if( input.length === 0 ) {
-                                    return 'Select at least one tool.'
-                                }
-
-                                return true
-                            }
-                        }
-                    ] )
-
-                    const { description: groupDescription } = await inquirer.prompt( [
-                        {
-                            'type': 'input',
-                            'name': 'description',
-                            'message': 'Group description (optional):',
-                            'default': ''
-                        }
-                    ] )
-
-                    const localGroupDir = join( cwd, appConfig[ 'localConfigDirName' ] )
-                    await mkdir( localGroupDir, { recursive: true } )
-                    const localGroupConfigPath = join( localGroupDir, 'config.json' )
-
-                    const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localGroupConfigPath } )
-                    const updatedLocalConfig = currentLocalConfig || { 'mode': MODE_AGENT, 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
-
-                    if( !updatedLocalConfig[ 'mode' ] ) {
-                        updatedLocalConfig[ 'mode' ] = MODE_AGENT
-                    }
-
-                    if( !updatedLocalConfig[ 'groups' ] ) {
-                        updatedLocalConfig[ 'groups' ] = {}
-                    }
-
-                    const trimmedGroupName = groupName.trim()
-                    updatedLocalConfig[ 'groups' ][ trimmedGroupName ] = {
-                        'description': groupDescription.trim() || '',
-                        'tools': selectedTools
-                    }
-
-                    if( !updatedLocalConfig[ 'defaultGroup' ] ) {
-                        updatedLocalConfig[ 'defaultGroup' ] = trimmedGroupName
-                    }
-
-                    await writeFile( localGroupConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
-
-                    console.log( `  ${chalk.green( '\u2713' )} Group "${trimmedGroupName}" created with ${selectedTools.length} tool(s)` )
-                    if( updatedLocalConfig[ 'defaultGroup' ] === trimmedGroupName ) {
-                        console.log( `  ${chalk.green( '\u2713' )} Set as default group` )
-                    }
-                    console.log( '' )
-                }
-            }
         }
 
         // Final health check
@@ -394,14 +163,14 @@ class FlowMcpCli {
             owner,
             repo,
             branch,
-            'path': 'flowmcp-registry.json'
+            'path': appConfig[ 'registryFileName' ]
         } )
 
         const { data: registryText, error: fetchError } = await FlowMcpCli.#fetchUrl( { url: registryUrl } )
         if( !registryText ) {
             const result = FlowMcpCli.#error( {
                 'error': `Failed to fetch registry: ${fetchError}`,
-                'fix': 'Verify the URL points to a repo with a flowmcp-registry.json in its root.'
+                'fix': `Verify the URL points to a repo with a ${appConfig[ 'registryFileName' ]} in its root.`
             } )
 
             return { result }
@@ -412,8 +181,8 @@ class FlowMcpCli {
             registry = JSON.parse( registryText )
         } catch {
             const result = FlowMcpCli.#error( {
-                'error': 'Invalid JSON in flowmcp-registry.json',
-                'fix': 'The remote flowmcp-registry.json contains invalid JSON. Check the repository.'
+                'error': `Invalid JSON in ${appConfig[ 'registryFileName' ]}`,
+                'fix': `The remote ${appConfig[ 'registryFileName' ]} contains invalid JSON. Check the repository.`
             } )
 
             return { result }
@@ -424,7 +193,7 @@ class FlowMcpCli {
         if( !sourceName || !Array.isArray( registrySchemas ) ) {
             const result = FlowMcpCli.#error( {
                 'error': 'Registry missing required fields: name, schemas',
-                'fix': 'The flowmcp-registry.json must contain "name" (string) and "schemas" (array).'
+                'fix': `The ${appConfig[ 'registryFileName' ]} must contain "name" (string) and "schemas" (array).`
             } )
 
             return { result }
@@ -453,8 +222,10 @@ class FlowMcpCli {
             process.stdout.write( ' '.repeat( 80 ) + '\r' )
         }
 
-        let schemasImported = 0
-        let schemasFailed = 0
+        let downloaded = 0
+        let skipped = 0
+        let failed = 0
+        const localHashes = {}
         const errors = []
         const total = registrySchemas.length
 
@@ -470,18 +241,35 @@ class FlowMcpCli {
 
                 process.stdout.write( `  Downloading ${index + 1}/${total}: ${file}\r` )
 
-                const { success, error: dlError } = await FlowMcpCli.#downloadSchema( { url: fileUrl, targetPath } )
+                const { success, downloadStatus, hash, error: dlError } = await FlowMcpCli.#downloadSchema( { url: fileUrl, targetPath } )
                 if( success ) {
-                    schemasImported = schemasImported + 1
+                    if( downloadStatus === 'skipped' ) {
+                        skipped = skipped + 1
+                    } else {
+                        downloaded = downloaded + 1
+                    }
+
+                    if( hash ) {
+                        localHashes[ file ] = hash
+                    }
                 } else {
-                    schemasFailed = schemasFailed + 1
+                    failed = failed + 1
                     errors.push( `${file}: ${dlError}` )
                 }
             } ), Promise.resolve() )
 
         process.stdout.write( ' '.repeat( 80 ) + '\r' )
 
-        const registryCopy = { ...registry }
+        const registryCopy = {
+            'name': registry[ 'name' ],
+            'description': registry[ 'description' ],
+            'schemaSpec': registry[ 'schemaSpec' ],
+            'baseDir': registry[ 'baseDir' ],
+            'shared': registry[ 'shared' ],
+            'schemas': registry[ 'schemas' ],
+            localHashes
+        }
+
         await writeFile(
             join( sourceDir, '_registry.json' ),
             JSON.stringify( registryCopy, null, 4 ),
@@ -501,17 +289,20 @@ class FlowMcpCli {
             'repository': url,
             branch,
             registryUrl,
-            'schemaCount': schemasImported,
+            'schemaCount': downloaded + skipped,
             'importedAt': new Date().toISOString()
         }
 
         await FlowMcpCli.#writeGlobalConfig( { config: globalConfig } )
 
         const result = {
-            'status': schemasFailed === 0,
+            'status': failed === 0,
             'source': sourceName,
-            schemasImported,
-            schemasFailed,
+            'schemasImported': downloaded + skipped,
+            downloaded,
+            skipped,
+            failed,
+            'summary': `${downloaded} downloaded, ${skipped} up to date, ${failed} failed`,
             'errors': errors.length > 0 ? errors : undefined
         }
 
@@ -532,7 +323,7 @@ class FlowMcpCli {
             const result = {
                 'status': false,
                 'messages': validMessages,
-                'fix': `Provide: ${appConfig[ 'cliCommand' ]} import-registry <url-to-flowmcp-registry.json>`
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} import-registry <url-to-${appConfig[ 'registryFileName' ]}>`
             }
 
             return { result }
@@ -542,7 +333,7 @@ class FlowMcpCli {
         if( !registryText ) {
             const result = FlowMcpCli.#error( {
                 'error': `Failed to fetch registry: ${fetchError}`,
-                'fix': 'Verify the URL points to a valid flowmcp-registry.json file.'
+                'fix': `Verify the URL points to a valid ${appConfig[ 'registryFileName' ]} file.`
             } )
 
             return { result }
@@ -597,8 +388,10 @@ class FlowMcpCli {
             process.stdout.write( ' '.repeat( 80 ) + '\r' )
         }
 
-        let schemasImported = 0
-        let schemasFailed = 0
+        let downloaded = 0
+        let skipped = 0
+        let failed = 0
+        const localHashes = {}
         const errors = []
         const total = registrySchemas.length
 
@@ -614,26 +407,45 @@ class FlowMcpCli {
 
                 process.stdout.write( `  Downloading ${index + 1}/${total}: ${file}\r` )
 
-                const { success, error: dlError } = await FlowMcpCli.#downloadSchema( { 'url': fileUrl, targetPath } )
+                const { success, downloadStatus, hash, error: dlError } = await FlowMcpCli.#downloadSchema( { 'url': fileUrl, targetPath } )
                 if( success ) {
-                    schemasImported = schemasImported + 1
+                    if( downloadStatus === 'skipped' ) {
+                        skipped = skipped + 1
+                    } else {
+                        downloaded = downloaded + 1
+                    }
+
+                    if( hash ) {
+                        localHashes[ file ] = hash
+                    }
                 } else {
-                    schemasFailed = schemasFailed + 1
+                    failed = failed + 1
                     errors.push( `${file}: ${dlError}` )
                 }
             } ), Promise.resolve() )
 
         process.stdout.write( ' '.repeat( 80 ) + '\r' )
 
-        const registryCopy = { ...registry }
+        const registryCopy = {
+            'name': registry[ 'name' ],
+            'description': registry[ 'description' ],
+            'schemaSpec': registry[ 'schemaSpec' ],
+            'baseDir': registry[ 'baseDir' ],
+            'shared': registry[ 'shared' ],
+            'schemas': registry[ 'schemas' ],
+            localHashes
+        }
+
         await writeFile(
             join( sourceDir, '_registry.json' ),
             JSON.stringify( registryCopy, null, 4 ),
             'utf-8'
         )
 
+        const schemasImported = downloaded + skipped
+
         console.log( '' )
-        console.log( `  ${chalk.green( 'Import complete.' )} ${schemasImported} schemas copied.` )
+        console.log( `  ${chalk.green( 'Import complete.' )} ${downloaded} downloaded, ${skipped} up to date.` )
 
         const { modules } = FlowMcpCli.#collectRequiredModules( { registrySchemas } )
         let allInstalled = true
@@ -717,13 +529,111 @@ class FlowMcpCli {
         await FlowMcpCli.#writeGlobalConfig( { 'config': globalConfig } )
 
         const result = {
-            'status': schemasFailed === 0,
+            'status': failed === 0,
             'source': sourceName,
             schemasImported,
-            schemasFailed,
+            downloaded,
+            skipped,
+            failed,
+            'summary': `${downloaded} downloaded, ${skipped} up to date, ${failed} failed`,
             'requiredModules': modules,
             'modulesVerified': allInstalled,
             'errors': errors.length > 0 ? errors : undefined
+        }
+
+        return { result }
+    }
+
+
+    static async update( { sourceName } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const { status: validStatus, messages: validMessages } = FlowMcpCli.validationUpdate( { sourceName } )
+        if( !validStatus ) {
+            const result = {
+                'status': false,
+                'messages': validMessages,
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} update [source-name]`
+            }
+
+            return { result }
+        }
+
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
+
+        const sourceEntries = Object.entries( configSources )
+            .filter( ( [ name, sourceConfig ] ) => {
+                const hasRegistryUrl = sourceConfig[ 'registryUrl' ] !== undefined
+                const matchesName = sourceName ? name === sourceName : true
+
+                return hasRegistryUrl && matchesName
+            } )
+
+        if( sourceEntries.length === 0 ) {
+            const errorMessage = sourceName
+                ? `Source "${sourceName}" not found or has no registry URL.`
+                : 'No sources with registry URLs found.'
+            const result = FlowMcpCli.#error( {
+                'error': errorMessage,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} status to see available sources.`
+            } )
+
+            return { result }
+        }
+
+        const results = []
+
+        await sourceEntries
+            .reduce( ( promise, [ name, sourceConfig ] ) => promise.then( async () => {
+                const { registryUrl } = sourceConfig
+                const { updateResult } = await FlowMcpCli.#updateSource( { 'sourceName': name, registryUrl } )
+                results.push( updateResult )
+            } ), Promise.resolve() )
+
+        const totalDownloaded = results
+            .reduce( ( sum, r ) => {
+                const count = sum + r[ 'downloaded' ]
+
+                return count
+            }, 0 )
+
+        const totalUpdated = results
+            .reduce( ( sum, r ) => {
+                const count = sum + r[ 'updated' ]
+
+                return count
+            }, 0 )
+
+        const totalSkipped = results
+            .reduce( ( sum, r ) => {
+                const count = sum + r[ 'skipped' ]
+
+                return count
+            }, 0 )
+
+        const totalFailed = results
+            .reduce( ( sum, r ) => {
+                const count = sum + r[ 'failed' ]
+
+                return count
+            }, 0 )
+
+        const updatedGlobalConfig = globalConfig || {}
+        updatedGlobalConfig[ 'updatedAt' ] = new Date().toISOString()
+
+        await FlowMcpCli.#writeGlobalConfig( { 'config': updatedGlobalConfig } )
+
+        const result = {
+            'status': totalFailed === 0,
+            'sources': results,
+            'summary': `${totalDownloaded} new, ${totalUpdated} updated, ${totalSkipped} up to date, ${totalFailed} failed`
         }
 
         return { result }
@@ -1691,11 +1601,10 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { mode } = await FlowMcpCli.#resolveMode( { cwd } )
         let resolvedSchemas = null
         let serverName = null
 
-        if( mode === MODE_AGENT && !group ) {
+        if( !group ) {
             const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
             if( !agentSchemas ) {
                 const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
@@ -1704,7 +1613,7 @@ class FlowMcpCli {
             }
 
             resolvedSchemas = agentSchemas
-            serverName = 'agent'
+            serverName = 'default'
         } else {
             const { groupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
             if( !groupName ) {
@@ -1820,11 +1729,10 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { mode } = await FlowMcpCli.#resolveMode( { cwd } )
         let resolvedSchemas = null
         let groupName = null
 
-        if( mode === MODE_AGENT && !group ) {
+        if( !group ) {
             const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
             if( !agentSchemas ) {
                 const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
@@ -1833,7 +1741,7 @@ class FlowMcpCli {
             }
 
             resolvedSchemas = agentSchemas
-            groupName = '_agent'
+            groupName = '_default'
         } else {
             const { groupName: resolvedGroupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
             if( !resolvedGroupName ) {
@@ -1926,10 +1834,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { mode } = await FlowMcpCli.#resolveMode( { cwd } )
         let resolvedSchemas = null
 
-        if( mode === MODE_AGENT && !group ) {
+        if( !group ) {
             const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
             if( !agentSchemas ) {
                 const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
@@ -2025,12 +1932,9 @@ class FlowMcpCli {
             } )
 
         if( !matchedFunc ) {
-            const errorContext = mode === MODE_AGENT
-                ? `active tools list`
-                : `group`
             const result = FlowMcpCli.#error( {
-                'error': `Tool "${toolName}" not found in ${errorContext}.`,
-                'fix': `Run ${appConfig[ 'cliCommand' ]} ${mode === MODE_AGENT ? 'list' : 'call list-tools'} to see available tool names.`
+                'error': `Tool "${toolName}" not found in active tools.`,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tool names.`
             } )
 
             return { result }
@@ -2076,7 +1980,7 @@ class FlowMcpCli {
         } catch( err ) {
             const result = FlowMcpCli.#error( {
                 'error': `Tool execution failed: ${err.message}`,
-                'fix': `Check the tool parameters and env vars. Run ${appConfig[ 'cliCommand' ]} ${mode === MODE_AGENT ? 'list' : 'call list-tools'} for details.`
+                'fix': `Check the tool parameters and env vars. Run ${appConfig[ 'cliCommand' ]} call list-tools for details.`
             } )
 
             return { result }
@@ -2230,15 +2134,11 @@ class FlowMcpCli {
         if( !localConfig ) {
             await mkdir( localConfigDir, { recursive: true } )
             updatedConfig = {
-                'mode': MODE_AGENT,
                 'root': `~/${appConfig[ 'globalConfigDirName' ]}`,
                 'tools': [ toolRef ]
             }
         } else {
             updatedConfig = localConfig
-            if( !updatedConfig[ 'mode' ] ) {
-                updatedConfig[ 'mode' ] = MODE_AGENT
-            }
 
             if( !updatedConfig[ 'tools' ] ) {
                 updatedConfig[ 'tools' ] = []
@@ -2444,89 +2344,6 @@ class FlowMcpCli {
     }
 
 
-    static async setMode( { mode, cwd } ) {
-        if( mode !== MODE_AGENT && mode !== MODE_DEVELOPMENT ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Invalid mode "${mode}".`,
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} mode agent  or  ${appConfig[ 'cliCommand' ]} mode dev`
-            } )
-
-            return { result }
-        }
-
-        const localConfigDir = join( cwd, appConfig[ 'localConfigDirName' ] )
-        const localConfigPath = join( localConfigDir, 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-
-        let updatedConfig
-        if( !localConfig ) {
-            await mkdir( localConfigDir, { recursive: true } )
-            updatedConfig = {
-                mode,
-                'root': `~/${appConfig[ 'globalConfigDirName' ]}`
-            }
-
-            if( mode === MODE_AGENT ) {
-                updatedConfig[ 'tools' ] = []
-            }
-        } else {
-            updatedConfig = localConfig
-            updatedConfig[ 'mode' ] = mode
-        }
-
-        await writeFile( localConfigPath, JSON.stringify( updatedConfig, null, 4 ), 'utf-8' )
-
-        const result = {
-            'status': true,
-            mode
-        }
-
-        return { result }
-    }
-
-
-    static async getMode( { cwd } ) {
-        const { mode } = await FlowMcpCli.#resolveMode( { cwd } )
-
-        const result = {
-            'status': true,
-            mode
-        }
-
-        return { result }
-    }
-
-
-    static async helpAgent() {
-        const cmd = appConfig[ 'cliCommand' ]
-        const helpText = `Usage: ${cmd} <command>
-
-  search <query>              Find available tools
-  add <tool-name>             Activate a tool for this project
-  remove <tool-name>          Deactivate a tool
-  list                        Show active tools
-  call <tool-name> [json]     Execute a tool
-  status                      Show health info
-
-  mode [agent|dev]            Switch mode (current: agent)
-
-Example:
-  ${cmd} search etherscan
-  ${cmd} add get_contract_abi_etherscan
-  ${cmd} call get_contract_abi_etherscan '{"address": "0x..."}'
-
-Switch to development mode for advanced commands:
-  ${cmd} mode dev
-`
-
-        process.stdout.write( helpText )
-
-        const result = { 'status': true }
-
-        return { result }
-    }
-
-
     static validationValidate( { schemaPath } ) {
         const struct = { 'status': false, 'messages': [] }
 
@@ -2590,11 +2407,32 @@ Switch to development mode for advanced commands:
         const struct = { 'status': false, 'messages': [] }
 
         if( registryUrl === undefined || registryUrl === null ) {
-            struct[ 'messages' ].push( 'registryUrl: Missing value. Provide a URL to a flowmcp-registry.json file.' )
+            struct[ 'messages' ].push( `registryUrl: Missing value. Provide a URL to a ${appConfig[ 'registryFileName' ]} file.` )
         } else if( typeof registryUrl !== 'string' ) {
             struct[ 'messages' ].push( 'registryUrl: Must be a string.' )
         } else if( !registryUrl.startsWith( 'http://' ) && !registryUrl.startsWith( 'https://' ) ) {
             struct[ 'messages' ].push( 'registryUrl: Must be a valid HTTP or HTTPS URL.' )
+        }
+
+        if( struct[ 'messages' ].length > 0 ) {
+            return struct
+        }
+
+        struct[ 'status' ] = true
+
+        return struct
+    }
+
+
+    static validationUpdate( { sourceName } ) {
+        const struct = { 'status': false, 'messages': [] }
+
+        if( sourceName !== undefined && sourceName !== null ) {
+            if( typeof sourceName !== 'string' ) {
+                struct[ 'messages' ].push( 'sourceName: Must be a string.' )
+            } else if( sourceName.trim().length === 0 ) {
+                struct[ 'messages' ].push( 'sourceName: Must not be empty.' )
+            }
         }
 
         if( struct[ 'messages' ].length > 0 ) {
@@ -3329,9 +3167,12 @@ Switch to development mode for advanced commands:
     }
 
 
-    static async #fetchUrl( { url } ) {
+    static async #fetchUrl( { url, timeout = 10000 } ) {
         try {
-            const response = await fetch( url )
+            const response = await fetch( url, {
+                'signal': AbortSignal.timeout( timeout )
+            } )
+
             if( !response.ok ) {
                 return { 'data': null, 'error': `HTTP ${response.status}: ${response.statusText}` }
             }
@@ -3340,23 +3181,289 @@ Switch to development mode for advanced commands:
 
             return { data, 'error': null }
         } catch( err ) {
-            return { 'data': null, 'error': err.message }
+            const message = err.name === 'TimeoutError'
+                ? `Request timed out after ${timeout}ms`
+                : err.message
+
+            return { 'data': null, 'error': message }
         }
     }
 
 
-    static async #downloadSchema( { url, targetPath } ) {
+    static #hashContent( { content } ) {
+        const hash = createHash( 'sha256' ).update( content, 'utf-8' ).digest( 'hex' )
+
+        return { hash }
+    }
+
+
+    static async #hashFile( { filePath } ) {
+        try {
+            const content = await readFile( filePath, 'utf-8' )
+            const { hash } = FlowMcpCli.#hashContent( { content } )
+
+            return { hash, 'error': null }
+        } catch {
+            return { 'hash': null, 'error': null }
+        }
+    }
+
+
+    static async #downloadSchema( { url, targetPath, allowOverwrite = false } ) {
         const targetDir = dirname( targetPath )
         await mkdir( targetDir, { recursive: true } )
 
         const { data, error } = await FlowMcpCli.#fetchUrl( { url } )
         if( !data ) {
-            return { 'success': false, error }
+            return { 'success': false, 'downloadStatus': 'failed', 'hash': null, error }
         }
 
-        await writeFile( targetPath, data, 'utf-8' )
+        const { hash: remoteHash } = FlowMcpCli.#hashContent( { 'content': data } )
+        const { hash: localHash } = await FlowMcpCli.#hashFile( { filePath: targetPath } )
 
-        return { 'success': true, 'error': null }
+        if( localHash !== null ) {
+            if( localHash === remoteHash ) {
+                return { 'success': true, 'downloadStatus': 'skipped', 'hash': remoteHash, 'error': null }
+            }
+
+            if( !allowOverwrite ) {
+                return { 'success': true, 'downloadStatus': 'conflict', 'hash': remoteHash, 'error': null }
+            }
+        }
+
+        const tmpPath = `${targetPath}.tmp`
+        await writeFile( tmpPath, data, 'utf-8' )
+        await rename( tmpPath, targetPath )
+
+        const downloadStatus = localHash === null ? 'downloaded' : 'updated'
+
+        return { 'success': true, downloadStatus, 'hash': remoteHash, 'error': null }
+    }
+
+
+    static #compareRegistries( { remoteSchemas, localRegistry } ) {
+        const localSchemaFiles = ( localRegistry && Array.isArray( localRegistry[ 'schemas' ] ) )
+            ? localRegistry[ 'schemas' ]
+                .map( ( entry ) => {
+                    const file = entry[ 'file' ]
+
+                    return file
+                } )
+            : []
+
+        const remoteSchemaFiles = remoteSchemas
+            .map( ( entry ) => {
+                const file = entry[ 'file' ]
+
+                return file
+            } )
+
+        const newSchemas = remoteSchemaFiles
+            .filter( ( file ) => {
+                const isNew = !localSchemaFiles.includes( file )
+
+                return isNew
+            } )
+
+        const existingSchemas = remoteSchemaFiles
+            .filter( ( file ) => {
+                const exists = localSchemaFiles.includes( file )
+
+                return exists
+            } )
+
+        const removedSchemas = localSchemaFiles
+            .filter( ( file ) => {
+                const isRemoved = !remoteSchemaFiles.includes( file )
+
+                return isRemoved
+            } )
+
+        return { newSchemas, existingSchemas, removedSchemas }
+    }
+
+
+    static async #updateSource( { sourceName, registryUrl } ) {
+        const { data: registryText, error: fetchError } = await FlowMcpCli.#fetchUrl( { 'url': registryUrl } )
+        if( !registryText ) {
+            const updateResult = {
+                sourceName,
+                'status': false,
+                'error': `Failed to fetch registry: ${fetchError}`,
+                'downloaded': 0,
+                'updated': 0,
+                'skipped': 0,
+                'failed': 0,
+                'removedFiles': []
+            }
+
+            return { updateResult }
+        }
+
+        let remoteRegistry
+        try {
+            remoteRegistry = JSON.parse( registryText )
+        } catch {
+            const updateResult = {
+                sourceName,
+                'status': false,
+                'error': 'Invalid JSON in remote registry',
+                'downloaded': 0,
+                'updated': 0,
+                'skipped': 0,
+                'failed': 0,
+                'removedFiles': []
+            }
+
+            return { updateResult }
+        }
+
+        const { schemas: remoteSchemas, baseDir, shared: remoteShared } = remoteRegistry
+
+        if( !Array.isArray( remoteSchemas ) ) {
+            const updateResult = {
+                sourceName,
+                'status': false,
+                'error': 'Remote registry missing "schemas" array',
+                'downloaded': 0,
+                'updated': 0,
+                'skipped': 0,
+                'failed': 0,
+                'removedFiles': []
+            }
+
+            return { updateResult }
+        }
+
+        const sourceDir = join( FlowMcpCli.#schemasDir(), sourceName )
+        await mkdir( sourceDir, { recursive: true } )
+
+        const localRegistryPath = join( sourceDir, '_registry.json' )
+        const { data: localRegistry } = await FlowMcpCli.#readJson( { filePath: localRegistryPath } )
+
+        const { newSchemas, existingSchemas, removedSchemas } = FlowMcpCli.#compareRegistries( {
+            remoteSchemas,
+            localRegistry
+        } )
+
+        const registryBaseUrl = FlowMcpCli.#resolveRegistryBaseUrl( { registryUrl } )
+        const baseDirAlreadyInUrl = baseDir && registryBaseUrl.endsWith( baseDir )
+
+        let downloaded = 0
+        let updated = 0
+        let skipped = 0
+        let failed = 0
+        const localHashes = ( localRegistry && localRegistry[ 'localHashes' ] ) || {}
+        const errors = []
+
+        if( Array.isArray( remoteShared ) && remoteShared.length > 0 ) {
+            await remoteShared
+                .reduce( ( promise, sharedEntry ) => promise.then( async () => {
+                    const { file } = sharedEntry
+                    const remotePath = ( baseDir && !baseDirAlreadyInUrl )
+                        ? `${baseDir}/${file}`
+                        : file
+
+                    const fileUrl = `${registryBaseUrl}/${remotePath}`
+                    const targetPath = join( sourceDir, file )
+
+                    await FlowMcpCli.#downloadSchema( { 'url': fileUrl, targetPath, 'allowOverwrite': true } )
+                } ), Promise.resolve() )
+        }
+
+        const allSchemaFiles = [ ...newSchemas, ...existingSchemas ]
+
+        await allSchemaFiles
+            .reduce( ( promise, file ) => promise.then( async () => {
+                const schemaEntry = remoteSchemas
+                    .find( ( entry ) => {
+                        const isMatch = entry[ 'file' ] === file
+
+                        return isMatch
+                    } )
+
+                if( !schemaEntry ) {
+                    return
+                }
+
+                const remotePath = ( baseDir && !baseDirAlreadyInUrl )
+                    ? `${baseDir}/${file}`
+                    : file
+
+                const fileUrl = `${registryBaseUrl}/${remotePath}`
+                const targetPath = join( sourceDir, file )
+
+                const { success, downloadStatus, hash, error: dlError } = await FlowMcpCli.#downloadSchema( {
+                    'url': fileUrl,
+                    targetPath,
+                    'allowOverwrite': true
+                } )
+
+                if( success ) {
+                    if( downloadStatus === 'downloaded' ) {
+                        downloaded = downloaded + 1
+                    } else if( downloadStatus === 'updated' ) {
+                        updated = updated + 1
+                    } else {
+                        skipped = skipped + 1
+                    }
+
+                    if( hash ) {
+                        localHashes[ file ] = hash
+                    }
+                } else {
+                    failed = failed + 1
+                    errors.push( `${file}: ${dlError}` )
+                }
+            } ), Promise.resolve() )
+
+        const registryCopy = {
+            'name': remoteRegistry[ 'name' ],
+            'description': remoteRegistry[ 'description' ],
+            'schemaSpec': remoteRegistry[ 'schemaSpec' ],
+            'baseDir': remoteRegistry[ 'baseDir' ],
+            'shared': remoteRegistry[ 'shared' ],
+            'schemas': remoteRegistry[ 'schemas' ],
+            localHashes
+        }
+
+        await writeFile(
+            localRegistryPath,
+            JSON.stringify( registryCopy, null, 4 ),
+            'utf-8'
+        )
+
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfig = existingConfig || {}
+
+        if( !globalConfig[ 'sources' ] ) {
+            globalConfig[ 'sources' ] = {}
+        }
+
+        if( globalConfig[ 'sources' ][ sourceName ] ) {
+            globalConfig[ 'sources' ][ sourceName ][ 'schemaCount' ] = downloaded + updated + skipped
+            globalConfig[ 'sources' ][ sourceName ][ 'updatedAt' ] = new Date().toISOString()
+        }
+
+        await FlowMcpCli.#writeGlobalConfig( { 'config': globalConfig } )
+
+        const totalSchemas = downloaded + updated + skipped
+
+        const updateResult = {
+            sourceName,
+            'status': failed === 0,
+            downloaded,
+            updated,
+            skipped,
+            failed,
+            totalSchemas,
+            'removedFiles': removedSchemas,
+            'summary': `${downloaded} new, ${updated} updated, ${skipped} up to date`,
+            'errors': errors.length > 0 ? errors : undefined
+        }
+
+        return { updateResult }
     }
 
 
@@ -3587,7 +3694,7 @@ Switch to development mode for advanced commands:
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
 
         if( !globalConfig ) {
-            return { 'config': null, 'error': 'Not initialized. Run: flowmcp init' }
+            return { 'config': null, 'error': `Not initialized. Run: ${appConfig[ 'cliCommand' ]} init` }
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
@@ -3714,23 +3821,38 @@ Switch to development mode for advanced commands:
         const cmd = appConfig[ 'cliCommand' ]
         const helpText = `Usage: ${cmd} <command> [options]
 
-Setup (run once, interactive - for humans):
-  init                              Interactive setup (creates config, sets .env path)
+Setup:
+  init                                Interactive setup (creates config, sets .env path)
 
-AI Commands (non-interactive, JSON output):
-  schemas                           List all imported sources and schemas
+Tool Discovery:
+  search <query>                      Find available tools
+  add <tool-name>                     Activate a tool for this project
+  remove <tool-name>                  Deactivate a tool
+  list                                Show active tools
+
+Schema Management:
+  schemas                             List all imported sources and schemas
+  import <github-url>                 Import schemas from a GitHub repository
+  import-registry <url>               Import schemas from a custom registry URL
+  update [source-name]                Update schemas from remote registries
+  status                              Show config, sources, groups and health info
+
+Group Management:
   group append <name> --tools <list>  Add tools to a group (creates group if needed)
   group remove <name> --tools <list>  Remove tools from a group
   group list                          List all groups and their tools
   group set-default <name>            Set the default group
-  import <github-url>               Import schemas from a GitHub repository
-  import-registry <url>             Import schemas from a custom registry URL
-  validate [path]                   Validate schema(s) structurally
-  test [path]                       Live-test schema(s) with API calls
-  run                               Start MCP server (stdio) for default group
-  call list-tools                   List available tools from default group
-  call <tool-name> [json]           Execute a tool call
-  status                            Show config, sources, groups and health info
+
+Validation & Testing:
+  validate [path]                     Validate schema(s) structurally
+  test project                        Test all schemas in default/specified group
+  test user                           Test all user schemas
+  test single <path>                  Test a single schema file
+
+Execution:
+  run                                 Start MCP server (stdio) for default group
+  call list-tools                     List available tools from default group
+  call <tool-name> [json]             Execute a tool call
 
 Options:
   --tools <list>              Comma-separated tool refs (source/file.mjs::route)
@@ -3748,6 +3870,365 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 `
 
         process.stdout.write( helpText )
+    }
+
+
+    static async #quickInstall( { cwd, version, commit, schemaSpec } ) {
+        const globalDir = FlowMcpCli.#globalConfigDir()
+        await mkdir( globalDir, { recursive: true } )
+
+        // .env path: use existing or create default
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingGlobalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        let envPath
+
+        if( existingGlobalConfig && existingGlobalConfig[ 'envPath' ] ) {
+            envPath = existingGlobalConfig[ 'envPath' ]
+        } else {
+            envPath = join( globalDir, appConfig[ 'defaultEnvFileName' ] )
+            try {
+                await access( envPath, constants.F_OK )
+            } catch {
+                await writeFile( envPath, '# Add your API keys here\n# Example: ETHERSCAN_API_KEY=your_key_here\n', 'utf-8' )
+            }
+        }
+
+        console.log( `  ${chalk.green( '\u2713' )} .env path: ${chalk.gray( envPath )}` )
+
+        // Global config
+        const now = new Date().toISOString()
+        const globalConfigUpdates = {
+            envPath,
+            'flowmcpCore': { version, commit, schemaSpec },
+            'initialized': now,
+            'sources': {
+                'demo': { 'type': 'builtin', 'schemaCount': 1 }
+            }
+        }
+
+        const { config: mergedGlobalConfig } = FlowMcpCli.#mergeConfig( {
+            'existing': existingGlobalConfig || {},
+            'updates': globalConfigUpdates
+        } )
+
+        mergedGlobalConfig[ 'envPath' ] = envPath
+        await FlowMcpCli.#writeGlobalConfig( { 'config': mergedGlobalConfig } )
+        console.log( `  ${chalk.green( '\u2713' )} Global config saved` )
+
+        // Demo schema
+        const schemasDir = FlowMcpCli.#schemasDir()
+        let schemaSourceCount = 0
+        try {
+            const entries = await readdir( schemasDir )
+            schemaSourceCount = await entries
+                .reduce( ( promise, entry ) => promise.then( async ( count ) => {
+                    const entryStat = await stat( join( schemasDir, entry ) )
+                    if( entryStat.isDirectory() ) {
+                        return count + 1
+                    }
+
+                    return count
+                } ), Promise.resolve( 0 ) )
+        } catch {
+            schemaSourceCount = 0
+        }
+
+        if( schemaSourceCount === 0 ) {
+            const demoDir = join( schemasDir, 'demo' )
+            await mkdir( demoDir, { recursive: true } )
+            const { content: demoContent } = FlowMcpCli.#createDemoSchema()
+            await writeFile( join( demoDir, 'ping.mjs' ), demoContent, 'utf-8' )
+            console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
+        }
+
+        // Local config
+        const localDir = join( cwd, appConfig[ 'localConfigDirName' ] )
+        await mkdir( localDir, { recursive: true } )
+        const localConfigPath = join( localDir, 'config.json' )
+        const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+
+        const { config: mergedLocalConfig } = FlowMcpCli.#mergeConfig( {
+            'existing': existingLocalConfig || {},
+            'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+        } )
+
+        await writeFile( localConfigPath, JSON.stringify( mergedLocalConfig, null, 4 ), 'utf-8' )
+        console.log( `  ${chalk.green( '\u2713' )} Local config saved` )
+
+        // Auto-import default registry
+        console.log( '' )
+        console.log( `  ${chalk.cyan( 'Importing default schemas...' )}` )
+
+        const { result: importResult } = await FlowMcpCli.importRegistry( {
+            'registryUrl': appConfig[ 'defaultRegistryUrl' ]
+        } )
+
+        if( importResult[ 'status' ] ) {
+            console.log( `  ${chalk.green( '\u2713' )} ${importResult[ 'summary' ] || `Imported ${importResult[ 'schemasImported' ]} schema(s)`}` )
+        } else {
+            const importError = importResult[ 'error' ] || importResult[ 'errors' ]?.join( ', ' ) || 'Unknown error'
+            console.log( `  ${chalk.yellow( '!' )} Import failed: ${importError}` )
+        }
+
+        // Create "default" group with all tools
+        const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
+
+        if( availableTools.length > 0 ) {
+            const allToolRefs = availableTools
+                .map( ( tool ) => {
+                    const ref = tool[ 'toolRef' ]
+
+                    return ref
+                } )
+
+            const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+            const updatedLocalConfig = currentLocalConfig || { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+
+            if( !updatedLocalConfig[ 'groups' ] ) {
+                updatedLocalConfig[ 'groups' ] = {}
+            }
+
+            updatedLocalConfig[ 'groups' ][ 'default' ] = {
+                'description': 'All available tools',
+                'tools': allToolRefs
+            }
+
+            updatedLocalConfig[ 'defaultGroup' ] = 'default'
+
+            await writeFile( localConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
+            console.log( `  ${chalk.green( '\u2713' )} Group "default" created with ${allToolRefs.length} tool(s)` )
+        }
+
+        console.log( '' )
+    }
+
+
+    static async #manualInstall( { cwd, version, commit, schemaSpec } ) {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingGlobalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        let envPath
+
+        if( existingGlobalConfig && existingGlobalConfig[ 'envPath' ] ) {
+            envPath = existingGlobalConfig[ 'envPath' ]
+            console.log( `  ${chalk.green( '\u2713' )} Using existing .env path: ${chalk.gray( envPath )}` )
+        } else {
+            const { envPath: promptedEnvPath } = await FlowMcpCli.#promptEnvPath()
+            envPath = promptedEnvPath
+        }
+
+        const globalDir = FlowMcpCli.#globalConfigDir()
+        await mkdir( globalDir, { recursive: true } )
+
+        const now = new Date().toISOString()
+        const globalConfigUpdates = {
+            envPath,
+            'flowmcpCore': { version, commit, schemaSpec },
+            'initialized': now,
+            'sources': {
+                'demo': { 'type': 'builtin', 'schemaCount': 1 }
+            }
+        }
+
+        const { config: mergedGlobalConfig } = FlowMcpCli.#mergeConfig( {
+            'existing': existingGlobalConfig || {},
+            'updates': globalConfigUpdates
+        } )
+
+        mergedGlobalConfig[ 'envPath' ] = envPath
+        await FlowMcpCli.#writeGlobalConfig( { 'config': mergedGlobalConfig } )
+
+        const schemasDir = FlowMcpCli.#schemasDir()
+        let schemaSourceCount = 0
+        try {
+            const entries = await readdir( schemasDir )
+            schemaSourceCount = await entries
+                .reduce( ( promise, entry ) => promise.then( async ( count ) => {
+                    const entryStat = await stat( join( schemasDir, entry ) )
+                    if( entryStat.isDirectory() ) {
+                        return count + 1
+                    }
+
+                    return count
+                } ), Promise.resolve( 0 ) )
+        } catch {
+            schemaSourceCount = 0
+        }
+
+        if( schemaSourceCount > 0 ) {
+            console.log( `  ${chalk.green( '\u2713' )} ${schemaSourceCount} schema source(s) found` )
+        } else {
+            const demoDir = join( schemasDir, 'demo' )
+            await mkdir( demoDir, { recursive: true } )
+            const { content: demoContent } = FlowMcpCli.#createDemoSchema()
+            await writeFile( join( demoDir, 'ping.mjs' ), demoContent, 'utf-8' )
+            console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
+        }
+
+        const localDir = join( cwd, appConfig[ 'localConfigDirName' ] )
+        await mkdir( localDir, { recursive: true } )
+        const localConfigPath = join( localDir, 'config.json' )
+        const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+
+        const { config: mergedLocalConfig } = FlowMcpCli.#mergeConfig( {
+            'existing': existingLocalConfig || {},
+            'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+        } )
+
+        await writeFile( localConfigPath, JSON.stringify( mergedLocalConfig, null, 4 ), 'utf-8' )
+
+        console.log( '' )
+        console.log( `  ${chalk.green( '\u2713' )} Global config saved to ${chalk.gray( FlowMcpCli.#globalConfigPath() )}` )
+        console.log( `  ${chalk.green( '\u2713' )} Local config saved to ${chalk.gray( localConfigPath )}` )
+        console.log( '' )
+
+        // Import schemas
+        const { wantImport } = await inquirer.prompt( [
+            {
+                'type': 'confirm',
+                'name': 'wantImport',
+                'message': 'Import schemas?',
+                'default': true
+            }
+        ] )
+
+        if( wantImport ) {
+            const { registryUrl } = await inquirer.prompt( [
+                {
+                    'type': 'input',
+                    'name': 'registryUrl',
+                    'message': `Registry URL (${appConfig[ 'registryFileName' ]}):`,
+                    'default': appConfig[ 'defaultRegistryUrl' ],
+                    validate: ( input ) => {
+                        if( !input || input.trim().length === 0 ) {
+                            return 'Please provide a URL.'
+                        }
+
+                        if( !input.startsWith( 'http://' ) && !input.startsWith( 'https://' ) ) {
+                            return 'Must be a valid HTTP or HTTPS URL.'
+                        }
+
+                        return true
+                    }
+                }
+            ] )
+
+            const { result: importResult } = await FlowMcpCli.importRegistry( {
+                'registryUrl': registryUrl.trim()
+            } )
+
+            if( importResult[ 'status' ] ) {
+                console.log( `  ${chalk.green( '\u2713' )} ${importResult[ 'summary' ] || `Imported ${importResult[ 'schemasImported' ]} schema(s) from "${importResult[ 'source' ]}"`}` )
+            } else {
+                const importError = importResult[ 'error' ] || importResult[ 'errors' ]?.join( ', ' ) || 'Unknown error'
+                console.log( `  ${chalk.yellow( '!' )} Import failed: ${importError}` )
+            }
+
+            console.log( '' )
+        }
+
+        // Create group
+        const { checks: latestChecks } = await FlowMcpCli.#healthCheck( { cwd } )
+        const latestGroupsCheck = latestChecks
+            .find( ( { name } ) => {
+                const isGroups = name === 'groups'
+
+                return isGroups
+            } )
+
+        if( latestGroupsCheck && !latestGroupsCheck[ 'ok' ] ) {
+            const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
+
+            if( availableTools.length > 0 ) {
+                const toolChoices = availableTools
+                    .map( ( tool ) => {
+                        const { toolRef, toolName, description: toolDescription } = tool
+                        const label = `${toolName}  ${chalk.gray( toolDescription || '' )}`
+                        const choice = { 'name': label, 'value': toolRef }
+
+                        return choice
+                    } )
+
+                const { wantGroup } = await inquirer.prompt( [
+                    {
+                        'type': 'confirm',
+                        'name': 'wantGroup',
+                        'message': 'Create a tool group now?',
+                        'default': true
+                    }
+                ] )
+
+                if( wantGroup ) {
+                    const { groupName } = await inquirer.prompt( [
+                        {
+                            'type': 'input',
+                            'name': 'groupName',
+                            'message': 'Group name:',
+                            validate: ( input ) => {
+                                if( !input || input.trim().length === 0 ) {
+                                    return 'Please provide a group name.'
+                                }
+
+                                return true
+                            }
+                        }
+                    ] )
+
+                    const { selectedTools } = await inquirer.prompt( [
+                        {
+                            'type': 'checkbox',
+                            'name': 'selectedTools',
+                            'message': `Select tools for group "${groupName.trim()}":`,
+                            'choices': toolChoices,
+                            validate: ( input ) => {
+                                if( input.length === 0 ) {
+                                    return 'Select at least one tool.'
+                                }
+
+                                return true
+                            }
+                        }
+                    ] )
+
+                    const { description: groupDescription } = await inquirer.prompt( [
+                        {
+                            'type': 'input',
+                            'name': 'description',
+                            'message': 'Group description (optional):',
+                            'default': ''
+                        }
+                    ] )
+
+                    const localGroupDir = join( cwd, appConfig[ 'localConfigDirName' ] )
+                    await mkdir( localGroupDir, { recursive: true } )
+                    const localGroupConfigPath = join( localGroupDir, 'config.json' )
+
+                    const { data: currentLocalConfig } = await FlowMcpCli.#readJson( { filePath: localGroupConfigPath } )
+                    const updatedLocalConfig = currentLocalConfig || { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
+
+                    if( !updatedLocalConfig[ 'groups' ] ) {
+                        updatedLocalConfig[ 'groups' ] = {}
+                    }
+
+                    const trimmedGroupName = groupName.trim()
+                    updatedLocalConfig[ 'groups' ][ trimmedGroupName ] = {
+                        'description': groupDescription.trim() || '',
+                        'tools': selectedTools
+                    }
+
+                    if( !updatedLocalConfig[ 'defaultGroup' ] ) {
+                        updatedLocalConfig[ 'defaultGroup' ] = trimmedGroupName
+                    }
+
+                    await writeFile( localGroupConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
+
+                    console.log( `  ${chalk.green( '\u2713' )} Group "${trimmedGroupName}" created with ${selectedTools.length} tool(s)` )
+                    if( updatedLocalConfig[ 'defaultGroup' ] === trimmedGroupName ) {
+                        console.log( `  ${chalk.green( '\u2713' )} Set as default group` )
+                    }
+                    console.log( '' )
+                }
+            }
+        }
     }
 
 
@@ -3964,22 +4445,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             }, {} )
 
         return { serverParams }
-    }
-
-
-    static async #resolveMode( { cwd } ) {
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-
-        if( !localConfig ) {
-            return { 'mode': null }
-        }
-
-        if( localConfig[ 'mode' ] ) {
-            return { 'mode': localConfig[ 'mode' ] }
-        }
-
-        return { 'mode': null }
     }
 
 

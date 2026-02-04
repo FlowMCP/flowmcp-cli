@@ -6,7 +6,7 @@ Command-line tool for developing, validating, and managing FlowMCP schemas.
 
 ## Description
 
-FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI provides schema validation, live API testing, repository imports, and an MCP server mode for integration with AI agent frameworks like Claude Code.
+FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI provides schema validation, live API testing, repository imports, delta-based updates, and an MCP server mode for integration with AI agent frameworks like Claude Code.
 
 ## Architecture
 
@@ -33,48 +33,32 @@ npm i
 npx flowmcp init
 ```
 
-## User Commands
+## Commands
 
-Interactive commands for humans. These use prompts, colored output, and guided workflows.
+### Setup
 
 | Command | Description |
 |---------|-------------|
 | `flowmcp init` | Interactive setup — creates global and local config |
-| `flowmcp help` | Show available commands and usage |
 
-### Mode Availability
+### Tool Discovery
 
-`init` and other development commands are available based on the current mode:
-
-| Situation | Mode | `init` | `validate`/`test` | `search`/`add` |
-|-----------|------|--------|--------------------|-----------------|
-| No local config | `null` | Yes | Yes | Yes |
-| Config with `mode: "agent"` | `agent` | No | No | Yes |
-| Config with `mode: "dev"` | `development` | Yes | Yes | Yes |
-
-When no local config exists, all commands are available so that `flowmcp init` can be run to bootstrap a project. Once the config is set to `agent` mode, only agent commands remain accessible.
-
-## Agent Commands
-
-JSON-output commands designed for programmatic consumption by AI agents and scripts.
+| Command | Description |
+|---------|-------------|
+| `flowmcp search <query>` | Find available tools by keyword |
+| `flowmcp add <tool-name>` | Activate a tool for this project |
+| `flowmcp remove <tool-name>` | Deactivate a tool |
+| `flowmcp list` | Show active tools |
 
 ### Schema Management
 
 | Command | Description |
 |---------|-------------|
+| `flowmcp schemas` | List all available schemas and their tools |
 | `flowmcp import <url> [--branch name]` | Import schemas from a GitHub repository |
 | `flowmcp import-registry <url>` | Import schemas from a registry URL |
-| `flowmcp schemas` | List all available schemas and their tools |
+| `flowmcp update [source-name]` | Update schemas from remote registries (hash-based delta) |
 | `flowmcp status` | Show config, sources, groups, and health info |
-
-### Validation & Testing
-
-| Command | Description |
-|---------|-------------|
-| `flowmcp validate [path] [--group name]` | Validate schema structure against spec 1.2.0 |
-| `flowmcp test project [--route name] [--group name]` | Test default group with live API calls |
-| `flowmcp test user [--route name]` | Test all user schemas with live API calls |
-| `flowmcp test single <path> [--route name]` | Test a single schema file |
 
 ### Group Management
 
@@ -85,7 +69,16 @@ JSON-output commands designed for programmatic consumption by AI agents and scri
 | `flowmcp group remove <name> --tools "refs"` | Remove tools from a group |
 | `flowmcp group set-default <name>` | Set the default group |
 
-### Tool Execution
+### Validation & Testing
+
+| Command | Description |
+|---------|-------------|
+| `flowmcp validate [path] [--group name]` | Validate schema structure against spec 1.2.0 |
+| `flowmcp test project [--route name] [--group name]` | Test default group with live API calls |
+| `flowmcp test user [--route name]` | Test all user schemas with live API calls |
+| `flowmcp test single <path> [--route name]` | Test a single schema file |
+
+### Execution
 
 | Command | Description |
 |---------|-------------|
@@ -103,11 +96,11 @@ source/file.mjs::routeName   # Single tool from a schema
 ## Workflow Example
 
 ```bash
-# 1. Setup
+# 1. Setup (quick install imports schemas and creates default group)
 flowmcp init
-flowmcp import https://github.com/flowmcp/flowmcp-schemas
 
-# 2. Create project group
+# 2. Or: Manual import and group creation
+flowmcp import https://github.com/flowmcp/flowmcp-schemas
 flowmcp group append crypto --tools "flowmcp-schemas/coingecko/simplePrice.mjs,flowmcp-schemas/etherscan/getBalance.mjs"
 flowmcp group set-default crypto
 
@@ -119,7 +112,10 @@ flowmcp test project
 flowmcp call list-tools
 flowmcp call coingecko_simplePrice '{"ids":"bitcoin","vs_currencies":"usd"}'
 
-# 5. Run as MCP server
+# 5. Update schemas from remote
+flowmcp update
+
+# 6. Run as MCP server
 flowmcp run
 ```
 
