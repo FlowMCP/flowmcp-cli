@@ -3,13 +3,15 @@ import { join, resolve, basename, extname, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { constants, existsSync } from 'node:fs'
+import { constants, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP } from 'flowmcp'
+import { FlowMCP } from 'flowmcp/v2'
+
+import { ZodBuilder } from './ZodBuilder.mjs'
 
 import { appConfig } from '../data/config.mjs'
 
@@ -711,8 +713,8 @@ class FlowMcpCli {
                     await access( filePath, constants.F_OK )
 
                     if( routeName ) {
-                        const { schema } = await FlowMcpCli.#loadSchema( { filePath } )
-                        if( !schema || !schema[ 'routes' ] || !schema[ 'routes' ][ routeName ] ) {
+                        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                        if( !main || !main[ 'routes' ] || !main[ 'routes' ][ routeName ] ) {
                             invalidRefs.push( ref )
                         }
                     }
@@ -981,17 +983,17 @@ class FlowMcpCli {
             }
 
             const results = groupSchemas
-                .map( ( { schema, file } ) => {
+                .map( ( { main, file } ) => {
                     try {
-                        const { status, messages } = FlowMCP.validateSchema( { schema } )
-                        const namespace = schema[ 'namespace' ] || 'unknown'
+                        const { status, messages } = FlowMCP.validateMain( { main } )
+                        const namespace = main[ 'namespace' ] || 'unknown'
                         const entry = { file, namespace, status, messages }
 
                         return entry
                     } catch( err ) {
                         const entry = {
                             file,
-                            'namespace': schema[ 'namespace' ] || 'unknown',
+                            'namespace': main[ 'namespace' ] || 'unknown',
                             'status': false,
                             'messages': [ err.message ]
                         }
@@ -1036,17 +1038,17 @@ class FlowMcpCli {
         }
 
         const results = schemas
-            .map( ( { schema, file } ) => {
+            .map( ( { main, file } ) => {
                 try {
-                    const { status, messages } = FlowMCP.validateSchema( { schema } )
-                    const namespace = schema[ 'namespace' ] || 'unknown'
+                    const { status, messages } = FlowMCP.validateMain( { main } )
+                    const namespace = main[ 'namespace' ] || 'unknown'
                     const entry = { file, namespace, status, messages }
 
                     return entry
                 } catch( err ) {
                     const entry = {
                         file,
-                        'namespace': schema[ 'namespace' ] || 'unknown',
+                        'namespace': main[ 'namespace' ] || 'unknown',
                         'status': false,
                         'messages': [ err.message ]
                     }
@@ -1108,9 +1110,9 @@ class FlowMcpCli {
 
             await allSchemas
                 .reduce( ( promise, entry ) => promise.then( async () => {
-                    const { schema, file, source, loadError } = entry
+                    const { main, handlersFn, file, source, loadError } = entry
 
-                    if( !schema ) {
+                    if( !main ) {
                         console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
                         console.log( `    ${chalk.gray( loadError )}` )
                         allResults.push( { 'namespace': 'unknown', file, source, 'status': false, 'messages': [ loadError ], 'skipped': false } )
@@ -1118,8 +1120,8 @@ class FlowMcpCli {
                         return
                     }
 
-                    const namespace = schema[ 'namespace' ] || 'unknown'
-                    const requiredServerParams = schema[ 'requiredServerParams' ] || []
+                    const namespace = main[ 'namespace' ] || 'unknown'
+                    const requiredServerParams = main[ 'requiredServerParams' ] || []
 
                     if( requiredServerParams.length > 0 ) {
                         const { valid } = FlowMcpCli.#validateEnvParams( { envObject, requiredServerParams, namespace, 'envPath': envPath || '' } )
@@ -1144,7 +1146,7 @@ class FlowMcpCli {
 
                     let tests = []
                     try {
-                        tests = FlowMCP.getAllTests( { schema } )
+                        tests = FlowMcpCli.#getAllTests( { main } )
                     } catch( err ) {
                         console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
                         console.log( `    ${chalk.gray( err.message )}` )
@@ -1162,14 +1164,19 @@ class FlowMcpCli {
                         return
                     }
 
+                    const schemasBaseDir = FlowMcpCli.#schemasDir()
+                    const schemaFilePath = join( schemasBaseDir, source, file )
+                    const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
                     console.log( `  ${chalk.white( source + '/' )}${chalk.white( file )}` )
 
                     await tests
                         .reduce( ( testPromise, test ) => testPromise.then( async () => {
                             const { routeName, userParams } = test
                             try {
-                                const { status, messages, dataAsString } = await FlowMCP
-                                    .fetch( { schema, userParams, serverParams, routeName } )
+                                const fetchResult = await FlowMCP
+                                    .fetch( { main, handlerMap, userParams, serverParams, routeName } )
+                                const { status, messages, dataAsString } = fetchResult
                                 const icon = status ? chalk.green( '✓' ) : chalk.red( '✗' )
                                 const msgText = messages.length > 0 ? chalk.gray( ` — ${messages[ 0 ]}` ) : ''
                                 console.log( `    ${icon} ${routeName}${msgText}` )
@@ -1263,9 +1270,9 @@ class FlowMcpCli {
 
                 const envErrors = []
                 groupSchemas
-                    .forEach( ( { schema } ) => {
-                        const namespace = schema[ 'namespace' ] || 'unknown'
-                        const requiredServerParams = schema[ 'requiredServerParams' ] || []
+                    .forEach( ( { main } ) => {
+                        const namespace = main[ 'namespace' ] || 'unknown'
+                        const requiredServerParams = main[ 'requiredServerParams' ] || []
                         const { valid, error: envError, fix: envFix } = FlowMcpCli.#validateEnvParams( {
                             envObject,
                             requiredServerParams,
@@ -1295,14 +1302,14 @@ class FlowMcpCli {
                 const allResults = []
 
                 await groupSchemas
-                    .reduce( ( promise, { schema, file } ) => promise.then( async () => {
-                        const namespace = schema[ 'namespace' ] || 'unknown'
-                        const requiredServerParams = schema[ 'requiredServerParams' ] || []
+                    .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
+                        const namespace = main[ 'namespace' ] || 'unknown'
+                        const requiredServerParams = main[ 'requiredServerParams' ] || []
                         const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
                         let tests = []
                         try {
-                            tests = FlowMCP.getAllTests( { schema } )
+                            tests = FlowMcpCli.#getAllTests( { main } )
                         } catch( err ) {
                             allResults.push( {
                                 namespace,
@@ -1324,13 +1331,18 @@ class FlowMcpCli {
                                 } )
                         }
 
+                        const schemasBaseDir = FlowMcpCli.#schemasDir()
+                        const schemaFilePath = join( schemasBaseDir, file )
+                        const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
                         await tests
                             .reduce( ( testPromise, test ) => testPromise.then( async () => {
                                 const { routeName, userParams } = test
 
                                 try {
-                                    const { status, messages, dataAsString } = await FlowMCP
-                                        .fetch( { schema, userParams, serverParams, routeName } )
+                                    const fetchResult = await FlowMCP
+                                        .fetch( { main, handlerMap, userParams, serverParams, routeName } )
+                                    const { status, messages, dataAsString } = fetchResult
 
                                     const preview = dataAsString
                                         ? dataAsString.slice( 0, 200 )
@@ -1420,9 +1432,9 @@ class FlowMcpCli {
 
         const schemaEnvErrors = []
         schemas
-            .forEach( ( { schema } ) => {
-                const namespace = schema[ 'namespace' ] || 'unknown'
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
+            .forEach( ( { main } ) => {
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { valid, error: envValidError, fix: envValidFix } = FlowMcpCli.#validateEnvParams( {
                     envObject,
                     requiredServerParams,
@@ -1452,14 +1464,14 @@ class FlowMcpCli {
         const allResults = []
 
         await schemas
-            .reduce( ( promise, { schema, file } ) => promise.then( async () => {
-                const namespace = schema[ 'namespace' ] || 'unknown'
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
+            .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
                 let tests = []
                 try {
-                    tests = FlowMCP.getAllTests( { schema } )
+                    tests = FlowMcpCli.#getAllTests( { main } )
                 } catch( err ) {
                     allResults.push( {
                         namespace,
@@ -1481,13 +1493,20 @@ class FlowMcpCli {
                         } )
                 }
 
+                const resolvedPath = resolve( schemaPath )
+                const schemaFilePath = ( await stat( resolvedPath ) ).isFile()
+                    ? resolvedPath
+                    : join( resolvedPath, file )
+                const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
                 await tests
                     .reduce( ( testPromise, test ) => testPromise.then( async () => {
                         const { routeName, userParams } = test
 
                         try {
-                            const { status, messages, dataAsString } = await FlowMCP
-                                .fetch( { schema, userParams, serverParams, routeName } )
+                            const fetchResult = await FlowMCP
+                                .fetch( { main, handlerMap, userParams, serverParams, routeName } )
+                            const { status, messages, dataAsString } = fetchResult
 
                             const preview = dataAsString
                                 ? dataAsString.slice( 0, 200 )
@@ -1657,9 +1676,9 @@ class FlowMcpCli {
 
         const missing = []
         resolvedSchemas
-            .forEach( ( { schema } ) => {
-                const namespace = schema[ 'namespace' ] || 'unknown'
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
+            .forEach( ( { main } ) => {
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { valid, error: envError } = FlowMcpCli.#validateEnvParams( {
                     envObject,
                     requiredServerParams,
@@ -1711,10 +1730,31 @@ class FlowMcpCli {
         } )
 
         await resolvedSchemas
-            .reduce( ( promise, { schema } ) => promise.then( async () => {
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
+            .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-                FlowMCP.activateServerTools( { server, schema, serverParams } )
+                const schemasBaseDir = FlowMcpCli.#schemasDir()
+                const schemaFilePath = join( schemasBaseDir, file )
+                const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
+                Object.keys( main[ 'routes' ] || {} )
+                    .forEach( ( routeName ) => {
+                        const { toolName, description, zod, func } = FlowMcpCli.#prepareServerTool( {
+                            main,
+                            handlerMap,
+                            serverParams,
+                            routeName
+                        } )
+
+                        server.tool( toolName, description, zod, async ( args ) => {
+                            const callResult = await func( args )
+                            const content = callResult[ 'dataAsString' ] || JSON.stringify( callResult[ 'data' ] || callResult )
+
+                            return {
+                                'content': [ { 'type': 'text', 'text': content } ]
+                            }
+                        } )
+                    } )
             } ), Promise.resolve() )
 
         const transport = new StdioServerTransport()
@@ -1787,20 +1827,15 @@ class FlowMcpCli {
         const tools = []
 
         resolvedSchemas
-            .forEach( ( { schema } ) => {
-                const namespace = schema[ 'namespace' ] || 'unknown'
-                const routes = schema[ 'routes' ] || {}
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+            .forEach( ( { main } ) => {
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const routes = main[ 'routes' ] || {}
 
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
-                            const { toolName, description } = FlowMCP.prepareServerTool( {
-                                schema,
-                                serverParams,
-                                routeName
-                            } )
+                            const { toolName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                            const description = routes[ routeName ][ 'description' ] || ''
 
                             tools.push( { toolName, namespace, routeName, description } )
                         } catch( err ) {
@@ -1825,7 +1860,7 @@ class FlowMcpCli {
     }
 
 
-    static async callTool( { toolName, jsonArgs, group, cwd } ) {
+    static async callTool( { toolName, jsonArgs, group, cwd, noCache = false, refresh = false } ) {
         const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
         if( !initialized ) {
             const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
@@ -1899,39 +1934,36 @@ class FlowMcpCli {
             }
         }
 
-        let matchedFunc = null
+        let matchedMain = null
+        let matchedHandlersFn = null
+        let matchedFile = null
         let matchedToolName = null
         let matchedRouteName = null
-        let matchedSchema = null
 
         resolvedSchemas
-            .forEach( ( { schema } ) => {
-                if( matchedFunc ) {
+            .forEach( ( { main, handlersFn, file } ) => {
+                if( matchedMain ) {
                     return
                 }
 
-                const routes = schema[ 'routes' ] || {}
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const routes = main[ 'routes' ] || {}
 
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
-                        if( matchedFunc ) {
+                        if( matchedMain ) {
                             return
                         }
 
                         try {
-                            const prepared = FlowMCP.prepareServerTool( {
-                                schema,
-                                serverParams,
-                                routeName
-                            } )
+                            const { toolName: candidateName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
 
-                            if( prepared[ 'toolName' ] === toolName ) {
-                                matchedFunc = prepared[ 'func' ]
-                                matchedToolName = prepared[ 'toolName' ]
+                            if( candidateName === toolName ) {
+                                matchedMain = main
+                                matchedHandlersFn = handlersFn
+                                matchedFile = file
+                                matchedToolName = candidateName
                                 matchedRouteName = routeName
-                                matchedSchema = schema
                             }
                         } catch {
                             // skip
@@ -1939,7 +1971,7 @@ class FlowMcpCli {
                     } )
             } )
 
-        if( !matchedFunc ) {
+        if( !matchedMain ) {
             const result = FlowMcpCli.#error( {
                 'error': `Tool "${toolName}" not found in active tools.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tool names.`
@@ -1948,9 +1980,11 @@ class FlowMcpCli {
             return { result }
         }
 
-        const matchedRouteConfig = matchedSchema[ 'routes' ][ matchedRouteName ]
+        const matchedRouteConfig = matchedMain[ 'routes' ][ matchedRouteName ]
         const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
-        const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters } )
+        const matchedSchemaFilePath = matchedFile ? join( FlowMcpCli.#schemasDir(), matchedFile ) : null
+        const { sharedLists: matchedSharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': matchedMain, 'filePath': matchedSchemaFilePath } )
+        const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters, 'sharedLists': matchedSharedLists } )
 
         const missingParams = Object.entries( expectedParameters )
             .filter( ( [ , paramDef ] ) => {
@@ -1976,12 +2010,121 @@ class FlowMcpCli {
             return { result }
         }
 
+        const preload = matchedRouteConfig[ 'preload' ] || null
+        const isCacheable = preload && preload[ 'enabled' ] === true && !noCache
+        const namespace = matchedMain[ 'namespace' ] || 'unknown'
+
+        if( isCacheable && !refresh ) {
+            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+                namespace,
+                'routeName': matchedRouteName,
+                userParams
+            } )
+
+            const { data: cachedData, meta, isExpired } = await FlowMcpCli.#readCache( { cacheKey } )
+
+            if( cachedData && !isExpired ) {
+                const result = {
+                    'status': true,
+                    'toolName': matchedToolName,
+                    'content': cachedData,
+                    'cache': {
+                        'hit': true,
+                        'fetchedAt': meta[ 'fetchedAt' ],
+                        'expiresAt': meta[ 'expiresAt' ]
+                    }
+                }
+
+                return { result }
+            }
+        }
+
         try {
-            const callResult = await matchedFunc( userParams )
+            const requiredServerParams = matchedMain[ 'requiredServerParams' ] || []
+            const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+            const schemasBaseDir = FlowMcpCli.#schemasDir()
+            const schemaFilePath = matchedFile ? join( schemasBaseDir, matchedFile ) : ''
+            const { handlerMap } = await FlowMcpCli.#resolveHandlers( { 'main': matchedMain, 'handlersFn': matchedHandlersFn, 'filePath': schemaFilePath } )
+
+            const fetchResult = await FlowMCP.fetch( {
+                'main': matchedMain,
+                handlerMap,
+                userParams,
+                serverParams,
+                'routeName': matchedRouteName
+            } )
+
+            if( fetchResult[ 'status' ] === false ) {
+                const fetchMessages = fetchResult[ 'messages' ] || []
+                const errorText = fetchMessages.join( '; ' ) || 'API call failed'
+
+                const hasAuthError = fetchMessages
+                    .some( ( msg ) => {
+                        const isAuth = msg.includes( 'HTTP 401' ) || msg.includes( 'HTTP 403' )
+
+                        return isAuth
+                    } )
+
+                let fix = null
+                if( hasAuthError ) {
+                    const requiredKeys = matchedMain[ 'requiredServerParams' ] || []
+                    const envPath = config[ 'envPath' ] || '~/.flowmcp/.env'
+
+                    if( requiredKeys.length > 0 ) {
+                        fix = `Check API key(s) in ${envPath}: ${requiredKeys.join( ', ' )}`
+                    } else {
+                        fix = `Check authentication. No requiredServerParams defined in schema.`
+                    }
+                }
+
+                const result = {
+                    'status': false,
+                    'toolName': matchedToolName,
+                    'error': errorText,
+                    'messages': fetchMessages
+                }
+
+                if( fix ) {
+                    result[ 'fix' ] = fix
+                }
+
+                return { result }
+            }
+
+            const contentData = fetchResult[ 'data' ] !== undefined && fetchResult[ 'data' ] !== null
+                ? fetchResult[ 'data' ]
+                : fetchResult
+
+            if( isCacheable ) {
+                const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+                    namespace,
+                    'routeName': matchedRouteName,
+                    userParams
+                } )
+                const { meta: cacheMeta } = await FlowMcpCli.#writeCache( {
+                    cacheKey,
+                    'data': contentData,
+                    'ttl': preload[ 'ttl' ]
+                } )
+
+                const result = {
+                    'status': true,
+                    'toolName': matchedToolName,
+                    'content': contentData,
+                    'cache': {
+                        'hit': false,
+                        'stored': true,
+                        'expiresAt': cacheMeta[ 'expiresAt' ]
+                    }
+                }
+
+                return { result }
+            }
+
             const result = {
                 'status': true,
                 'toolName': matchedToolName,
-                'content': callResult[ 'content' ] || callResult
+                'content': contentData
             }
 
             return { result }
@@ -2086,7 +2229,7 @@ class FlowMcpCli {
     }
 
 
-    static async add( { toolName, cwd } ) {
+    static async add( { toolName, cwd, force = false } ) {
         const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
         if( !initialized ) {
             const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
@@ -2124,13 +2267,14 @@ class FlowMcpCli {
 
         const schemasBaseDir = FlowMcpCli.#schemasDir()
         const schemaFilePath = join( schemasBaseDir, schemaRef )
-        const { schema } = await FlowMcpCli.#loadSchema( { filePath: schemaFilePath } )
+        const { main } = await FlowMcpCli.#loadSchema( { filePath: schemaFilePath, 'bustCache': force } )
 
         let extractedParameters = {}
-        if( schema && schema[ 'routes' ] && schema[ 'routes' ][ routeName ] ) {
-            const routeConfig = schema[ 'routes' ][ routeName ]
+        if( main && main[ 'routes' ] && main[ 'routes' ][ routeName ] ) {
+            const routeConfig = main[ 'routes' ][ routeName ]
             const routeParameters = routeConfig[ 'parameters' ] || []
-            const { parameters: transformed } = FlowMcpCli.#extractParameters( { routeParameters } )
+            const { sharedLists: resolvedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': schemaFilePath } )
+            const { parameters: transformed } = FlowMcpCli.#extractParameters( { routeParameters, 'sharedLists': resolvedLists } )
             extractedParameters = transformed
         }
 
@@ -2159,7 +2303,7 @@ class FlowMcpCli {
                     return isDuplicate
                 } )
 
-            if( alreadyExists ) {
+            if( alreadyExists && !force ) {
                 const result = {
                     'status': true,
                     'added': toolName,
@@ -2170,7 +2314,9 @@ class FlowMcpCli {
                 return { result }
             }
 
-            updatedConfig[ 'tools' ].push( toolRef )
+            if( !alreadyExists ) {
+                updatedConfig[ 'tools' ].push( toolRef )
+            }
         }
 
         await writeFile( localConfigPath, JSON.stringify( updatedConfig, null, 4 ), 'utf-8' )
@@ -2185,6 +2331,10 @@ class FlowMcpCli {
             'status': true,
             'added': toolName,
             'parameters': extractedParameters
+        }
+
+        if( force ) {
+            result[ 'message' ] = 'Schema reloaded from source.'
         }
 
         return { result }
@@ -2311,29 +2461,37 @@ class FlowMcpCli {
 
         const tools = []
 
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const sharedListsMap = {}
+        await schemas
+            .reduce( ( promise, { main, file } ) => promise.then( async () => {
+                if( main && main[ 'sharedLists' ] && main[ 'sharedLists' ].length > 0 && file ) {
+                    const filePath = join( schemasBaseDir, file )
+                    const { sharedLists: resolved } = await FlowMcpCli.#resolveSharedListsForSchema( { main, filePath } )
+                    sharedListsMap[ file ] = resolved
+                }
+            } ), Promise.resolve() )
+
         schemas
-            .forEach( ( { schema } ) => {
-                if( !schema || !schema[ 'routes' ] ) {
+            .forEach( ( { main, file } ) => {
+                if( !main || !main[ 'routes' ] ) {
                     return
                 }
 
-                const routes = schema[ 'routes' ]
-                const schemaTags = schema[ 'tags' ] || []
-                const requiredServerParams = schema[ 'requiredServerParams' ] || []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const routes = main[ 'routes' ]
+                const schemaTags = main[ 'tags' ] || []
+                const sharedLists = sharedListsMap[ file ] || {}
 
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
-                            const { toolName: name, description } = FlowMCP.prepareServerTool( {
-                                schema,
-                                serverParams,
-                                routeName
-                            } )
+                            const { toolName: name } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                            const description = routes[ routeName ][ 'description' ] || ''
 
                             const routeConfig = routes[ routeName ]
                             const routeParameters = routeConfig[ 'parameters' ] || []
-                            const { parameters } = FlowMcpCli.#extractParameters( { routeParameters } )
+                            const { parameters } = FlowMcpCli.#extractParameters( { routeParameters, sharedLists } )
 
                             tools.push( { name, description, 'tags': schemaTags, parameters } )
                         } catch {
@@ -2886,6 +3044,237 @@ class FlowMcpCli {
     }
 
 
+    static #cacheDir() {
+        const dir = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'cacheDirName' ] )
+
+        return dir
+    }
+
+
+    static #buildCacheKey( { namespace, routeName, userParams } ) {
+        const hasParams = Object.keys( userParams ).length > 0
+        if( !hasParams ) {
+            const cacheKey = `${namespace}/${routeName}.json`
+
+            return { cacheKey }
+        }
+
+        const sortedJson = JSON.stringify(
+            Object.keys( userParams )
+                .sort()
+                .reduce( ( acc, key ) => {
+                    acc[ key ] = userParams[ key ]
+
+                    return acc
+                }, {} )
+        )
+
+        const paramHash = createHash( 'sha256' )
+            .update( sortedJson )
+            .digest( 'hex' )
+            .slice( 0, 12 )
+        const cacheKey = `${namespace}/${routeName}/${paramHash}.json`
+
+        return { cacheKey }
+    }
+
+
+    static async #readCache( { cacheKey } ) {
+        const cachePath = join( FlowMcpCli.#cacheDir(), cacheKey )
+
+        try {
+            const raw = await readFile( cachePath, 'utf-8' )
+            const cached = JSON.parse( raw )
+            const { meta, data } = cached
+
+            const now = new Date()
+            const expiresAt = new Date( meta[ 'expiresAt' ] )
+            const isExpired = now >= expiresAt
+
+            return { data, meta, isExpired, cachePath }
+        } catch {
+            return { data: null, meta: null, isExpired: true, cachePath }
+        }
+    }
+
+
+    static async #writeCache( { cacheKey, data, ttl } ) {
+        const cachePath = join( FlowMcpCli.#cacheDir(), cacheKey )
+        const cacheDirectory = dirname( cachePath )
+        await mkdir( cacheDirectory, { recursive: true } )
+
+        const now = new Date()
+        const expiresAt = new Date( now.getTime() + ttl * 1000 )
+        const dataString = JSON.stringify( data )
+
+        const cacheEntry = {
+            'meta': {
+                'fetchedAt': now.toISOString(),
+                'expiresAt': expiresAt.toISOString(),
+                ttl,
+                'size': dataString.length
+            },
+            data
+        }
+
+        await writeFile( cachePath, JSON.stringify( cacheEntry, null, 2 ), 'utf-8' )
+
+        return { cachePath, meta: cacheEntry[ 'meta' ] }
+    }
+
+
+    static async cacheClear( { namespace } ) {
+        const cacheBase = FlowMcpCli.#cacheDir()
+
+        try {
+            if( namespace ) {
+                const namespacePath = join( cacheBase, namespace )
+                await FlowMcpCli.#removeDirRecursive( { dirPath: namespacePath } )
+
+                const result = {
+                    'status': true,
+                    'message': `Cache cleared for namespace "${namespace}".`
+                }
+
+                return { result }
+            }
+
+            await FlowMcpCli.#removeDirRecursive( { dirPath: cacheBase } )
+
+            const result = {
+                'status': true,
+                'message': 'All cache cleared.'
+            }
+
+            return { result }
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to clear cache: ${err.message}`,
+                'fix': `Check permissions on ${cacheBase}`
+            } )
+
+            return { result }
+        }
+    }
+
+
+    static async #removeDirRecursive( { dirPath } ) {
+        try {
+            const entries = await readdir( dirPath, { withFileTypes: true } )
+
+            await entries
+                .reduce( ( promise, entry ) => promise.then( async () => {
+                    const entryPath = join( dirPath, entry.name )
+
+                    if( entry.isDirectory() ) {
+                        await FlowMcpCli.#removeDirRecursive( { dirPath: entryPath } )
+                    } else {
+                        await unlink( entryPath )
+                    }
+                } ), Promise.resolve() )
+
+            const { rmdir } = await import( 'node:fs/promises' )
+            await rmdir( dirPath )
+        } catch {
+            // directory doesn't exist, nothing to clear
+        }
+    }
+
+
+    static async cacheStatus() {
+        const cacheBase = FlowMcpCli.#cacheDir()
+        const entries = []
+
+        try {
+            const namespaces = await readdir( cacheBase, { withFileTypes: true } )
+
+            await namespaces
+                .filter( ( entry ) => {
+                    const isDir = entry.isDirectory()
+
+                    return isDir
+                } )
+                .reduce( ( promise, nsEntry ) => promise.then( async () => {
+                    const nsPath = join( cacheBase, nsEntry.name )
+                    const files = await FlowMcpCli.#collectCacheFiles( { dirPath: nsPath, prefix: nsEntry.name } )
+                    files
+                        .forEach( ( file ) => {
+                            entries.push( file )
+                        } )
+                } ), Promise.resolve() )
+        } catch {
+            // cache directory doesn't exist yet
+        }
+
+        const totalSize = entries
+            .reduce( ( sum, entry ) => {
+                const size = sum + ( entry[ 'size' ] || 0 )
+
+                return size
+            }, 0 )
+
+        const result = {
+            'status': true,
+            'cacheDir': cacheBase,
+            'totalEntries': entries.length,
+            'totalSize': totalSize,
+            entries
+        }
+
+        return { result }
+    }
+
+
+    static async #collectCacheFiles( { dirPath, prefix } ) {
+        const collected = []
+
+        try {
+            const items = await readdir( dirPath, { withFileTypes: true } )
+
+            await items
+                .reduce( ( promise, item ) => promise.then( async () => {
+                    const itemPath = join( dirPath, item.name )
+
+                    if( item.isDirectory() ) {
+                        const subFiles = await FlowMcpCli.#collectCacheFiles( {
+                            dirPath: itemPath,
+                            prefix: `${prefix}/${item.name}`
+                        } )
+                        subFiles
+                            .forEach( ( file ) => {
+                                collected.push( file )
+                            } )
+                    } else if( item.name.endsWith( '.json' ) ) {
+                        try {
+                            const raw = await readFile( itemPath, 'utf-8' )
+                            const parsed = JSON.parse( raw )
+                            const { meta } = parsed
+
+                            const now = new Date()
+                            const expiresAt = new Date( meta[ 'expiresAt' ] )
+                            const isExpired = now >= expiresAt
+
+                            collected.push( {
+                                'key': `${prefix}/${item.name}`,
+                                'fetchedAt': meta[ 'fetchedAt' ],
+                                'expiresAt': meta[ 'expiresAt' ],
+                                'ttl': meta[ 'ttl' ],
+                                'size': meta[ 'size' ],
+                                'expired': isExpired
+                            } )
+                        } catch {
+                            // corrupt cache file, skip
+                        }
+                    }
+                } ), Promise.resolve() )
+        } catch {
+            // directory doesn't exist
+        }
+
+        return collected
+    }
+
+
     static async #writeGlobalConfig( { config } ) {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         await writeFile( globalConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
@@ -2907,9 +3296,9 @@ class FlowMcpCli {
     }
 
 
-    static #filterSchemaRoutes( { schema, routeNames } ) {
-        const { namespace, name, description, docs, tags, flowMCP, root, requiredServerParams, headers, handlers } = schema
-        const originalRoutes = schema[ 'routes' ] || {}
+    static #filterMainRoutes( { main, routeNames } ) {
+        const { namespace, name, description, version, docs, tags, root, requiredServerParams, headers, sharedLists, requiredLibraries } = main
+        const originalRoutes = main[ 'routes' ] || {}
         const filteredRoutes = {}
 
         routeNames
@@ -2919,21 +3308,23 @@ class FlowMcpCli {
                 }
             } )
 
-        const filteredSchema = {
+        const filteredMain = {
             namespace,
             name,
             description,
+            version,
             docs,
             tags,
-            flowMCP,
             root,
             requiredServerParams,
             headers,
-            'routes': filteredRoutes,
-            handlers
+            'routes': filteredRoutes
         }
 
-        return { 'schema': filteredSchema }
+        if( sharedLists ) { filteredMain[ 'sharedLists' ] = sharedLists }
+        if( requiredLibraries ) { filteredMain[ 'requiredLibraries' ] = requiredLibraries }
+
+        return { 'main': filteredMain }
     }
 
 
@@ -2951,16 +3342,16 @@ class FlowMcpCli {
                         const { file, namespace } = schemaEntry
                         const schemaRef = `${sourceName}/${file}`
                         const filePath = join( schemasBaseDir, schemaRef )
-                        const { schema } = await FlowMcpCli.#loadSchema( { filePath } )
+                        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
-                        if( schema && schema[ 'routes' ] ) {
-                            Object.entries( schema[ 'routes' ] )
+                        if( main && main[ 'routes' ] ) {
+                            Object.entries( main[ 'routes' ] )
                                 .forEach( ( [ routeName, routeConfig ] ) => {
                                     const routeDescription = routeConfig[ 'description' ] || ''
                                     const toolRef = `${schemaRef}::${routeName}`
                                     const { toolName } = FlowMcpCli.#buildToolName( {
                                         routeName,
-                                        'namespace': schema[ 'namespace' ] || namespace
+                                        'namespace': main[ 'namespace' ] || namespace
                                     } )
 
                                     tools.push( {
@@ -2970,8 +3361,8 @@ class FlowMcpCli {
                                         routeName,
                                         namespace,
                                         'description': routeDescription,
-                                        'tags': schema[ 'tags' ] || [],
-                                        'schemaName': schema[ 'name' ] || ''
+                                        'tags': main[ 'tags' ] || [],
+                                        'schemaName': main[ 'name' ] || ''
                                     } )
                                 } )
                         }
@@ -3002,8 +3393,14 @@ class FlowMcpCli {
 
                         try {
                             const mod = await import( pathToFileURL( filePath ).href )
-                            const exportedArray = Object.values( mod )
+                            let exportedArray = Object.values( mod )
                                 .find( ( v ) => Array.isArray( v ) )
+
+                            if( !exportedArray ) {
+                                const listObj = Object.values( mod )
+                                    .find( ( v ) => v && typeof v === 'object' && Array.isArray( v[ 'entries' ] ) )
+                                exportedArray = listObj ? listObj[ 'entries' ] : null
+                            }
 
                             if( !exportedArray ) { return }
 
@@ -3110,27 +3507,25 @@ class FlowMcpCli {
 
 
     static #createDemoSchema() {
-        const content = `export default {
+        const content = `export const main = {
     namespace: 'demo',
     name: 'Ping Demo',
     description: 'Simple ping schema for testing the CLI',
+    version: '${appConfig[ 'schemaSpec' ]}',
     docs: [],
     tags: [ 'demo' ],
-    flowMCP: '${appConfig[ 'schemaSpec' ]}',
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: { 'Accept': 'application/json' },
     routes: {
         ping: {
-            requestMethod: 'GET',
+            method: 'GET',
             description: 'Simple ping endpoint',
-            route: '/get',
+            path: '/get',
             parameters: [],
-            tests: [ { _description: 'Ping test' } ],
-            modifiers: []
+            tests: [ { _description: 'Ping test' } ]
         }
-    },
-    handlers: {}
+    }
 }
 `
 
@@ -3688,18 +4083,19 @@ class FlowMcpCli {
         await Object.entries( schemaRouteMap )
             .reduce( ( promise, [ schemaRef, routeNames ] ) => promise.then( async () => {
                 const filePath = join( schemasBaseDir, schemaRef )
-                const { schema, error } = await FlowMcpCli.#loadSchema( { filePath } )
+                const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
-                if( schema ) {
+                if( main ) {
                     if( routeNames.length > 0 ) {
-                        const { schema: filteredSchema } = FlowMcpCli.#filterSchemaRoutes( { schema, routeNames } )
-                        schemas.push( { 'schema': filteredSchema, 'file': schemaRef } )
+                        const { main: filteredMain } = FlowMcpCli.#filterMainRoutes( { main, routeNames } )
+                        schemas.push( { 'main': filteredMain, handlersFn, 'file': schemaRef } )
                     } else {
-                        schemas.push( { schema, 'file': schemaRef } )
+                        schemas.push( { main, handlersFn, 'file': schemaRef } )
                     }
                 } else {
                     schemas.push( {
-                        'schema': { 'namespace': 'unknown' },
+                        'main': { 'namespace': 'unknown' },
+                        'handlersFn': null,
                         'file': schemaRef,
                         'loadError': error
                     } )
@@ -4342,9 +4738,28 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     static #detectCoreInfo() {
         try {
             const require = createRequire( import.meta.url )
-            const pkg = require( 'flowmcp/package.json' )
-            const { version } = pkg
-            const commit = '91ccaf8dc7b61b5df3cfa780699cbf4973cd3cbd'
+            const corePath = require.resolve( 'flowmcp/v2' )
+            let dir = dirname( corePath )
+
+            let version = 'unknown'
+            [ 1, 2, 3, 4, 5 ]
+                .forEach( () => {
+                    if( version !== 'unknown' ) { return }
+
+                    const candidate = join( dir, 'package.json' )
+                    if( existsSync( candidate ) ) {
+                        try {
+                            const pkg = JSON.parse( readFileSync( candidate, 'utf-8' ) )
+                            if( pkg[ 'name' ] ) {
+                                version = pkg[ 'version' ] || 'unknown'
+                            }
+                        } catch { /* skip malformed package.json */ }
+                    }
+
+                    dir = dirname( dir )
+                } )
+
+            const commit = '8a9e8f1'
             const schemaSpec = appConfig[ 'schemaSpec' ]
 
             return { version, commit, schemaSpec }
@@ -4352,21 +4767,166 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             return {
                 'version': 'unknown',
                 'commit': 'unknown',
-                'schemaSpec': 'unknown'
+                'schemaSpec': appConfig[ 'schemaSpec' ] || 'unknown'
             }
         }
     }
 
 
-    static async #loadSchema( { filePath } ) {
+    static #getAllTests( { main } ) {
+        const routes = main[ 'routes' ] || {}
+        const tests = []
+
+        Object.entries( routes )
+            .forEach( ( [ routeName, routeConfig ] ) => {
+                const routeTests = routeConfig[ 'tests' ] || []
+
+                routeTests
+                    .forEach( ( testCase ) => {
+                        const { _description, ...userParams } = testCase
+
+                        tests.push( {
+                            routeName,
+                            'description': _description || '',
+                            userParams
+                        } )
+                    } )
+            } )
+
+        return tests
+    }
+
+
+    static async #resolveHandlers( { main, handlersFn, filePath } ) {
+        let handlerMap = {}
+
+        if( !handlersFn ) {
+            return { handlerMap }
+        }
+
+        try {
+            const sharedListRefs = main[ 'sharedLists' ] || []
+            let sharedLists = {}
+            let libraries = {}
+
+            if( sharedListRefs.length > 0 ) {
+                const { listsDir } = FlowMcpCli.#findListsDir( { filePath } )
+                if( listsDir ) {
+                    const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
+                    sharedLists = resolved[ 'sharedLists' ] || {}
+                }
+            }
+
+            const requiredLibraries = main[ 'requiredLibraries' ] || []
+            if( requiredLibraries.length > 0 ) {
+                const loaded = await FlowMCP.loadLibraries( { requiredLibraries } )
+                libraries = loaded[ 'libraries' ] || {}
+            }
+
+            const tempHandlers = handlersFn( { sharedLists, libraries } )
+            const allRouteNames = Object.keys( tempHandlers || {} )
+            const created = FlowMCP.createHandlers( { handlersFn, sharedLists, libraries, 'routeNames': allRouteNames } )
+            handlerMap = created[ 'handlerMap' ] || {}
+        } catch( resolveErr ) {
+            if( process.env[ 'FLOWMCP_DEBUG' ] ) {
+                console.error( `[resolveHandlers] ${resolveErr.message}` )
+            }
+            handlerMap = {}
+        }
+
+        return { handlerMap }
+    }
+
+
+    static #findListsDir( { filePath } ) {
+        const resolved = resolve( filePath )
+        const dir = dirname( resolved )
+        const siblingLists = join( dir, '_lists' )
+
+        if( existsSync( siblingLists ) ) {
+            return { 'listsDir': siblingLists }
+        }
+
+        const parentDir = dirname( dir )
+        const parentLists = join( parentDir, '_lists' )
+
+        if( existsSync( parentLists ) ) {
+            return { 'listsDir': parentLists }
+        }
+
+        return { 'listsDir': null }
+    }
+
+
+    static async #resolveSharedListsForSchema( { main, filePath } ) {
+        const sharedListRefs = main?.[ 'sharedLists' ] || []
+        let sharedLists = {}
+
+        if( sharedListRefs.length > 0 && filePath ) {
+            try {
+                const { listsDir } = FlowMcpCli.#findListsDir( { filePath } )
+                if( listsDir ) {
+                    const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
+                    sharedLists = resolved[ 'sharedLists' ] || {}
+                }
+            } catch {
+                sharedLists = {}
+            }
+        }
+
+        return { sharedLists }
+    }
+
+
+    static #prepareServerTool( { main, handlerMap, serverParams, routeName } ) {
+        const namespace = main[ 'namespace' ] || 'unknown'
+        const routes = main[ 'routes' ] || {}
+        const routeConfig = routes[ routeName ]
+
+        if( !routeConfig ) {
+            throw new Error( `Route "${routeName}" not found in schema "${namespace}"` )
+        }
+
+        const { toolName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+        const { description } = routeConfig
+        const zod = ZodBuilder.getZodSchema( { 'route': routeConfig } )
+
+        const func = async ( userParams ) => {
+            const fetchResult = await FlowMCP.fetch( {
+                main,
+                handlerMap,
+                userParams,
+                serverParams,
+                routeName
+            } )
+
+            const { status, messages, data, dataAsString } = fetchResult
+
+            return { status, messages, data, dataAsString }
+        }
+
+        return { toolName, description, zod, func }
+    }
+
+
+    static async #loadSchema( { filePath, bustCache = false } ) {
         try {
             const resolvedPath = resolve( filePath )
-            const module = await import( resolvedPath )
-            const schema = module.default || module.schema || module
+            const fileUrl = pathToFileURL( resolvedPath ).href
+            const importPath = bustCache
+                ? `${fileUrl}?t=${Date.now()}`
+                : fileUrl
+            const mod = await import( importPath )
+            const main = mod[ 'main' ] || null
+            const handlersFn = mod[ 'handlers' ] || null
 
-            return { schema, 'error': null }
+            if( !main ) {
+                return { 'main': null, 'handlersFn': null, 'error': `No main export in: ${filePath}` }
+            }
+
+            return { main, handlersFn, 'error': null }
         } catch( err ) {
-            return { 'schema': null, 'error': `Failed to load schema: ${filePath} - ${err.message}` }
+            return { 'main': null, 'handlersFn': null, 'error': `Failed to load schema: ${filePath} - ${err.message}` }
         }
     }
 
@@ -4382,13 +4942,13 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         }
 
         if( pathStat.isFile() ) {
-            const { schema, error } = await FlowMcpCli.#loadSchema( { filePath: resolvedPath } )
-            if( !schema ) {
+            const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath: resolvedPath } )
+            if( !main ) {
                 return { 'schemas': null, error }
             }
 
             const file = basename( resolvedPath )
-            const schemas = [ { schema, file } ]
+            const schemas = [ { main, handlersFn, file } ]
 
             return { schemas, 'error': null }
         }
@@ -4413,13 +4973,14 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             await schemaFiles
                 .reduce( ( promise, file ) => promise.then( async () => {
                     const filePath = join( resolvedPath, file )
-                    const { schema, error } = await FlowMcpCli.#loadSchema( { filePath } )
+                    const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
-                    if( schema ) {
-                        schemas.push( { schema, file } )
+                    if( main ) {
+                        schemas.push( { main, handlersFn, file } )
                     } else {
                         schemas.push( {
-                            'schema': { 'namespace': file },
+                            'main': { 'namespace': file },
+                            'handlersFn': null,
                             file,
                             'loadError': error
                         } )
@@ -4622,13 +5183,14 @@ Note: Run "${cmd} init" first. This is the only interactive command.
                     .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
                         const { file } = schemaInfo
                         const filePath = join( schemasBaseDir, source[ 'name' ], file )
-                        const { schema, error } = await FlowMcpCli.#loadSchema( { filePath } )
+                        const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
-                        if( schema ) {
-                            allSchemas.push( { schema, file, 'source': source[ 'name' ] } )
+                        if( main ) {
+                            allSchemas.push( { main, handlersFn, file, 'source': source[ 'name' ] } )
                         } else {
                             allSchemas.push( {
-                                'schema': null,
+                                'main': null,
+                                'handlersFn': null,
                                 file,
                                 'source': source[ 'name' ],
                                 'loadError': error
@@ -4661,7 +5223,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    static #extractParameters( { routeParameters } ) {
+    static #extractParameters( { routeParameters, sharedLists } ) {
         const parameters = {}
 
         const userParameters = routeParameters
@@ -4689,13 +5251,19 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
                 if( primitive.startsWith( 'enum(' ) ) {
                     entry[ 'type' ] = 'enum'
-                    const inner = primitive.slice( 5, -1 )
+                    let enumContent = primitive
+                    if( enumContent.includes( '{{' ) && sharedLists ) {
+                        const { result } = FlowMCP.interpolateEnum( { 'template': enumContent, sharedLists } )
+                        enumContent = result
+                    }
+                    const inner = enumContent.slice( 5, -1 )
                     entry[ 'values' ] = inner.split( ',' )
                         .map( ( v ) => {
                             const trimmed = v.trim()
 
                             return trimmed
                         } )
+                        .filter( ( v ) => v.length > 0 )
                 } else if( primitive.startsWith( 'number(' ) ) {
                     entry[ 'type' ] = 'number'
                 } else if( primitive.startsWith( 'array(' ) ) {
