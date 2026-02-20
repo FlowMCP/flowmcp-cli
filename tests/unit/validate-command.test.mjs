@@ -13,10 +13,10 @@ const SCHEMAS_DIR = join( TEST_DIR, 'schemas' )
 beforeAll( async () => {
     await mkdir( SCHEMAS_DIR, { recursive: true } )
 
-    const validSchemaContent = `export default ${JSON.stringify( validSchema, null, 4 )}\n`
+    const validSchemaContent = `export const main = ${JSON.stringify( validSchema, null, 4 )}\n`
     await writeFile( join( SCHEMAS_DIR, 'valid.mjs' ), validSchemaContent, 'utf-8' )
 
-    const invalidSchemaContent = `export default ${JSON.stringify( invalidSchema, null, 4 )}\n`
+    const invalidSchemaContent = `export const main = ${JSON.stringify( invalidSchema, null, 4 )}\n`
     await writeFile( join( SCHEMAS_DIR, 'invalid.mjs' ), invalidSchemaContent, 'utf-8' )
 } )
 

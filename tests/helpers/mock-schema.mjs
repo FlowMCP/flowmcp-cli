@@ -2,9 +2,9 @@ const validSchema = {
     'namespace': 'testApi',
     'name': 'Test API',
     'description': 'Test API for validation',
+    'version': '2.0.0',
     'docs': [ 'https://test.example.com/docs' ],
     'tags': [ 'test' ],
-    'flowMCP': '1.2.2',
     'root': 'https://test.example.com',
     'requiredServerParams': [],
     'headers': {
@@ -12,9 +12,9 @@ const validSchema = {
     },
     'routes': {
         'getData': {
-            'requestMethod': 'GET',
+            'method': 'GET',
             'description': 'Get test data',
-            'route': '/data',
+            'path': '/data',
             'parameters': [
                 {
                     'position': {
@@ -30,20 +30,18 @@ const validSchema = {
             ],
             'tests': [
                 { '_description': 'Get 10 items', 'limit': 10 }
-            ],
-            'modifiers': []
+            ]
         }
-    },
-    'handlers': {}
+    }
 }
 
 const validSchemaWithServerParams = {
     'namespace': 'authApi',
     'name': 'Auth API',
     'description': 'API requiring server params',
+    'version': '2.0.0',
     'docs': [ 'https://auth.example.com/docs' ],
     'tags': [ 'auth' ],
-    'flowMCP': '1.2.2',
     'root': 'https://auth.example.com',
     'requiredServerParams': [ 'API_KEY', 'API_SECRET' ],
     'headers': {
@@ -52,9 +50,9 @@ const validSchemaWithServerParams = {
     },
     'routes': {
         'getUser': {
-            'requestMethod': 'GET',
+            'method': 'GET',
             'description': 'Get user data',
-            'route': '/user/:id',
+            'path': '/user/:id',
             'parameters': [
                 {
                     'position': {
@@ -70,11 +68,9 @@ const validSchemaWithServerParams = {
             ],
             'tests': [
                 { '_description': 'Get user by ID', 'id': 'user123' }
-            ],
-            'modifiers': []
+            ]
         }
-    },
-    'handlers': {}
+    }
 }
 
 const invalidSchema = {

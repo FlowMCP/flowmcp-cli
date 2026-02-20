@@ -14,6 +14,10 @@ const args = parseArgs( {
         'branch': { type: 'string' },
         'group': { type: 'string' },
         'tools': { type: 'string' },
+        'force': { type: 'boolean' },
+        'no-cache': { type: 'boolean' },
+        'refresh': { type: 'boolean' },
+        'file': { type: 'string' },
         'help': { type: 'boolean', short: 'h' }
     }
 } )
@@ -44,7 +48,17 @@ const runCommand = async () => {
 
     if( command === 'add' ) {
         const toolName = positionals[ 1 ]
-        const { result } = await FlowMcpCli.add( { toolName, cwd } )
+        const force = values[ 'force' ] || false
+        const { result } = await FlowMcpCli.add( { toolName, cwd, force } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'reload' ) {
+        const toolName = positionals[ 1 ]
+        await FlowMcpCli.remove( { toolName, cwd } )
+        const { result } = await FlowMcpCli.add( { toolName, cwd, 'force': true } )
         output( { result } )
 
         return true
@@ -79,7 +93,37 @@ const runCommand = async () => {
         const toolName = subCommand
         const jsonArgs = positionals[ 2 ] || null
         const group = values[ 'group' ]
-        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd } )
+        const noCache = values[ 'no-cache' ] || false
+        const refresh = values[ 'refresh' ] || false
+        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd, noCache, refresh } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'cache' ) {
+        const subCommand = positionals[ 1 ]
+
+        if( subCommand === 'status' ) {
+            const { result } = await FlowMcpCli.cacheStatus()
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'clear' ) {
+            const namespace = positionals[ 2 ] || undefined
+            const { result } = await FlowMcpCli.cacheClear( { namespace } )
+            output( { result } )
+
+            return true
+        }
+
+        const result = {
+            'status': false,
+            'error': `Unknown cache command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} cache status, ${appConfig[ 'cliCommand' ]} cache clear [namespace]`
+        }
         output( { result } )
 
         return true
@@ -165,6 +209,59 @@ const runCommand = async () => {
 
         if( subCommand === 'set-default' ) {
             const { result } = await FlowMcpCli.groupSetDefault( { 'name': groupName, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        await FlowMcpCli.help( { cwd } )
+
+        return true
+    }
+
+    if( command === 'prompt' ) {
+        const subCommand = positionals[ 1 ]
+
+        if( subCommand === 'list' ) {
+            const { result } = await FlowMcpCli.promptList( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'search' ) {
+            const query = positionals[ 2 ]
+            const { result } = await FlowMcpCli.promptSearch( { query, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'show' ) {
+            const ref = positionals[ 2 ] || ''
+            const slashIndex = ref.indexOf( '/' )
+            const group = slashIndex > 0 ? ref.slice( 0, slashIndex ) : undefined
+            const name = slashIndex > 0 ? ref.slice( slashIndex + 1 ) : undefined
+            const { result } = await FlowMcpCli.promptShow( { group, name, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'add' ) {
+            const group = positionals[ 2 ]
+            const name = positionals[ 3 ]
+            const file = values[ 'file' ]
+            const { result } = await FlowMcpCli.promptAdd( { group, name, file, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'remove' ) {
+            const group = positionals[ 2 ]
+            const name = positionals[ 3 ]
+            const { result } = await FlowMcpCli.promptRemove( { group, name, cwd } )
             output( { result } )
 
             return true

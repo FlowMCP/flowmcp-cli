@@ -18,10 +18,11 @@ const appConfig = {
     'globalConfigDirName': '.flowmcp',
     'localConfigDirName': '.flowmcp',
     'defaultEnvFileName': '.env',
-    'defaultRegistryUrl': 'https://raw.githubusercontent.com/FlowMCP/flowmcp-schemas/main/schemas/v1.2.0/flowmcp-registry-starter.json',
+    'defaultRegistryUrl': 'https://raw.githubusercontent.com/FlowMCP/flowmcp-schemas/main/schemas/v2.0.0/flowmcp-registry-starter.json',
     'registryFileName': 'flowmcp-registry.json',
     'poweredBy': 'FlowMCP',
-    'schemaSpec': '1.2.0'
+    'schemaSpec': '2.0.0',
+    'cacheDirName': 'cache'
 }
 
 
