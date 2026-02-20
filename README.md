@@ -73,7 +73,7 @@ npx flowmcp init
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp validate [path] [--group name]` | Validate schema structure against spec 1.2.0 |
+| `flowmcp validate [path] [--group name]` | Validate schema structure against spec 2.0.0 |
 | `flowmcp test project [--route name] [--group name]` | Test default group with live API calls |
 | `flowmcp test user [--route name]` | Test all user schemas with live API calls |
 | `flowmcp test single <path> [--route name]` | Test a single schema file |
@@ -118,6 +118,10 @@ flowmcp update
 # 6. Run as MCP server
 flowmcp run
 ```
+
+## Documentation
+
+Full documentation at [docs.flowmcp.org](https://docs.flowmcp.org). See the [CLI Reference](https://docs.flowmcp.org/guides/cli-reference) for detailed command documentation.
 
 ## License
 
