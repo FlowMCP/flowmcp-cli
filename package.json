@@ -19,7 +19,7 @@
         "@modelcontextprotocol/sdk": "^1.0.0",
         "chalk": "^5.6.2",
         "figlet": "^1.10.0",
-        "flowmcp": "github:flowmcp/flowmcp-core#42aba6983f5958066fd5abf050eb67419dcf4dda",
+        "flowmcp": "github:flowmcp/flowmcp-core#8db1c8fa2f68130764542900ce3cccce25204086",
         "inquirer": "^12.3.0"
     },
     "devDependencies": {
