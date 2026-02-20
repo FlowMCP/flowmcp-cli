@@ -66,6 +66,37 @@ const VALID_LOCAL_CONFIG_WITH_GROUPS = {
     }
 }
 
+const VALID_LOCAL_CONFIG_WITH_PROMPTS = {
+    'root': '~/.flowmcp',
+    'defaultGroup': 'trading-analysis',
+    'groups': {
+        'trading-analysis': {
+            'description': 'Technical analysis and charting tools',
+            'tools': [
+                'yahoofinance/market.mjs::searchSymbol',
+                'yahoofinance/market.mjs::getOhlcv',
+                'indicators/oscillators.mjs::getRelativeStrengthIndex'
+            ],
+            'prompts': {
+                'token-analysis': {
+                    'title': 'Standard Token Analysis',
+                    'description': 'Full technical analysis report for a token',
+                    'file': '.flowmcp/prompts/token-analysis.md'
+                },
+                'quick-check': {
+                    'title': 'Quick Price Check',
+                    'description': 'Current price and basic indicators',
+                    'file': '.flowmcp/prompts/quick-check.md'
+                }
+            }
+        },
+        'empty-group': {
+            'description': 'Group with no tools',
+            'tools': []
+        }
+    }
+}
+
 const VALID_GITHUB_URL = 'https://github.com/flowmcp/flowMCP-schemas'
 
 const VALID_REGISTRY = {
@@ -100,6 +131,7 @@ export {
     VALID_GLOBAL_CONFIG_WITH_SOURCES,
     VALID_LOCAL_CONFIG,
     VALID_LOCAL_CONFIG_WITH_GROUPS,
+    VALID_LOCAL_CONFIG_WITH_PROMPTS,
     VALID_GITHUB_URL,
     VALID_REGISTRY
 }
