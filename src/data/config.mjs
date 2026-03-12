@@ -21,7 +21,7 @@ const appConfig = {
     'defaultRegistryUrl': 'https://raw.githubusercontent.com/FlowMCP/flowmcp-schemas/main/schemas/v2.0.0/flowmcp-registry-starter.json',
     'registryFileName': 'flowmcp-registry.json',
     'poweredBy': 'FlowMCP',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '3.0.0',
     'cacheDirName': 'cache'
 }
 

@@ -41,7 +41,7 @@ const runCommand = async () => {
     }
 
     if( command === 'search' ) {
-        const query = positionals[ 1 ]
+        const query = positionals.slice( 1 ).join( ' ' ) || undefined
         const { result } = await FlowMcpCli.search( { query } )
         output( { result } )
 
@@ -162,6 +162,22 @@ const runCommand = async () => {
     if( command === 'import-registry' ) {
         const registryUrl = positionals[ 1 ]
         const { result } = await FlowMcpCli.importRegistry( { registryUrl } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'import-agent' ) {
+        const agentName = positionals[ 1 ]
+        const { result } = await FlowMcpCli.importAgent( { agentName, cwd } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'validate-catalog' ) {
+        const catalogDir = positionals[ 1 ]
+        const { result } = await FlowMcpCli.validateCatalog( { catalogDir, cwd } )
         output( { result } )
 
         return true

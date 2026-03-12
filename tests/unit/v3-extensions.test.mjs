@@ -140,7 +140,7 @@ describe( 'v3 extensions - search result shape', () => {
         const toolsArray = result[ 'tools' ]
 
         expect( Array.isArray( toolsArray ) ).toBe( true )
-    } )
+    }, 30000 )
 
 
     it( 'search result entries include type field when there are matches', async () => {

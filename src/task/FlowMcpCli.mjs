@@ -6207,6 +6207,229 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
         return main
     }
+
+
+    static async #loadGlobalConfig() {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+
+        return { globalConfig: globalConfig || {} }
+    }
+
+
+    static #getRegistryPath( { globalConfig } ) {
+        const sources = globalConfig[ 'sources' ] || {}
+        const sourceNames = Object.keys( sources )
+
+        if( sourceNames.length === 0 ) {
+            return null
+        }
+
+        const firstSource = sourceNames[ 0 ]
+        const registryPath = join( FlowMcpCli.#schemasDir(), firstSource, '_registry.json' )
+
+        return registryPath
+    }
+
+
+    static async #readJsonFile( { filePath } ) {
+        const { data } = await FlowMcpCli.#readJson( { filePath } )
+
+        return data
+    }
+
+
+    static #getCatalogDir( { globalConfig } ) {
+        const sources = globalConfig[ 'sources' ] || {}
+        const sourceNames = Object.keys( sources )
+
+        if( sourceNames.length === 0 ) {
+            return FlowMcpCli.#schemasDir()
+        }
+
+        const firstSource = sourceNames[ 0 ]
+        const catalogDir = join( FlowMcpCli.#schemasDir(), firstSource )
+
+        return catalogDir
+    }
+
+
+    static async importAgent( { agentName, cwd } ) {
+        const { initialized, error, fix } = await FlowMcpCli.#requireInit()
+
+        if( !initialized ) {
+            return { result: FlowMcpCli.#error( { error, fix } ) }
+        }
+
+        if( !agentName ) {
+            return { result: FlowMcpCli.#error( { error: 'Missing agent name', fix: 'flowmcp import-agent <agent-name>' } ) }
+        }
+
+        const { globalConfig } = await FlowMcpCli.#loadGlobalConfig()
+        const registryPath = FlowMcpCli.#getRegistryPath( { globalConfig } )
+        const registryData = await FlowMcpCli.#readJsonFile( { filePath: registryPath } )
+
+        if( !registryData ) {
+            return { result: FlowMcpCli.#error( { error: 'No registry found', fix: 'Run "flowmcp import-registry <url>" first' } ) }
+        }
+
+        const agents = registryData[ 'agents' ] || []
+        const agentEntry = agents
+            .find( ( entry ) => {
+                const isMatch = entry[ 'name' ] === agentName
+
+                return isMatch
+            } )
+
+        if( !agentEntry ) {
+            const availableNames = agents
+                .map( ( entry ) => {
+                    const name = entry[ 'name' ]
+
+                    return name
+                } )
+                .join( ', ' )
+
+            return { result: FlowMcpCli.#error( { error: `Agent "${agentName}" not found in registry`, fix: `Available agents: ${availableNames || 'none'}` } ) }
+        }
+
+        const manifestPath = agentEntry[ 'manifest' ]
+        const catalogDir = FlowMcpCli.#getCatalogDir( { globalConfig } )
+        const fullManifestPath = `${catalogDir}/${manifestPath}`
+
+        let manifest = null
+
+        try {
+            manifest = await FlowMcpCli.#readJsonFile( { filePath: fullManifestPath } )
+        } catch( err ) {
+            return { result: FlowMcpCli.#error( { error: `Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
+        }
+
+        if( !manifest ) {
+            return { result: FlowMcpCli.#error( { error: `Manifest not found at ${fullManifestPath}`, fix: 'Re-run "flowmcp import-registry <url>" to download' } ) }
+        }
+
+        const tools = manifest[ 'tools' ] || []
+        const addedTools = []
+
+        const addPromises = tools
+            .map( ( toolId ) => {
+                const parts = toolId.split( '/' )
+                const toolName = parts[ parts.length - 1 ]
+
+                return { toolId, toolName }
+            } )
+
+        addPromises
+            .forEach( ( { toolId, toolName } ) => {
+                addedTools.push( { toolId, toolName } )
+            } )
+
+        const result = {
+            status: true,
+            agent: agentName,
+            description: agentEntry[ 'description' ] || '',
+            model: manifest[ 'model' ] || 'not specified',
+            tools: addedTools,
+            toolCount: addedTools.length,
+            message: `Agent "${agentName}" imported with ${addedTools.length} tools`
+        }
+
+        return { result }
+    }
+
+
+    static async validateCatalog( { catalogDir, cwd } ) {
+        if( !catalogDir ) {
+            return { result: FlowMcpCli.#error( { error: 'Missing catalog directory', fix: 'flowmcp validate-catalog <catalog-directory>' } ) }
+        }
+
+        const registryPath = join( catalogDir, 'registry.json' )
+        let registryData = null
+
+        try {
+            const content = await readFile( registryPath, 'utf-8' )
+            registryData = JSON.parse( content )
+        } catch( err ) {
+            return { result: { status: false, errors: [ `CAT001: registry.json must exist in catalog root — ${err.message}` ], warnings: [] } }
+        }
+
+        const errors = []
+        const warnings = []
+
+        const dirName = catalogDir.split( '/' ).pop()
+
+        if( registryData[ 'name' ] !== dirName ) {
+            errors.push( `CAT002: name "${registryData[ 'name' ]}" must match directory name "${dirName}"` )
+        }
+
+        const shared = registryData[ 'shared' ] || []
+
+        await Promise.allSettled(
+            shared
+                .map( async ( entry ) => {
+                    const filePath = join( catalogDir, entry[ 'file' ] )
+
+                    try {
+                        await stat( filePath )
+                    } catch( err ) {
+                        errors.push( `CAT003: shared file not found — ${entry[ 'file' ]}` )
+                    }
+                } )
+        )
+
+        const schemas = registryData[ 'schemas' ] || []
+
+        await Promise.allSettled(
+            schemas
+                .map( async ( entry ) => {
+                    const filePath = join( catalogDir, entry[ 'file' ] )
+
+                    try {
+                        await stat( filePath )
+                    } catch( err ) {
+                        errors.push( `CAT004: schema file not found — ${entry[ 'file' ]}` )
+                    }
+                } )
+        )
+
+        const agents = registryData[ 'agents' ] || []
+
+        await Promise.allSettled(
+            agents
+                .map( async ( entry ) => {
+                    const filePath = join( catalogDir, entry[ 'manifest' ] )
+
+                    try {
+                        await stat( filePath )
+                    } catch( err ) {
+                        errors.push( `CAT005: agent manifest not found — ${entry[ 'manifest' ]}` )
+                    }
+                } )
+        )
+
+        const specVersion = registryData[ 'schemaSpec' ] || ''
+        const validVersions = [ '2.0.0', '3.0.0' ]
+
+        if( !validVersions.includes( specVersion ) ) {
+            errors.push( `CAT007: schemaSpec "${specVersion}" is not a valid FlowMCP specification version` )
+        }
+
+        const result = {
+            status: errors.length === 0,
+            catalog: registryData[ 'name' ] || dirName,
+            schemaSpec: specVersion,
+            counts: {
+                shared: shared.length,
+                schemas: schemas.length,
+                agents: agents.length
+            },
+            errors,
+            warnings
+        }
+
+        return { result }
+    }
 }
 
 

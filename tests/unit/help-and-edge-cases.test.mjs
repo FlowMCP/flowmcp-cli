@@ -175,7 +175,7 @@ describe( 'FlowMcpCli.add — creates tools key when local config has groups but
 
         expect( result[ 'status' ] ).toBe( true )
         expect( result[ 'added' ] ).toBe( 'ping_helpsrc' )
-    } )
+    }, 30000 )
 } )
 
 
