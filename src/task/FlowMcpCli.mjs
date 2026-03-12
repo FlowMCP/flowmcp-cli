@@ -1377,9 +1377,13 @@ class FlowMcpCli {
             const results = groupSchemas
                 .map( ( { main, file } ) => {
                     try {
-                        const { status, messages } = FlowMCP.validateMain( { main } )
+                        const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
+                        const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
                         const namespace = main[ 'namespace' ] || 'unknown'
-                        const entry = { file, namespace, status, messages }
+                        const toolCount = Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} ).length
+                        const resourceCount = Object.keys( main[ 'resources' ] || {} ).length
+                        const skillCount = ( main[ 'skills' ] || [] ).length
+                        const entry = { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
 
                         return entry
                     } catch( err ) {
@@ -1432,9 +1436,13 @@ class FlowMcpCli {
         const results = schemas
             .map( ( { main, file } ) => {
                 try {
-                    const { status, messages } = FlowMCP.validateMain( { main } )
+                    const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
+                    const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
                     const namespace = main[ 'namespace' ] || 'unknown'
-                    const entry = { file, namespace, status, messages }
+                    const toolCount = Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} ).length
+                    const resourceCount = Object.keys( main[ 'resources' ] || {} ).length
+                    const skillCount = ( main[ 'skills' ] || [] ).length
+                    const entry = { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
 
                     return entry
                 } catch( err ) {
@@ -1468,6 +1476,169 @@ class FlowMcpCli {
         }
 
         return { result }
+    }
+
+
+    static async migrate( { schemaPath, cwd, all = false, dryRun = false } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const { status: validStatus, messages: validMessages } = FlowMcpCli.validationMigrate( { schemaPath, all } )
+        if( !validStatus ) {
+            const result = { 'status': false, 'messages': validMessages }
+
+            return { result }
+        }
+
+        const routesKeyPattern = /(['"])routes\1(\s*:)/g
+        const versionPattern = /(['"]version['"])\s*:\s*['"]2\.\d+\.\d+['"]/g
+
+        let filePaths = []
+
+        if( all ) {
+            const dirPath = schemaPath || cwd
+            const resolvedDir = resolve( dirPath )
+
+            let dirStat
+            try {
+                dirStat = await stat( resolvedDir )
+            } catch {
+                const result = FlowMcpCli.#error( { 'error': `Path not found: ${dirPath}` } )
+
+                return { result }
+            }
+
+            if( !dirStat.isDirectory() ) {
+                const result = FlowMcpCli.#error( { 'error': `Path is not a directory: ${dirPath}. Use --all with a directory.` } )
+
+                return { result }
+            }
+
+            const { files } = await FlowMcpCli.#findSchemaFiles( { dirPath: resolvedDir } )
+            filePaths = files
+        } else {
+            const resolvedPath = resolve( schemaPath )
+
+            let pathStat
+            try {
+                pathStat = await stat( resolvedPath )
+            } catch {
+                const result = FlowMcpCli.#error( { 'error': `Path not found: ${schemaPath}` } )
+
+                return { result }
+            }
+
+            if( pathStat.isDirectory() ) {
+                const { files } = await FlowMcpCli.#findSchemaFiles( { dirPath: resolvedPath } )
+                filePaths = files
+            } else {
+                filePaths = [ resolvedPath ]
+            }
+        }
+
+        if( filePaths.length === 0 ) {
+            const result = {
+                'status': true,
+                'total': 0,
+                'migrated': 0,
+                'skipped': 0,
+                'failed': 0,
+                dryRun,
+                'results': []
+            }
+
+            return { result }
+        }
+
+        const results = []
+        let migrated = 0
+        let skipped = 0
+        let failed = 0
+
+        const processFile = async ( filePath ) => {
+            try {
+                const content = await readFile( filePath, 'utf-8' )
+                const hasRoutes = routesKeyPattern.test( content )
+                routesKeyPattern.lastIndex = 0
+                const hasV2Version = versionPattern.test( content )
+                versionPattern.lastIndex = 0
+
+                if( !hasRoutes && !hasV2Version ) {
+                    skipped += 1
+                    results.push( { 'file': filePath, 'action': 'skipped', 'reason': 'No v2 routes or version found' } )
+
+                    return
+                }
+
+                if( dryRun ) {
+                    migrated += 1
+                    const changes = []
+                    if( hasRoutes ) { changes.push( 'routes -> tools' ) }
+                    if( hasV2Version ) { changes.push( 'version 2.x.x -> 3.0.0' ) }
+                    results.push( { 'file': filePath, 'action': 'migrated', 'reason': `[dry-run] Would apply: ${changes.join( ', ' )}` } )
+
+                    return
+                }
+
+                let updatedContent = content
+                updatedContent = updatedContent.replace( routesKeyPattern, '$1tools$1$2' )
+                routesKeyPattern.lastIndex = 0
+                updatedContent = updatedContent.replace( versionPattern, `$1: '3.0.0'` )
+                versionPattern.lastIndex = 0
+
+                await writeFile( filePath, updatedContent, 'utf-8' )
+                migrated += 1
+                results.push( { 'file': filePath, 'action': 'migrated', 'reason': 'Successfully migrated to v3' } )
+            } catch( err ) {
+                failed += 1
+                results.push( { 'file': filePath, 'action': 'failed', 'reason': err.message } )
+            }
+        }
+
+        await Promise.all(
+            filePaths
+                .map( ( filePath ) => {
+                    const promise = processFile( filePath )
+
+                    return promise
+                } )
+        )
+
+        const total = migrated + skipped + failed
+        const result = {
+            'status': failed === 0,
+            total,
+            migrated,
+            skipped,
+            failed,
+            dryRun,
+            results
+        }
+
+        return { result }
+    }
+
+
+    static validationMigrate( { schemaPath, all } ) {
+        const struct = { 'status': false, 'messages': [] }
+
+        if( !all && ( schemaPath === undefined || schemaPath === null ) ) {
+            struct[ 'messages' ].push( 'schemaPath: Missing value. Provide a path or use --all.' )
+        } else if( !all && typeof schemaPath !== 'string' ) {
+            struct[ 'messages' ].push( 'schemaPath: Must be a string.' )
+        }
+
+        if( struct[ 'messages' ].length > 0 ) {
+            return struct
+        }
+
+        struct[ 'status' ] = true
+
+        return struct
     }
 
 
@@ -2579,6 +2750,7 @@ class FlowMcpCli {
                     namespace,
                     tags,
                     score,
+                    'type': tool[ 'type' ] || 'tool',
                     'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`
                 }
 
@@ -3952,8 +4124,9 @@ class FlowMcpCli {
                         const filePath = join( schemasBaseDir, schemaRef )
                         const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
-                        if( main && main[ 'routes' ] ) {
-                            Object.entries( main[ 'routes' ] )
+                        const toolEntries = main ? ( main[ 'tools' ] || main[ 'routes' ] ) : null
+                        if( main && toolEntries ) {
+                            Object.entries( toolEntries )
                                 .forEach( ( [ routeName, routeConfig ] ) => {
                                     const routeDescription = routeConfig[ 'description' ] || ''
                                     const toolRef = `${schemaRef}::${routeName}`
@@ -3970,7 +4143,51 @@ class FlowMcpCli {
                                         namespace,
                                         'description': routeDescription,
                                         'tags': main[ 'tags' ] || [],
-                                        'schemaName': main[ 'name' ] || ''
+                                        'schemaName': main[ 'name' ] || '',
+                                        'type': 'tool'
+                                    } )
+                                } )
+                        }
+
+                        if( main && main[ 'resources' ] ) {
+                            Object.entries( main[ 'resources' ] )
+                                .forEach( ( [ resourceName, resourceConfig ] ) => {
+                                    const resourceDescription = resourceConfig[ 'description' ] || ''
+                                    const toolRef = `${schemaRef}::resource::${resourceName}`
+                                    const toolName = `${resourceName}_${main[ 'namespace' ] || namespace}`
+
+                                    tools.push( {
+                                        toolRef,
+                                        toolName,
+                                        schemaRef,
+                                        'routeName': resourceName,
+                                        namespace,
+                                        'description': resourceDescription,
+                                        'tags': main[ 'tags' ] || [],
+                                        'schemaName': main[ 'name' ] || '',
+                                        'type': 'resource'
+                                    } )
+                                } )
+                        }
+
+                        if( main && main[ 'skills' ] ) {
+                            main[ 'skills' ]
+                                .forEach( ( skillDef ) => {
+                                    const skillName = skillDef[ 'name' ] || 'unknown'
+                                    const skillDescription = skillDef[ 'description' ] || ''
+                                    const toolRef = `${schemaRef}::skill::${skillName}`
+                                    const toolName = `${skillName}_${main[ 'namespace' ] || namespace}`
+
+                                    tools.push( {
+                                        toolRef,
+                                        toolName,
+                                        schemaRef,
+                                        'routeName': skillName,
+                                        namespace,
+                                        'description': skillDescription,
+                                        'tags': main[ 'tags' ] || [],
+                                        'schemaName': main[ 'name' ] || '',
+                                        'type': 'skill'
                                     } )
                                 } )
                         }
@@ -5389,10 +5606,10 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
 
     static #getAllTests( { main } ) {
-        const routes = main[ 'routes' ] || {}
+        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
         const tests = []
 
-        Object.entries( routes )
+        Object.entries( tools )
             .forEach( ( [ routeName, routeConfig ] ) => {
                 const routeTests = routeConfig[ 'tests' ] || []
 
@@ -5505,7 +5722,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
     static #prepareServerTool( { main, handlerMap, serverParams, routeName } ) {
         const namespace = main[ 'namespace' ] || 'unknown'
-        const routes = main[ 'routes' ] || {}
+        const routes = main[ 'tools' ] || main[ 'routes' ] || {}
         const routeConfig = routes[ routeName ]
 
         if( !routeConfig ) {
@@ -5943,6 +6160,26 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
+    static async #findSchemaFiles( { dirPath } ) {
+        const entries = await readdir( dirPath, { recursive: true } )
+        const files = entries
+            .filter( ( entry ) => {
+                const ext = extname( entry )
+                const isSchema = ext === '.mjs' || ext === '.js'
+
+                return isSchema
+            } )
+            .map( ( entry ) => {
+                const fullPath = join( dirPath, entry )
+
+                return fullPath
+            } )
+            .sort()
+
+        return { files }
+    }
+
+
     static async #removeToolSchema( { toolName, cwd } ) {
         const filePath = join( cwd, appConfig[ 'localConfigDirName' ], 'tools', `${toolName}.json` )
 
@@ -5953,6 +6190,22 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         } catch {
             return { 'removed': false }
         }
+    }
+
+
+    static #normalizeMainForValidation( { main } ) {
+        if( !main ) {
+            return main
+        }
+
+        if( main[ 'tools' ] && !main[ 'routes' ] ) {
+            const { tools, resources, skills, ...rest } = main
+            const normalizedMain = { ...rest, 'routes': tools }
+
+            return normalizedMain
+        }
+
+        return main
     }
 }
 

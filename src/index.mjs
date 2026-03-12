@@ -18,6 +18,8 @@ const args = parseArgs( {
         'no-cache': { type: 'boolean' },
         'refresh': { type: 'boolean' },
         'file': { type: 'string' },
+        'all': { type: 'boolean' },
+        'dry-run': { type: 'boolean' },
         'help': { type: 'boolean', short: 'h' }
     }
 } )
@@ -268,6 +270,16 @@ const runCommand = async () => {
         }
 
         await FlowMcpCli.help( { cwd } )
+
+        return true
+    }
+
+    if( command === 'migrate' ) {
+        const targetPath = positionals[ 1 ]
+        const all = values[ 'all' ] || false
+        const dryRun = values[ 'dry-run' ] || false
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': targetPath, cwd, all, dryRun } )
+        output( { result } )
 
         return true
     }
