@@ -5682,21 +5682,31 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
     static #findListsDir( { filePath } ) {
         const resolved = resolve( filePath )
-        const dir = dirname( resolved )
-        const siblingLists = join( dir, '_lists' )
+        const startDir = dirname( resolved )
+        const maxLevels = 10
 
-        if( existsSync( siblingLists ) ) {
-            return { 'listsDir': siblingLists }
-        }
+        const result = Array.from( { 'length': maxLevels } )
+            .reduce( ( acc, _, idx ) => {
+                if( acc['found'] ) {
+                    return acc
+                }
 
-        const parentDir = dirname( dir )
-        const parentLists = join( parentDir, '_lists' )
+                const candidate = join( acc['current'], '_lists' )
 
-        if( existsSync( parentLists ) ) {
-            return { 'listsDir': parentLists }
-        }
+                if( existsSync( candidate ) ) {
+                    return { 'found': true, 'listsDir': candidate, 'current': acc['current'] }
+                }
 
-        return { 'listsDir': null }
+                const parent = dirname( acc['current'] )
+
+                if( parent === acc['current'] ) {
+                    return { 'found': false, 'listsDir': null, 'current': acc['current'] }
+                }
+
+                return { 'found': false, 'listsDir': null, 'current': parent }
+            }, { 'found': false, 'listsDir': null, 'current': startDir } )
+
+        return { 'listsDir': result['listsDir'] }
     }
 
 
