@@ -7,6 +7,7 @@ import { constants, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
+import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
 import { FlowMCP } from 'flowmcp/v2'
@@ -2318,6 +2319,71 @@ class FlowMcpCli {
                             }
                         } )
                     } )
+
+                if( main[ 'resources' ] ) {
+                    const schemaRef = main[ 'namespace' ] || 'unknown'
+                    const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
+                    await FlowMCP.initializeResourceDbs( { 'resources': main[ 'resources' ], schemaRef } )
+
+                    Object.entries( main[ 'resources' ] )
+                        .forEach( ( [ resourceName, resourceDef ] ) => {
+                            Object.entries( resourceDef[ 'queries' ] || {} )
+                                .forEach( ( [ queryName, queryDef ] ) => {
+                                    const namespace = main[ 'namespace' ] || 'unknown'
+                                    const toolName = `${queryName}_${namespace}`
+                                    const description = queryDef[ 'description' ] || `Query ${queryName} on ${resourceName}`
+
+                                    server.tool( toolName, description, {}, async ( args ) => {
+                                        const queryHandlerMap = ( resourceHandlerMap[ resourceName ] ) || {}
+                                        const { struct } = await FlowMCP.executeResource( {
+                                            'resourceDefinition': resourceDef,
+                                            resourceName,
+                                            queryName,
+                                            'userParams': args,
+                                            'handlerMap': queryHandlerMap,
+                                            schemaRef
+                                        } )
+
+                                        const content = JSON.stringify( struct[ 'data' ] || struct )
+
+                                        return {
+                                            'content': [ { 'type': 'text', 'text': content } ]
+                                        }
+                                    } )
+                                } )
+                        } )
+                }
+
+                if( main[ 'prompts' ] ) {
+                    Object.entries( main[ 'prompts' ] )
+                        .forEach( ( [ promptKey, promptDef ] ) => {
+                            const promptName = promptDef[ 'name' ] || promptKey
+                            const promptDescription = promptDef[ 'description' ] || ''
+                            const promptArgs = ( promptDef[ 'parameters' ] || [] )
+                                .reduce( ( acc, param ) => {
+                                    acc[ param[ 'name' ] ] = {
+                                        'description': param[ 'description' ] || '',
+                                        'required': param[ 'required' ] || false
+                                    }
+
+                                    return acc
+                                }, {} )
+
+                            server.prompt( promptName, promptDescription, promptArgs, async ( args ) => {
+                                let content = promptDef[ 'content' ] || ''
+
+                                Object.entries( args || {} )
+                                    .forEach( ( [ key, value ] ) => {
+                                        content = content.replace( `[[${key}]]`, value )
+                                    } )
+
+                                return {
+                                    'messages': [ { 'role': 'user', 'content': { 'type': 'text', 'text': content } } ]
+                                }
+                            } )
+                        } )
+                }
             } ), Promise.resolve() )
 
         const transport = new StdioServerTransport()
@@ -2535,6 +2601,12 @@ class FlowMcpCli {
             } )
 
         if( !matchedMain ) {
+            const resourceResult = await FlowMcpCli.#callResourceQuery( { toolName, jsonArgs, resolvedSchemas } )
+
+            if( resourceResult ) {
+                return resourceResult
+            }
+
             const result = FlowMcpCli.#error( {
                 'error': `Tool "${toolName}" not found in active tools.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tool names.`
@@ -5098,6 +5170,10 @@ Validation & Testing:
   test user                           Test all user schemas
   test single <path>                  Test a single schema file
 
+Resource Management:
+  resource create <schema-path>       Create SQLite databases for file-based resources
+  resource migrate                    Migrate old database paths to new origin system
+
 Execution:
   run                                 Start MCP server (stdio) for default group
   call list-tools                     List available tools from default group
@@ -5108,6 +5184,9 @@ Options:
   --group <name>              Override default group for run/call/validate/test
   --route <name>              Filter test to a single route
   --branch <name>             Branch for import (default: main)
+  --basis <name>              Override basis folder (default: flowmcp)
+  --yes, -y                   Auto-confirm prompts
+  --dry-run                   Preview changes without applying
   --help, -h                  Show this help message
 
 Tool Ref Format:
@@ -5631,9 +5710,10 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
     static async #resolveHandlers( { main, handlersFn, filePath } ) {
         let handlerMap = {}
+        let resourceHandlerMap = {}
 
         if( !handlersFn ) {
-            return { handlerMap }
+            return { handlerMap, resourceHandlerMap }
         }
 
         try {
@@ -5667,16 +5747,19 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
             const tempHandlers = handlersFn( { sharedLists, libraries } )
             const allRouteNames = Object.keys( tempHandlers || {} )
-            const created = FlowMCP.createHandlers( { handlersFn, sharedLists, libraries, 'routeNames': allRouteNames } )
+            const resources = main[ 'resources' ] || {}
+            const created = FlowMCP.createHandlers( { handlersFn, sharedLists, libraries, 'routeNames': allRouteNames, resources } )
             handlerMap = created[ 'handlerMap' ] || {}
+            resourceHandlerMap = created[ 'resourceHandlerMap' ] || {}
         } catch( resolveErr ) {
             if( process.env[ 'FLOWMCP_DEBUG' ] ) {
                 console.error( `[resolveHandlers] ${resolveErr.message}` )
             }
             handlerMap = {}
+            resourceHandlerMap = {}
         }
 
-        return { handlerMap }
+        return { handlerMap, resourceHandlerMap }
     }
 
 
@@ -6439,6 +6522,537 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         }
 
         return { result }
+    }
+
+
+    static async resourceCreate( { schemaPath, cwd, basis = 'flowmcp', autoConfirm = false } ) {
+        const { status: validStatus, messages: validMessages } = FlowMcpCli.validationResourceCreate( { schemaPath } )
+        if( !validStatus ) {
+            const result = { 'status': false, 'messages': validMessages }
+
+            return { result }
+        }
+
+        const resolvedPath = resolve( schemaPath )
+
+        let schemaModule
+        try {
+            const fileUrl = pathToFileURL( resolvedPath ).href
+            schemaModule = await import( fileUrl )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to load schema: ${err.message}`,
+                'fix': 'Ensure the schema file exports a valid "main" object.'
+            } )
+
+            return { result }
+        }
+
+        const main = schemaModule[ 'main' ]
+        if( !main ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Schema does not export "main".',
+                'fix': 'The schema file must export const main = { ... }'
+            } )
+
+            return { result }
+        }
+
+        const resources = main[ 'resources' ] || {}
+        const entries = Object.entries( resources )
+
+        const fileBasedResources = entries
+            .filter( ( [ , resourceDef ] ) => {
+                const isFileBased = resourceDef[ 'source' ] === 'sqlite' && resourceDef[ 'mode' ] === 'file-based'
+
+                return isFileBased
+            } )
+
+        if( fileBasedResources.length === 0 ) {
+            const result = {
+                'status': true,
+                'message': 'No file-based SQLite resources found in this schema.',
+                'created': 0
+            }
+
+            return { result }
+        }
+
+        const results = []
+        let created = 0
+        let skipped = 0
+        let failed = 0
+
+        await fileBasedResources
+            .reduce( ( promise, [ resourceName, resourceDef ] ) => promise.then( async () => {
+                const { dbPath } = FlowMcpCli.#resolveResourcePath( {
+                    'origin': resourceDef[ 'origin' ],
+                    'name': resourceDef[ 'name' ],
+                    basis,
+                    cwd
+                } )
+
+                if( existsSync( dbPath ) ) {
+                    skipped += 1
+                    results.push( { resourceName, dbPath, 'action': 'skipped', 'reason': 'Database already exists' } )
+
+                    return
+                }
+
+                if( !autoConfirm ) {
+                    const { confirm } = await inquirer.prompt( [
+                        {
+                            'type': 'confirm',
+                            'name': 'confirm',
+                            'message': `Create database "${resourceName}" at ${dbPath}?`,
+                            'default': true
+                        }
+                    ] )
+
+                    if( !confirm ) {
+                        skipped += 1
+                        results.push( { resourceName, dbPath, 'action': 'skipped', 'reason': 'User declined' } )
+
+                        return
+                    }
+                }
+
+                try {
+                    const dbDir = dirname( dbPath )
+                    await mkdir( dbDir, { recursive: true } )
+
+                    const { tableStatements } = FlowMcpCli.#deriveCreateStatements( { resourceDef } )
+
+                    const db = new Database( dbPath )
+                    db.pragma( 'journal_mode = WAL' )
+
+                    tableStatements
+                        .forEach( ( sql ) => {
+                            db.exec( sql )
+                        } )
+
+                    db.close()
+
+                    created += 1
+                    results.push( {
+                        resourceName,
+                        dbPath,
+                        'action': 'created',
+                        'tables': tableStatements.length
+                    } )
+                } catch( err ) {
+                    failed += 1
+                    results.push( { resourceName, dbPath, 'action': 'failed', 'reason': err.message } )
+                }
+            } ), Promise.resolve() )
+
+        const result = {
+            'status': failed === 0,
+            created,
+            skipped,
+            failed,
+            results
+        }
+
+        return { result }
+    }
+
+
+    static validationResourceCreate( { schemaPath } ) {
+        const struct = { 'status': false, 'messages': [] }
+
+        if( schemaPath === undefined || schemaPath === null ) {
+            struct[ 'messages' ].push( 'schemaPath: Missing value. Provide a path to a schema file.' )
+        } else if( typeof schemaPath !== 'string' ) {
+            struct[ 'messages' ].push( 'schemaPath: Must be a string.' )
+        }
+
+        if( struct[ 'messages' ].length > 0 ) {
+            return struct
+        }
+
+        struct[ 'status' ] = true
+
+        return struct
+    }
+
+
+    static async resourceMigrate( { cwd, basis = 'flowmcp', dryRun = false, autoConfirm = false } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const schemasDir = FlowMcpCli.#schemasDir()
+        let schemaFiles = []
+
+        try {
+            const { files } = await FlowMcpCli.#findSchemaFiles( { 'dirPath': schemasDir } )
+            schemaFiles = files
+        } catch {
+            schemaFiles = []
+        }
+
+        const migrations = []
+
+        await schemaFiles
+            .reduce( ( promise, filePath ) => promise.then( async () => {
+                try {
+                    const fileUrl = pathToFileURL( filePath ).href
+                    const schemaModule = await import( fileUrl )
+                    const main = schemaModule[ 'main' ]
+
+                    if( !main || !main[ 'resources' ] ) {
+                        return
+                    }
+
+                    const namespace = main[ 'namespace' ] || 'unknown'
+
+                    Object.entries( main[ 'resources' ] )
+                        .forEach( ( [ resourceName, resourceDef ] ) => {
+                            const { database } = resourceDef
+
+                            if( !database || resourceDef[ 'origin' ] ) {
+                                return
+                            }
+
+                            const oldPath = database.startsWith( '~/' )
+                                ? database.replace( '~', homedir() )
+                                : database
+
+                            const newName = `${namespace}-${resourceName}.db`
+                            const newPath = join( homedir(), `.${basis}`, 'resources', newName )
+
+                            migrations.push( {
+                                'schemaFile': filePath,
+                                namespace,
+                                resourceName,
+                                oldPath,
+                                newPath,
+                                'oldExists': existsSync( oldPath )
+                            } )
+                        } )
+                } catch {
+                    // Skip schemas that fail to load
+                }
+            } ), Promise.resolve() )
+
+        if( migrations.length === 0 ) {
+            const result = {
+                'status': true,
+                'message': 'No schemas with old-format database paths found.',
+                'migrated': 0,
+                'skipped': 0,
+                'results': []
+            }
+
+            return { result }
+        }
+
+        if( dryRun ) {
+            const results = migrations
+                .map( ( entry ) => {
+                    const { schemaFile, namespace, resourceName, oldPath, newPath, oldExists } = entry
+                    const dryRunResult = {
+                        schemaFile,
+                        namespace,
+                        resourceName,
+                        oldPath,
+                        newPath,
+                        'action': 'dry-run',
+                        'oldExists': oldExists
+                    }
+
+                    return dryRunResult
+                } )
+
+            const result = {
+                'status': true,
+                'dryRun': true,
+                'total': migrations.length,
+                'migrated': 0,
+                'skipped': 0,
+                results
+            }
+
+            return { result }
+        }
+
+        if( !autoConfirm ) {
+            const preview = migrations
+                .map( ( { namespace, resourceName, oldPath, newPath, oldExists } ) => {
+                    const existsLabel = oldExists ? '' : ' (file not found)'
+                    const previewLine = `  ${namespace}/${resourceName}: ${oldPath}${existsLabel} -> ${newPath}`
+
+                    return previewLine
+                } )
+                .join( '\n' )
+
+            console.log( `\nFound ${migrations.length} schema(s) with old-format paths:\n` )
+            console.log( preview )
+            console.log( '' )
+
+            const { confirm } = await inquirer.prompt( [
+                {
+                    'type': 'confirm',
+                    'name': 'confirm',
+                    'message': 'Migrate all?',
+                    'default': true
+                }
+            ] )
+
+            if( !confirm ) {
+                const result = {
+                    'status': true,
+                    'message': 'Migration cancelled by user.',
+                    'migrated': 0,
+                    'skipped': migrations.length,
+                    'results': []
+                }
+
+                return { result }
+            }
+        }
+
+        const results = []
+        let migrated = 0
+        let migrateSkipped = 0
+        let migrateFailed = 0
+
+        await migrations
+            .reduce( ( promise, entry ) => promise.then( async () => {
+                const { schemaFile, namespace, resourceName, oldPath, newPath, oldExists } = entry
+
+                if( !oldExists ) {
+                    migrateSkipped += 1
+                    results.push( {
+                        schemaFile,
+                        namespace,
+                        resourceName,
+                        oldPath,
+                        newPath,
+                        'action': 'skipped',
+                        'reason': 'Source database file not found'
+                    } )
+
+                    return
+                }
+
+                try {
+                    const newDir = dirname( newPath )
+                    await mkdir( newDir, { recursive: true } )
+                    await rename( oldPath, newPath )
+
+                    migrated += 1
+                    results.push( {
+                        schemaFile,
+                        namespace,
+                        resourceName,
+                        oldPath,
+                        newPath,
+                        'action': 'migrated'
+                    } )
+                } catch( err ) {
+                    migrateFailed += 1
+                    results.push( {
+                        schemaFile,
+                        namespace,
+                        resourceName,
+                        oldPath,
+                        newPath,
+                        'action': 'failed',
+                        'reason': err.message
+                    } )
+                }
+            } ), Promise.resolve() )
+
+        const result = {
+            'status': migrateFailed === 0,
+            'total': migrations.length,
+            migrated,
+            'skipped': migrateSkipped,
+            'failed': migrateFailed,
+            results
+        }
+
+        return { result }
+    }
+
+
+    static #resolveResourcePath( { origin, name, basis, cwd } ) {
+        const resolvers = {
+            'inline': () => {
+                const dbPath = join( cwd || '.', 'resources', name )
+
+                return dbPath
+            },
+            'project': () => {
+                const dbPath = join( cwd || process.cwd(), `.${basis}`, 'resources', name )
+
+                return dbPath
+            },
+            'global': () => {
+                const dbPath = join( homedir(), `.${basis}`, 'resources', name )
+
+                return dbPath
+            }
+        }
+
+        const resolver = resolvers[ origin ]
+
+        if( !resolver ) {
+            return { 'dbPath': name || '' }
+        }
+
+        const dbPath = resolver()
+
+        return { dbPath }
+    }
+
+
+    static #deriveCreateStatements( { resourceDef } ) {
+        const queries = resourceDef[ 'queries' ] || {}
+        const tableStatements = []
+
+        const getSchemaQuery = queries[ 'getSchema' ]
+
+        if( getSchemaQuery && getSchemaQuery[ 'sql' ] ) {
+            return { tableStatements }
+        }
+
+        const parameterKeys = new Set()
+
+        Object.values( queries )
+            .forEach( ( queryDef ) => {
+                const { sql, parameters } = queryDef
+
+                if( !sql ) {
+                    return
+                }
+
+                const tableMatch = sql.match( /FROM\s+(\w+)/i )
+
+                if( tableMatch ) {
+                    const tableName = tableMatch[ 1 ]
+
+                    if( !parameterKeys.has( tableName ) ) {
+                        parameterKeys.add( tableName )
+
+                        const columns = ( parameters || [] )
+                            .filter( ( param ) => {
+                                const hasPosition = param[ 'position' ] && param[ 'position' ][ 'key' ]
+
+                                return hasPosition
+                            } )
+                            .map( ( param ) => {
+                                const key = param[ 'position' ][ 'key' ]
+                                const zPrimitive = param[ 'z' ] ? param[ 'z' ][ 'primitive' ] : 'string()'
+                                const sqlType = zPrimitive.startsWith( 'number' ) ? 'INTEGER' : 'TEXT'
+                                const columnDef = `${key} ${sqlType}`
+
+                                return columnDef
+                            } )
+
+                        if( columns.length > 0 ) {
+                            const createSql = `CREATE TABLE IF NOT EXISTS ${tableName} (${columns.join( ', ' )})`
+                            tableStatements.push( createSql )
+                        }
+                    }
+                }
+            } )
+
+        return { tableStatements }
+    }
+
+
+    static async #callResourceQuery( { toolName, jsonArgs, resolvedSchemas } ) {
+        let matchedMain = null
+        let matchedHandlersFn = null
+        let matchedFile = null
+        let matchedResourceName = null
+        let matchedQueryName = null
+
+        resolvedSchemas
+            .forEach( ( { main, handlersFn, file } ) => {
+                if( matchedMain ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const resources = main[ 'resources' ] || {}
+
+                Object.entries( resources )
+                    .forEach( ( [ resourceName, resourceDef ] ) => {
+                        if( matchedMain ) {
+                            return
+                        }
+
+                        Object.keys( resourceDef[ 'queries' ] || {} )
+                            .forEach( ( queryName ) => {
+                                if( matchedMain ) {
+                                    return
+                                }
+
+                                const candidateName = `${queryName}_${namespace}`
+
+                                if( candidateName === toolName ) {
+                                    matchedMain = main
+                                    matchedHandlersFn = handlersFn
+                                    matchedFile = file
+                                    matchedResourceName = resourceName
+                                    matchedQueryName = queryName
+                                }
+                            } )
+                    } )
+            } )
+
+        if( !matchedMain ) {
+            return null
+        }
+
+        try {
+            const schemasBaseDir = FlowMcpCli.#schemasDir()
+            const schemaFilePath = matchedFile ? join( schemasBaseDir, matchedFile ) : null
+            const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( {
+                'main': matchedMain,
+                'handlersFn': matchedHandlersFn,
+                'filePath': schemaFilePath
+            } )
+
+            const schemaRef = matchedMain[ 'namespace' ] || 'unknown'
+            const resourceDef = matchedMain[ 'resources' ][ matchedResourceName ]
+
+            await FlowMCP.initializeResourceDbs( { 'resources': matchedMain[ 'resources' ], schemaRef } )
+
+            const queryHandlerMap = resourceHandlerMap[ matchedResourceName ] || {}
+            const userParams = jsonArgs ? JSON.parse( jsonArgs ) : {}
+
+            const { struct } = await FlowMCP.executeResource( {
+                'resourceDefinition': resourceDef,
+                'resourceName': matchedResourceName,
+                'queryName': matchedQueryName,
+                userParams,
+                'handlerMap': queryHandlerMap,
+                schemaRef
+            } )
+
+            const result = {
+                'status': struct[ 'status' ],
+                'data': struct[ 'data' ],
+                'messages': struct[ 'messages' ]
+            }
+
+            return { result }
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Resource query failed: ${err.message}`,
+                'fix': 'Check that the database file exists and is accessible.'
+            } )
+
+            return { result }
+        }
     }
 }
 

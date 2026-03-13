@@ -20,6 +20,8 @@ const args = parseArgs( {
         'file': { type: 'string' },
         'all': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
+        'basis': { type: 'string' },
+        'yes': { type: 'boolean', short: 'y' },
         'help': { type: 'boolean', short: 'h' }
     }
 } )
@@ -295,6 +297,37 @@ const runCommand = async () => {
         const all = values[ 'all' ] || false
         const dryRun = values[ 'dry-run' ] || false
         const { result } = await FlowMcpCli.migrate( { 'schemaPath': targetPath, cwd, all, dryRun } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'resource' ) {
+        const subCommand = positionals[ 1 ]
+        const basis = values[ 'basis' ] || 'flowmcp'
+        const autoConfirm = values[ 'yes' ] || false
+
+        if( subCommand === 'create' ) {
+            const targetPath = positionals[ 2 ]
+            const { result } = await FlowMcpCli.resourceCreate( { 'schemaPath': targetPath, cwd, basis, autoConfirm } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'migrate' ) {
+            const dryRun = values[ 'dry-run' ] || false
+            const { result } = await FlowMcpCli.resourceMigrate( { cwd, basis, dryRun, autoConfirm } )
+            output( { result } )
+
+            return true
+        }
+
+        const result = {
+            'status': false,
+            'error': `Unknown resource command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} resource create <schema-path>, ${appConfig[ 'cliCommand' ]} resource migrate`
+        }
         output( { result } )
 
         return true

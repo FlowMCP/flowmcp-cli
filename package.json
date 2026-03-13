@@ -17,6 +17,7 @@
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
+        "better-sqlite3": "^12.6.2",
         "chalk": "^5.6.2",
         "figlet": "^1.10.0",
         "flowmcp": "github:flowmcp/flowmcp-core#73f3f0202477add5c91ebbf2a3513dd4a56a1c80",
