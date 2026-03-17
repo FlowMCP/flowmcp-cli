@@ -2301,7 +2301,7 @@ class FlowMcpCli {
                 const schemaFilePath = join( schemasBaseDir, file )
                 const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
 
-                Object.keys( main[ 'routes' ] || {} )
+                Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} )
                     .forEach( ( routeName ) => {
                         const { toolName, description, zod, func } = FlowMcpCli.#prepareServerTool( {
                             main,
