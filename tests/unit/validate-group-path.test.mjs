@@ -12,12 +12,14 @@ const GLOBAL_SCHEMAS_DIR = join( GLOBAL_CONFIG_DIR, 'schemas' )
 const TEST_CWD = join( tmpdir(), 'flowmcp-cli-validate-group-path' )
 const LOCAL_CONFIG_DIR = join( TEST_CWD, '.flowmcp' )
 const LOCAL_CONFIG_PATH = join( LOCAL_CONFIG_DIR, 'config.json' )
-const ENV_PATH = join( GLOBAL_CONFIG_DIR, '.env' )
+const ENV_PATH = join( GLOBAL_CONFIG_DIR, '.env.vgpath' )
 const SOURCE_NAME = 'valsrc'
 const SOURCE_DIR = join( GLOBAL_SCHEMAS_DIR, SOURCE_NAME )
 
 let originalGlobalConfig = null
 let globalConfigExisted = false
+let originalEnvContent = null
+let envExisted = false
 
 const VALID_SCHEMA_CONTENT = `export const main = {
     namespace: 'valsrc',
@@ -93,8 +95,24 @@ beforeAll( async () => {
         globalConfigExisted = false
     }
 
+    try {
+        originalEnvContent = await readFile( ENV_PATH, 'utf-8' )
+        envExisted = true
+    } catch {
+        envExisted = false
+    }
+
     await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
-    await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
+
+    if( globalConfigExisted && originalGlobalConfig ) {
+        const parsed = JSON.parse( originalGlobalConfig )
+        parsed[ 'sources' ] = parsed[ 'sources' ] || {}
+        parsed[ 'sources' ][ SOURCE_NAME ] = VALID_GLOBAL_CONFIG[ 'sources' ][ SOURCE_NAME ]
+        parsed[ 'envPath' ] = ENV_PATH
+        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( parsed, null, 4 ), 'utf-8' )
+    } else {
+        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
+    }
 
     await mkdir( SOURCE_DIR, { recursive: true } )
     await writeFile( join( SOURCE_DIR, 'check.mjs' ), VALID_SCHEMA_CONTENT, 'utf-8' )
@@ -111,8 +129,14 @@ afterAll( async () => {
         await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
     }
 
-    await rm( SOURCE_DIR, { recursive: true, force: true } )
-    await rm( TEST_CWD, { recursive: true, force: true } )
+    if( envExisted && originalEnvContent ) {
+        await writeFile( ENV_PATH, originalEnvContent, 'utf-8' )
+    } else {
+        await rm( ENV_PATH, { force: true } ).catch( () => {} )
+    }
+
+    await rm( SOURCE_DIR, { recursive: true, force: true } ).catch( () => {} )
+    await rm( TEST_CWD, { recursive: true, force: true } ).catch( () => {} )
 } )
 
 

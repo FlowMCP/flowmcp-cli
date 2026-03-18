@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
-import { writeFile, mkdir, rm, access } from 'node:fs/promises'
+import { writeFile, mkdir, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 
@@ -13,15 +13,24 @@ const LOCAL_CONFIG_PATH = join( LOCAL_CONFIG_DIR, 'config.json' )
 
 const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
 const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
-let globalConfigExistedBefore = false
+let originalGlobalConfig = null
+let globalConfigExisted = false
 
 beforeAll( async () => {
     try {
-        await access( GLOBAL_CONFIG_PATH )
-        globalConfigExistedBefore = true
+        originalGlobalConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
+        globalConfigExisted = true
     } catch {
-        globalConfigExistedBefore = false
-        await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
+        globalConfigExisted = false
+    }
+
+    await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
+
+    if( globalConfigExisted && originalGlobalConfig ) {
+        const parsed = JSON.parse( originalGlobalConfig )
+        parsed[ 'envPath' ] = parsed[ 'envPath' ] || VALID_GLOBAL_CONFIG[ 'envPath' ]
+        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( parsed, null, 4 ), 'utf-8' )
+    } else {
         await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
     }
 
@@ -30,7 +39,11 @@ beforeAll( async () => {
 } )
 
 afterAll( async () => {
-    await rm( TEST_CWD, { recursive: true, force: true } )
+    if( globalConfigExisted && originalGlobalConfig ) {
+        await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
+    }
+
+    await rm( TEST_CWD, { recursive: true, force: true } ).catch( () => {} )
 } )
 
 
