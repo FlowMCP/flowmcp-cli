@@ -165,7 +165,7 @@ source/file.mjs::routeName   # Single tool from a schema
 flowmcp init
 
 # 2. Or: Manual import and group creation
-flowmcp import https://github.com/flowmcp/flowmcp-schemas
+flowmcp import https://github.com/FlowMCP/flowmcp-schemas
 flowmcp group append crypto --tools "flowmcp-schemas/coingecko/simplePrice.mjs,flowmcp-schemas/etherscan/getBalance.mjs"
 flowmcp group set-default crypto
 
