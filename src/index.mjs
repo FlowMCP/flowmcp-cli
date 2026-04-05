@@ -83,6 +83,14 @@ const runCommand = async () => {
         return true
     }
 
+    if( command === 'lists' ) {
+        const listName = positionals[ 1 ] || null
+        const { result } = await FlowMcpCli.listSharedLists( { listName } )
+        output( { result } )
+
+        return true
+    }
+
     if( command === 'call' ) {
         const subCommand = positionals[ 1 ]
 
@@ -172,6 +180,47 @@ const runCommand = async () => {
     if( command === 'import-agent' ) {
         const agentName = positionals[ 1 ]
         const { result } = await FlowMcpCli.importAgent( { agentName, cwd } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'skill' ) {
+        const subCommand = positionals[ 1 ]
+
+        if( subCommand === 'generate' ) {
+            const toolId = positionals[ 2 ]
+            const { result } = await FlowMcpCli.generateSkill( { toolId } )
+            output( { result } )
+
+            return true
+        }
+
+        const result = {
+            'status': false,
+            'error': `Unknown skill command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} skill generate <tool-name>`
+        }
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'catalog' ) {
+        const subCommand = positionals[ 1 ]
+
+        if( subCommand === 'generate' ) {
+            const { result } = await FlowMcpCli.generateCatalog( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        const result = {
+            'status': false,
+            'error': `Unknown catalog command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate`
+        }
         output( { result } )
 
         return true

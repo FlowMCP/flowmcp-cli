@@ -14,7 +14,7 @@ import { FlowMCP } from 'flowmcp/v2'
 
 import { ZodBuilder } from './ZodBuilder.mjs'
 
-import { appConfig } from '../data/config.mjs'
+import { appConfig, catalogCategories } from '../data/config.mjs'
 
 
 class FlowMcpCli {
@@ -2815,7 +2815,7 @@ class FlowMcpCli {
         const scoredTools = allTools
             .map( ( tool ) => {
                 const { score } = FlowMcpCli.#scoreToolMatch( { tool, queryTokens, sharedMatchRefs } )
-                const { toolName, description, namespace, tags } = tool
+                const { toolName, description, namespace, tags, schemaRef, routeName } = tool
                 const entry = {
                     'name': toolName,
                     description,
@@ -2823,7 +2823,9 @@ class FlowMcpCli {
                     tags,
                     score,
                     'type': tool[ 'type' ] || 'tool',
-                    'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`
+                    'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`,
+                    schemaRef,
+                    routeName
                 }
 
                 return entry
@@ -2843,6 +2845,62 @@ class FlowMcpCli {
         const matchCount = scoredTools.length
         const showing = Math.min( matchCount, maxResults )
         const limitedTools = scoredTools.slice( 0, maxResults )
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const isDetailView = matchCount === 1
+
+        const enrichedTools = await limitedTools
+            .reduce( ( promise, tool ) => promise.then( async ( acc ) => {
+                const { schemaRef, routeName, name: toolName } = tool
+                const filePath = join( schemasBaseDir, schemaRef )
+
+                try {
+                    const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                    if( main ) {
+                        const { meta } = FlowMcpCli.#extractMetaFlags( { main, routeName } )
+                        const { requiredParams, optionalParams } = FlowMcpCli.#extractParameterDetails( { main, routeName } )
+                        const { example } = FlowMcpCli.#generateCallExample( { toolName, requiredParams } )
+
+                        tool[ 'meta' ] = meta
+                        tool[ 'requiredParams' ] = requiredParams
+                            .map( ( { key, type, isEnum, enumExamples, listRef } ) => {
+                                const entry = { key, type }
+                                if( isEnum && enumExamples.length > 0 ) {
+                                    entry[ 'examples' ] = enumExamples
+                                }
+                                if( isEnum && listRef ) {
+                                    entry[ 'list' ] = listRef
+                                }
+
+                                return entry
+                            } )
+                        tool[ 'example' ] = example
+
+                        if( isDetailView ) {
+                            tool[ 'optionalParams' ] = optionalParams
+                                .map( ( { key, type, isEnum, enumExamples, listRef } ) => {
+                                    const entry = { key, type }
+                                    if( isEnum && listRef ) {
+                                        entry[ 'list' ] = listRef
+                                    }
+                                    if( isEnum && enumExamples.length > 0 ) {
+                                        entry[ 'examples' ] = enumExamples
+                                    }
+
+                                    return entry
+                                } )
+                        }
+                    }
+                } catch {
+                    // Schema could not be loaded — return without enrichment
+                }
+
+                delete tool[ 'schemaRef' ]
+                delete tool[ 'routeName' ]
+                acc.push( tool )
+
+                return acc
+            } ), Promise.resolve( [] ) )
 
         let hint = ''
         if( matchCount === 0 ) {
@@ -2856,7 +2914,7 @@ class FlowMcpCli {
             query,
             matchCount,
             showing,
-            'tools': limitedTools
+            'tools': enrichedTools
         }
 
         if( hint.length > 0 ) { result[ 'hint' ] = hint }
@@ -3140,6 +3198,394 @@ class FlowMcpCli {
             'status': true,
             'toolCount': tools.length,
             tools
+        }
+
+        return { result }
+    }
+
+
+    static async listSharedLists( { listName } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const { sources } = await FlowMcpCli.#listSources()
+
+        if( sources.length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'No schema sources found.',
+                'fix': `Run: ${appConfig[ 'cliCommand' ]} import <url>`
+            } )
+
+            return { result }
+        }
+
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const allLists = []
+
+        await sources
+            .reduce( ( promise, source ) => promise.then( async () => {
+                const { name: sourceName } = source
+                const listsDir = join( schemasBaseDir, sourceName, '_lists' )
+
+                let listFiles = []
+                try {
+                    const entries = await readdir( listsDir )
+                    listFiles = entries
+                        .filter( ( f ) => f.endsWith( '.mjs' ) )
+                } catch {
+                    return
+                }
+
+                await listFiles
+                    .reduce( ( p, file ) => p.then( async () => {
+                        const filePath = join( listsDir, file )
+
+                        try {
+                            const mod = await import( pathToFileURL( filePath ).href )
+                            const listObj = Object.values( mod )
+                                .find( ( v ) => v && typeof v === 'object' && v[ 'meta' ] && Array.isArray( v[ 'entries' ] ) )
+
+                            if( !listObj ) { return }
+
+                            const name = file.replace( /\.mjs$/, '' )
+                            const meta = listObj[ 'meta' ] || {}
+                            const entries = listObj[ 'entries' ] || []
+
+                            allLists.push( {
+                                name,
+                                'description': meta[ 'description' ] || '',
+                                'entryCount': entries.length,
+                                'fields': ( meta[ 'fields' ] || [] )
+                                    .map( ( f ) => f[ 'key' ] ),
+                                'source': sourceName,
+                                entries
+                            } )
+                        } catch {
+                            // skip broken list files
+                        }
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        if( !listName ) {
+            const result = {
+                'status': true,
+                'listCount': allLists.length,
+                'lists': allLists
+                    .map( ( { name, description, entryCount, fields } ) => ( {
+                        name,
+                        description,
+                        entryCount,
+                        fields
+                    } ) )
+            }
+
+            return { result }
+        }
+
+        const targetList = allLists
+            .find( ( l ) => l[ 'name' ] === listName )
+
+        if( !targetList ) {
+            const availableNames = allLists
+                .map( ( l ) => l[ 'name' ] )
+                .join( ', ' )
+            const result = FlowMcpCli.#error( {
+                'error': `List "${listName}" not found.`,
+                'fix': `Available lists: ${availableNames}`
+            } )
+
+            return { result }
+        }
+
+        const result = {
+            'status': true,
+            'name': targetList[ 'name' ],
+            'description': targetList[ 'description' ],
+            'entryCount': targetList[ 'entryCount' ],
+            'fields': targetList[ 'fields' ],
+            'data': targetList[ 'entries' ]
+        }
+
+        return { result }
+    }
+
+
+    static async generateCatalog( { cwd } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+
+        const tagsByNamespace = {}
+
+        await allTools
+            .reduce( ( promise, tool ) => promise.then( async () => {
+                const { schemaRef, namespace } = tool
+
+                if( tagsByNamespace[ namespace ] ) { return }
+
+                const filePath = join( schemasBaseDir, schemaRef )
+
+                try {
+                    const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                    if( main && main[ 'tags' ] ) {
+                        tagsByNamespace[ namespace ] = main[ 'tags' ]
+                    } else {
+                        tagsByNamespace[ namespace ] = []
+                    }
+                } catch {
+                    tagsByNamespace[ namespace ] = []
+                }
+            } ), Promise.resolve() )
+
+        const categoryStats = catalogCategories
+            .map( ( category ) => {
+                const { name, match } = category
+                const matchingTools = allTools
+                    .filter( ( tool ) => {
+                        const ns = tool[ 'namespace' ].toLowerCase()
+                        const matched = match
+                            .some( ( m ) => ns.startsWith( m ) )
+
+                        return matched
+                    } )
+
+                const tagCounts = {}
+                matchingTools
+                    .forEach( ( tool ) => {
+                        const nsTags = tagsByNamespace[ tool[ 'namespace' ] ] || []
+                        nsTags
+                            .filter( ( t ) => !t.startsWith( 'cacheTtl' ) )
+                            .forEach( ( tag ) => {
+                                tagCounts[ tag ] = ( tagCounts[ tag ] || 0 ) + 1
+                            } )
+                    } )
+
+                const topTags = Object.entries( tagCounts )
+                    .sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
+                    .slice( 0, 7 )
+                    .map( ( [ tag ] ) => tag )
+
+                const namespaceCounts = {}
+                matchingTools
+                    .forEach( ( tool ) => {
+                        const ns = tool[ 'namespace' ]
+                        namespaceCounts[ ns ] = ( namespaceCounts[ ns ] || 0 ) + 1
+                    } )
+
+                const topProviders = Object.entries( namespaceCounts )
+                    .sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
+                    .slice( 0, 3 )
+                    .map( ( [ ns ] ) => `${ns}-*` )
+
+                return {
+                    name,
+                    'toolCount': matchingTools.length,
+                    topTags,
+                    topProviders
+                }
+            } )
+            .filter( ( c ) => c[ 'toolCount' ] > 0 )
+
+        const uncategorizedTools = allTools
+            .filter( ( tool ) => {
+                const ns = tool[ 'namespace' ].toLowerCase()
+                const isInCategory = catalogCategories
+                    .some( ( cat ) => {
+                        const matched = cat[ 'match' ]
+                            .some( ( m ) => ns.startsWith( m ) )
+
+                        return matched
+                    } )
+
+                return !isInCategory
+            } )
+
+        if( uncategorizedTools.length > 0 ) {
+            const uncategorizedNamespaces = {}
+            uncategorizedTools
+                .forEach( ( tool ) => {
+                    uncategorizedNamespaces[ tool[ 'namespace' ] ] = true
+                } )
+
+            categoryStats.push( {
+                'name': 'Other',
+                'toolCount': uncategorizedTools.length,
+                'topTags': [],
+                'topProviders': Object.keys( uncategorizedNamespaces ).slice( 0, 3 )
+                    .map( ( ns ) => `${ns}-*` )
+            } )
+        }
+
+        const totalTools = allTools.length
+        const categoryCount = categoryStats.length
+
+        const rows = categoryStats
+            .map( ( cat ) => {
+                const tags = cat[ 'topTags' ].join( ', ' ) || '—'
+                const providers = cat[ 'topProviders' ].join( ', ' ) || '—'
+
+                return `| ${cat[ 'name' ]} | ${cat[ 'toolCount' ]} | ${tags} | ${providers} |`
+            } )
+            .join( '\n' )
+
+        const markdown = [
+            `# FlowMCP Meta-Katalog (${totalTools} Tools, ${categoryCount} Kategorien)`,
+            `# Suche: flowmcp search <query>`,
+            '',
+            '| Kategorie | Tools | Top-Tags | Top-Providers |',
+            '|-----------|:-----:|----------|---------------|',
+            rows,
+            ''
+        ].join( '\n' )
+
+        const outputDir = join( cwd, '.claude', 'rules' )
+        const outputPath = join( outputDir, 'flowmcp-catalog.md' )
+
+        await mkdir( outputDir, { 'recursive': true } )
+        await writeFile( outputPath, markdown, 'utf8' )
+
+        const tokenEstimate = Math.ceil( markdown.length / 4 )
+
+        const result = {
+            'status': true,
+            'path': outputPath,
+            'categories': categoryCount,
+            totalTools,
+            tokenEstimate,
+            'content': markdown
+        }
+
+        return { result }
+    }
+
+
+    static async generateSkill( { toolId } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        if( !toolId || typeof toolId !== 'string' || toolId.trim().length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing tool ID.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} skill generate <tool-name>`
+            } )
+
+            return { result }
+        }
+
+        const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
+        const matchedTool = allTools
+            .find( ( t ) => t[ 'toolName' ] === toolId )
+
+        if( !matchedTool ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Tool "${toolId}" not found.`,
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} search <keyword> to find tool names`
+            } )
+
+            return { result }
+        }
+
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const filePath = join( schemasBaseDir, matchedTool[ 'schemaRef' ] )
+        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+        if( !main ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Could not load schema for "${toolId}".`,
+                'fix': 'Schema file may be corrupted or missing.'
+            } )
+
+            return { result }
+        }
+
+        const { routeName } = matchedTool
+        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
+        const route = tools[ routeName ] || {}
+
+        const { meta } = FlowMcpCli.#extractMetaFlags( { main, routeName } )
+        const { requiredParams, optionalParams } = FlowMcpCli.#extractParameterDetails( { main, routeName } )
+        const { example } = FlowMcpCli.#generateCallExample( { 'toolName': toolId, requiredParams } )
+
+        const allParams = [ ...requiredParams, ...optionalParams ]
+        const paramRows = allParams
+            .map( ( param ) => {
+                const { key, type, isEnum, enumExamples, listRef } = param
+                const isRequired = requiredParams
+                    .some( ( rp ) => rp[ 'key' ] === key )
+                const required = isRequired ? 'Yes' : 'No'
+                const typeDisplay = isEnum && listRef
+                    ? `enum (${listRef})`
+                    : type
+
+                return `| ${key} | ${typeDisplay} | ${required} | — |`
+            } )
+            .join( '\n' )
+
+        const enumSections = allParams
+            .filter( ( p ) => p[ 'isEnum' ] && ( p[ 'listRef' ] || p[ 'enumExamples' ].length > 0 ) )
+            .map( ( p ) => {
+                if( p[ 'listRef' ] ) {
+                    return `### ${p[ 'key' ]} (${p[ 'listRef' ]})\nExamples: see \`flowmcp lists ${p[ 'listRef' ]}\``
+                }
+
+                return `### ${p[ 'key' ]}\nValues: ${p[ 'enumExamples' ].join( ', ' )}`
+            } )
+            .join( '\n\n' )
+
+        const description = route[ 'description' ] || main[ 'description' ] || ''
+
+        const sections = [
+            `# Skill: ${toolId}`,
+            '',
+            `> ${description}`,
+            '',
+            '## Meta',
+            `- ${meta}`,
+            '',
+            '## Parameters',
+            '',
+            '| Parameter | Type | Required | Default |',
+            '|-----------|------|----------|---------|',
+            paramRows,
+            ''
+        ]
+
+        if( enumSections.length > 0 ) {
+            sections.push( '## Enum Values', '', enumSections, '' )
+        }
+
+        sections.push(
+            '## Call',
+            '',
+            '```bash',
+            example,
+            '```',
+            ''
+        )
+
+        const content = sections
+            .flat()
+            .join( '\n' )
+
+        const result = {
+            'status': true,
+            toolId,
+            'content': content
         }
 
         return { result }
@@ -4354,6 +4800,10 @@ class FlowMcpCli {
             } )
         const nameSegments = lowerName.split( '_' )
 
+        if( queryTokens.length === 1 && lowerName === queryTokens[ 0 ] ) {
+            return { 'score': 100 }
+        }
+
         let totalScore = 0
 
         const allTokensMatch = queryTokens
@@ -4366,6 +4816,17 @@ class FlowMcpCli {
                 if( lowerTags.includes( token ) ) { tokenScore += 12 }
                 if( wordBoundary.test( lowerSchemaName ) ) { tokenScore += 8 }
                 if( wordBoundary.test( lowerDesc ) ) { tokenScore += 5 }
+
+                if( tokenScore === 0 ) {
+                    const segmentContains = nameSegments
+                        .some( ( seg ) => seg.includes( token ) )
+                    if( segmentContains ) { tokenScore += 8 }
+                }
+
+                if( tokenScore === 0 ) {
+                    const descContains = lowerDesc.includes( token )
+                    if( descContains ) { tokenScore += 3 }
+                }
 
                 totalScore += tokenScore
 
@@ -4381,6 +4842,125 @@ class FlowMcpCli {
         }
 
         return { 'score': totalScore }
+    }
+
+
+    static #extractMetaFlags( { main, routeName } ) {
+        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
+        const route = tools[ routeName ] || {}
+        const method = ( route[ 'method' ] || 'GET' ).toUpperCase()
+        const tags = main[ 'tags' ] || []
+        const serverParams = main[ 'requiredServerParams' ] || []
+
+        const flags = []
+
+        if( method === 'GET' ) {
+            flags.push( 'Read-only' )
+        } else {
+            flags.push( `${method}` )
+        }
+
+        if( serverParams.length > 0 ) {
+            flags.push( 'API-Key required' )
+        } else {
+            flags.push( 'No API-Key' )
+        }
+
+        const hasCacheTtl = tags
+            .some( ( tag ) => tag.startsWith( 'cacheTtl' ) )
+        if( hasCacheTtl ) {
+            flags.push( 'Cached' )
+        }
+
+        const meta = flags.join( ' | ' )
+
+        return { meta }
+    }
+
+
+    static #extractParameterDetails( { main, routeName } ) {
+        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
+        const route = tools[ routeName ] || {}
+        const parameters = route[ 'parameters' ] || []
+        const sharedListRefs = main[ 'sharedLists' ] || []
+
+        const requiredParams = []
+        const optionalParams = []
+
+        parameters
+            .forEach( ( param ) => {
+                const key = param?.[ 'position' ]?.[ 'key' ] || 'unknown'
+                const primitive = param?.[ 'z' ]?.[ 'primitive' ] || 'string()'
+                const options = param?.[ 'z' ]?.[ 'options' ] || []
+                const isOptional = options
+                    .some( ( opt ) => opt.startsWith( 'optional' ) )
+
+                const typeMatch = primitive.match( /^(\w+)\(/ )
+                const type = typeMatch ? typeMatch[ 1 ] : 'string'
+
+                const isEnum = primitive.startsWith( 'enum(' )
+                let enumExamples = []
+                let listRef = null
+
+                if( isEnum ) {
+                    const enumContent = primitive.slice( 5, -1 )
+                    const templateMatch = enumContent.match( /\{\{(\w+):(\w+)\}\}/ )
+
+                    if( templateMatch ) {
+                        const listName = templateMatch[ 1 ]
+                        listRef = listName
+                            .replace( /([a-z0-9])([A-Z])/g, '$1-$2' )
+                            .toLowerCase()
+                    } else {
+                        enumExamples = enumContent
+                            .split( ',' )
+                            .map( ( v ) => v.trim().replace( /^'|'$/g, '' ) )
+                            .slice( 0, 5 )
+                    }
+                }
+
+                const entry = { key, type, isEnum, enumExamples, listRef }
+
+                if( isOptional ) {
+                    optionalParams.push( entry )
+                } else {
+                    requiredParams.push( entry )
+                }
+            } )
+
+        return { requiredParams, optionalParams }
+    }
+
+
+    static #generateCallExample( { toolName, requiredParams } ) {
+        const paramParts = requiredParams
+            .map( ( param ) => {
+                const { key, type, enumExamples } = param
+
+                if( type === 'number' ) {
+                    return `"${key}":1`
+                }
+
+                if( type === 'boolean' ) {
+                    return `"${key}":true`
+                }
+
+                if( enumExamples && enumExamples.length > 0 ) {
+                    return `"${key}":"${enumExamples[ 0 ]}"`
+                }
+
+                return `"${key}":"<${key}>"`
+            } )
+
+        let example = ''
+
+        if( paramParts.length > 0 ) {
+            example = `flowmcp call ${toolName} '{${paramParts.join( ',' )}}'`
+        } else {
+            example = `flowmcp call ${toolName}`
+        }
+
+        return { example }
     }
 
 

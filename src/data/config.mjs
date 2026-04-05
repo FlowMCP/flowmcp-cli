@@ -25,5 +25,56 @@ const appConfig = {
     'cacheDirName': 'cache'
 }
 
+const catalogCategories = [
+    {
+        'name': 'Blockchain EVM',
+        'match': [ 'etherscan', 'moralis', 'alchemy', 'infura', 'bscscan', 'blocknative', 'goldrush', 'ethers', 'ethscriptions', 'beaconchain', 'tenderly', 'sourcify', 'avalanche', 'chainlink', 'chainlist', 'wormholescan', 'bicscan' ]
+    },
+    {
+        'name': 'Blockchain Solana',
+        'match': [ 'solanatracker', 'solscan', 'solsniffer', 'jupiter', 'rugcheck', 'blockberry' ]
+    },
+    {
+        'name': 'DeFi',
+        'match': [ 'aave', 'uniswap', 'defillama', 'dexscreener', 'bridgerates', 'llama', 'debank', 'dexpaprika', 'oneinch', 'coinbase', 'safeglobal' ]
+    },
+    {
+        'name': 'NFT & Identity',
+        'match': [ 'lukso', 'ens', 'poap', 'spaceid', 'profilejump', 'passport', 'goldsky', 'nina' ]
+    },
+    {
+        'name': 'Crypto Data',
+        'match': [ 'coingecko', 'coincap', 'coinmarketcap', 'cryptodata', 'cryptopanic', 'cryptorank', 'cryptowizards', 'cryptoorderbook', 'ohlcv', 'taapi', 'indicator', 'honeypot', 'bitget', 'simdune' ]
+    },
+    {
+        'name': 'Analytics',
+        'match': [ 'dune', 'santiment', 'chartimg', 'polymarket', 'thegraph' ]
+    },
+    {
+        'name': 'Government DE',
+        'match': [ 'arbeitsagentur', 'autobahn', 'dashboard', 'digital', 'feiertage', 'govdata', 'klinikatlas', 'mudab', 'oeffentliche', 'itausschreibung', 'pegelonline', 'pflanzenschutz', 'reisewarnungen', 'smard', 'strahlenschutz', 'stolpersteine', 'umweltbundesamt', 'zvg', 'berlin', 'vag', 'ecovisio' ]
+    },
+    {
+        'name': 'Government EU',
+        'match': [ 'epo', 'ted' ]
+    },
+    {
+        'name': 'Weather & Geo',
+        'match': [ 'dwd', 'geoapify', 'overpass' ]
+    },
+    {
+        'name': 'Web3 Social',
+        'match': [ 'snapshot', 'tally', 'talent', 'memorylol', 'twitter', 'reddit', 'medium', 'cointelegraph' ]
+    },
+    {
+        'name': 'News & Media',
+        'match': [ 'newsapi', 'newsdata', 'tagesschau', 'hnrss' ]
+    },
+    {
+        'name': 'Dev Tools & Utilities',
+        'match': [ 'swaggerhub', 'mcpregistry', 'pinata', 'context', 'webcareer', 'xpayment', 'dip', 'blockchaininfo', 'mina', 'chainlinkmulticall' ]
+    }
+]
 
-export { appConfig }
+
+export { appConfig, catalogCategories }
