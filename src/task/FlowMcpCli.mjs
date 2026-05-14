@@ -7728,6 +7728,374 @@ allowlist, migrate-config, etc.).
             return { result }
         }
     }
+
+
+    static #parseSpecId( { specId } ) {
+        if( typeof specId !== 'string' || specId.length === 0 ) {
+            return { 'valid': false, 'error': 'Spec-ID must be a non-empty string' }
+        }
+
+        const parts = specId.split( '/' )
+        const slashCount = parts.length - 1
+
+        if( slashCount === 1 ) {
+            const [ namespace, name ] = parts
+
+            return { 'valid': true, namespace, 'type': 'schema', name }
+        }
+
+        if( slashCount === 2 ) {
+            const [ namespace, type, name ] = parts
+            const allowedTypes = [ 'tool', 'resource', 'prompt', 'skill', 'selection', 'agent' ]
+            const isAllowed = allowedTypes
+                .find( ( t ) => {
+                    const matches = t === type
+
+                    return matches
+                } )
+
+            if( !isAllowed ) {
+                return { 'valid': false, 'error': `Unknown Spec-ID type "${type}": expected one of tool|resource|prompt|skill|selection|agent` }
+            }
+
+            return { 'valid': true, namespace, type, name }
+        }
+
+        return { 'valid': false, 'error': `Invalid Spec-ID format: ${specId}` }
+    }
+
+
+    static async #buildNamespaceIndex( { cwd } ) {
+        const { schemas } = await FlowMcpCli.#loadAllSchemas()
+
+        const tools = {}
+        const resources = {}
+        const prompts = {}
+        const skills = {}
+        const containers = {}
+        const collisions = []
+        const schemasSkipped = []
+
+        schemas
+            .forEach( ( schemaEntry ) => {
+                const { main, file, source } = schemaEntry
+
+                if( !main ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ]
+
+                if( !namespace ) {
+                    schemasSkipped.push( { file, source, 'reason': 'missing namespace' } )
+
+                    return
+                }
+
+                const schemaTools = main[ 'tools' ] || main[ 'routes' ] || {}
+
+                Object.keys( schemaTools )
+                    .forEach( ( routeName ) => {
+                        const specId = `${namespace}/tool/${routeName}`
+
+                        if( tools[ specId ] ) {
+                            const existing = collisions
+                                .find( ( c ) => {
+                                    const matches = c[ 'specId' ] === specId
+
+                                    return matches
+                                } )
+
+                            if( existing ) {
+                                existing[ 'files' ].push( file )
+                            } else {
+                                collisions.push( { specId, 'files': [ tools[ specId ][ 'file' ], file ] } )
+                            }
+                        } else {
+                            tools[ specId ] = { file, source, routeName }
+                        }
+                    } )
+
+                const schemaResources = main[ 'resources' ] || {}
+
+                Object.keys( schemaResources )
+                    .forEach( ( resourceName ) => {
+                        const specId = `${namespace}/resource/${resourceName}`
+                        resources[ specId ] = { file, source, resourceName }
+                    } )
+
+                const schemaPrompts = main[ 'prompts' ] || {}
+
+                Object.keys( schemaPrompts )
+                    .forEach( ( promptName ) => {
+                        const specId = `${namespace}/prompt/${promptName}`
+                        prompts[ specId ] = { file, source, promptName }
+                    } )
+
+                const schemaSkills = main[ 'skills' ] || []
+
+                schemaSkills
+                    .forEach( ( skill ) => {
+                        const skillName = skill[ 'name' ]
+
+                        if( !skillName ) {
+                            return
+                        }
+
+                        const specId = `${namespace}/skill/${skillName}`
+                        skills[ specId ] = { file, source, skillName }
+                    } )
+            } )
+
+        const containerGroups = {}
+
+        schemas
+            .forEach( ( schemaEntry ) => {
+                const { main, file, source } = schemaEntry
+
+                if( !main ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ]
+
+                if( !namespace ) {
+                    return
+                }
+
+                const containerName = file.replace( /\.mjs$/, '' ).replace( /-part\d+$/, '' )
+                const containerKey = `${namespace}/${containerName}`
+
+                if( !containerGroups[ containerKey ] ) {
+                    containerGroups[ containerKey ] = { namespace, containerName, source, 'files': [] }
+                }
+
+                containerGroups[ containerKey ][ 'files' ].push( file )
+            } )
+
+        Object.keys( containerGroups )
+            .forEach( ( key ) => {
+                const { files } = containerGroups[ key ]
+                containers[ key ] = { files }
+            } )
+
+        const index = {
+            tools,
+            resources,
+            prompts,
+            skills,
+            containers,
+            collisions,
+            'builtAt': new Date().toISOString(),
+            'schemaCount': schemas.length
+        }
+
+        return { index }
+    }
+
+
+    static async #cachePath( { cwd } ) {
+        const cachePath = join( cwd, '.flowmcp', 'namespace-index.json' )
+        await mkdir( join( cwd, '.flowmcp' ), { recursive: true } )
+
+        return { cachePath }
+    }
+
+
+    static async #writeNamespaceIndexCache( { cwd, index } ) {
+        try {
+            const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
+            await mkdir( dirname( cachePath ), { recursive: true } )
+            await writeFile( cachePath, JSON.stringify( index, null, 4 ), 'utf-8' )
+
+            return { 'success': true, 'path': cachePath }
+        } catch( err ) {
+            return { 'success': false, 'error': err.message }
+        }
+    }
+
+
+    static async #readNamespaceIndexCache( { cwd } ) {
+        try {
+            const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
+
+            let content
+            try {
+                content = await readFile( cachePath, 'utf-8' )
+            } catch {
+                return { 'exists': false, 'index': null }
+            }
+
+            try {
+                const index = JSON.parse( content )
+
+                return { 'exists': true, index, 'stale': false }
+            } catch( parseErr ) {
+                return { 'exists': true, 'index': null, 'stale': true, 'error': parseErr.message }
+            }
+        } catch( err ) {
+            return { 'exists': false, 'index': null, 'error': err.message }
+        }
+    }
+
+
+    static async #invalidateNamespaceIndexCache( { cwd } ) {
+        try {
+            const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
+
+            try {
+                await unlink( cachePath )
+            } catch( unlinkErr ) {
+                if( unlinkErr.code !== 'ENOENT' ) {
+                    return { 'success': false, 'error': unlinkErr.message }
+                }
+            }
+
+            return { 'success': true }
+        } catch( err ) {
+            return { 'success': false, 'error': err.message }
+        }
+    }
+
+
+    static async getNamespaceIndex( { cwd, forceRebuild = false } ) {
+        if( forceRebuild ) {
+            const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
+            await FlowMcpCli.#writeNamespaceIndexCache( { cwd, index } )
+
+            return { index, 'source': 'rebuilt' }
+        }
+
+        const { exists, index: cachedIndex, stale } = await FlowMcpCli.#readNamespaceIndexCache( { cwd } )
+
+        if( exists && cachedIndex && !stale ) {
+            return { 'index': cachedIndex, 'source': 'cache' }
+        }
+
+        const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
+        await FlowMcpCli.#writeNamespaceIndexCache( { cwd, index } )
+
+        return { index, 'source': 'rebuilt' }
+    }
+
+
+    static async __testOnly_buildIndex( { schemas } ) {
+        const tools = {}
+        const resources = {}
+        const prompts = {}
+        const skills = {}
+        const containers = {}
+        const collisions = []
+
+        schemas
+            .forEach( ( schemaEntry ) => {
+                const { main, file, source } = schemaEntry
+
+                if( !main ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ]
+
+                if( !namespace ) {
+                    return
+                }
+
+                const schemaTools = main[ 'tools' ] || main[ 'routes' ] || {}
+
+                Object.keys( schemaTools )
+                    .forEach( ( routeName ) => {
+                        const specId = `${namespace}/tool/${routeName}`
+
+                        if( tools[ specId ] ) {
+                            const existing = collisions
+                                .find( ( c ) => {
+                                    const matches = c[ 'specId' ] === specId
+
+                                    return matches
+                                } )
+
+                            if( existing ) {
+                                existing[ 'files' ].push( file )
+                            } else {
+                                collisions.push( { specId, 'files': [ tools[ specId ][ 'file' ], file ] } )
+                            }
+                        } else {
+                            tools[ specId ] = { file, source, routeName }
+                        }
+                    } )
+
+                const schemaResources = main[ 'resources' ] || {}
+
+                Object.keys( schemaResources )
+                    .forEach( ( resourceName ) => {
+                        const specId = `${namespace}/resource/${resourceName}`
+                        resources[ specId ] = { file, source, resourceName }
+                    } )
+
+                const schemaPrompts = main[ 'prompts' ] || {}
+
+                Object.keys( schemaPrompts )
+                    .forEach( ( promptName ) => {
+                        const specId = `${namespace}/prompt/${promptName}`
+                        prompts[ specId ] = { file, source, promptName }
+                    } )
+
+                const schemaSkills = main[ 'skills' ] || []
+
+                schemaSkills
+                    .forEach( ( skill ) => {
+                        const skillName = skill[ 'name' ]
+
+                        if( !skillName ) {
+                            return
+                        }
+
+                        const specId = `${namespace}/skill/${skillName}`
+                        skills[ specId ] = { file, source, skillName }
+                    } )
+            } )
+
+        const containerGroups = {}
+
+        schemas
+            .forEach( ( schemaEntry ) => {
+                const { main, file } = schemaEntry
+
+                if( !main || !main[ 'namespace' ] ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ]
+                const containerName = file.replace( /\.mjs$/, '' ).replace( /-part\d+$/, '' )
+                const containerKey = `${namespace}/${containerName}`
+
+                if( !containerGroups[ containerKey ] ) {
+                    containerGroups[ containerKey ] = { 'files': [] }
+                }
+
+                containerGroups[ containerKey ][ 'files' ].push( file )
+            } )
+
+        Object.keys( containerGroups )
+            .forEach( ( key ) => {
+                const { files } = containerGroups[ key ]
+                containers[ key ] = { files }
+            } )
+
+        const index = {
+            tools,
+            resources,
+            prompts,
+            skills,
+            containers,
+            collisions,
+            'builtAt': new Date().toISOString(),
+            'schemaCount': schemas.length
+        }
+
+        return { index }
+    }
 }
 
 
