@@ -26,7 +26,9 @@ const args = parseArgs( {
     }
 } )
 
-const { positionals, values } = args
+const { positionals: rawPositionals, values } = args
+const isDevPrefix = rawPositionals[ 0 ] === 'dev' && rawPositionals.length >= 2 && rawPositionals[ 1 ] !== '--help'
+const positionals = isDevPrefix ? rawPositionals.slice( 1 ) : rawPositionals
 const command = positionals[ 0 ]
 const schemaPath = positionals[ 1 ]
 const cwd = process.cwd()
@@ -35,7 +37,24 @@ const output = ( { result } ) => {
     process.stdout.write( JSON.stringify( result, null, 4 ) + '\n' )
 }
 
+const isDevHelp = () => {
+    return command === 'dev' && ( positionals.length === 1 || positionals[ 1 ] === '--help' || values[ 'help' ] )
+}
+
+
 const runCommand = async () => {
+    if( command === 'how-to' ) {
+        await FlowMcpCli.howTo( { cwd } )
+
+        return true
+    }
+
+    if( command === 'dev' && isDevHelp() ) {
+        FlowMcpCli.devHelp()
+
+        return true
+    }
+
     if( command === 'init' ) {
         await FlowMcpCli.init( { cwd } )
 

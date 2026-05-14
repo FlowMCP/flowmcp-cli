@@ -5717,6 +5717,7 @@ class FlowMcpCli {
 
 Setup:
   init                                Interactive setup (creates config, sets .env path)
+  how-to                              Embedded usage prompt for CLAUDE.md
 
 Tool Discovery:
   search <query>                      Find available tools
@@ -5724,40 +5725,16 @@ Tool Discovery:
   remove <tool-name>                  Deactivate a tool
   list                                Show active tools
 
-Schema Management:
-  schemas                             List all imported sources and schemas
-  import <github-url>                 Import schemas from a GitHub repository
-  import-registry <url>               Import schemas from a custom registry URL
-  update [source-name]                Update schemas from remote registries
-  status                              Show config, sources, groups and health info
-
-Group Management:
-  group append <name> --tools <list>  Add tools to a group (creates group if needed)
-  group remove <name> --tools <list>  Remove tools from a group
-  group list                          List all groups and their tools
-  group set-default <name>            Set the default group
-
-Prompt Management:
-  prompt list                         List all prompts across all groups
-  prompt search <query>               Search prompts by title or description
-  prompt show <group>/<name>          Display prompt file content
-  prompt add <group> <name> --file <path>  Add a prompt to a group
-  prompt remove <group> <name>        Remove a prompt from a group
-
-Validation & Testing:
-  validate [path]                     Validate schema(s) structurally
-  test project                        Test all schemas in default/specified group
-  test user                           Test all user schemas
-  test single <path>                  Test a single schema file
-
-Resource Management:
-  resource create <schema-path>       Create SQLite databases for file-based resources
-  resource migrate                    Migrate old database paths to new origin system
-
 Execution:
   run                                 Start MCP server (stdio) for default group
   call list-tools                     List available tools from default group
   call <tool-name> [json]             Execute a tool call
+
+Development & Schema Maintenance:
+  ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
+                                      (validate, test, grade, allowlist, migrate-config,
+                                       selection, lists, schemas, import, update, status,
+                                       group, prompt, resource, etc.)
 
 Options:
   --tools <list>              Comma-separated tool refs (source/file.mjs::route)
@@ -5769,15 +5746,132 @@ Options:
   --dry-run                   Preview changes without applying
   --help, -h                  Show this help message
 
-Tool Ref Format:
-  source/file.mjs::routeName  Single tool from a schema
-  source/file.mjs             All tools from a schema
+ID Format (v4):
+  namespace/tool/name         Single tool   (2 slashes)
+  namespace/schema-name       All tools from a schema  (1 slash)
 
 Note: Run "${cmd} init" first. This is the only interactive command.
       All other commands are designed for AI agents (non-interactive, JSON I/O).
 `
 
         process.stdout.write( helpText )
+    }
+
+
+    static #printDevHelpText() {
+        const cmd = appConfig[ 'cliCommand' ]
+        const helpText = `Usage: ${cmd} dev <subcommand> [options]
+
+Development & Schema Maintenance commands. Tier 2 — used by schema authors
+and maintainers. AI agents typically use Tier 1 commands (${cmd} --help).
+
+Validation & Testing:
+  dev validate [path]                 Validate schema(s) structurally
+  dev test project                    Test all schemas in default/specified group
+  dev test user                       Test all user schemas
+  dev test single <path>              Test a single schema file
+  dev grade <path>                    Generate Grade Report (deterministic + LLM-eval)
+
+Configuration:
+  dev allowlist --add <library>       Add library to allowlist (flowmcp.config.json)
+  dev allowlist --remove <library>    Remove library from allowlist
+  dev allowlist --list                Show current allowlist
+  dev migrate-config                  Migrate config from v3 path::route format to v4 spec-IDs
+
+Schema Management:
+  dev schemas                         List all imported sources and schemas
+  dev import <github-url>             Import schemas from a GitHub repository
+  dev import-registry <url>           Import schemas from a custom registry URL
+  dev import-agent <url>              Import an agent manifest
+  dev update [source-name]            Update schemas from remote registries
+  dev status                          Show config, sources, groups and health info
+
+Group Management:
+  dev group append <name> --tools <list>     Add tools to a group
+  dev group remove <name> --tools <list>     Remove tools from a group
+  dev group list                             List all groups
+  dev group set-default <name>               Set the default group
+
+Prompt Management:
+  dev prompt list                            List all prompts across all groups
+  dev prompt search <query>                  Search prompts by title/description
+  dev prompt show <group>/<name>             Display prompt file content
+  dev prompt add <group> <name> --file <p>   Add a prompt to a group
+  dev prompt remove <group> <name>           Remove a prompt from a group
+
+Resource Management:
+  dev resource create <schema-path>          Create SQLite DBs for file-based resources
+  dev resource migrate                       Migrate old DB paths to new origin system
+
+Selection Management (v4):
+  dev selection list                         List all selections
+  dev selection show <name>                  Show selection details
+  dev selection validate <path>              Validate a selection file
+
+Shared Lists (v4):
+  dev lists list                             List all shared lists
+  dev lists show <name>                      Show shared list details
+  dev lists add-entry <name> <jsonEntry>     Add an entry to a shared list
+  dev lists refs <alias>                     Backward-lookup: who references this alias?
+
+Other:
+  dev cache <subcommand>                     Manage tool cache
+  dev validate-catalog                       Validate a catalog file
+  dev skill <subcommand>                     Skill management
+  dev catalog <subcommand>                   Catalog management
+  dev reload                                 Reload schemas
+
+Run "${cmd} --help" for Tier 1 commands (agent-facing).
+`
+
+        process.stdout.write( helpText )
+    }
+
+
+    static devHelp() {
+        FlowMcpCli.#printDevHelpText()
+
+        return { result: { status: true } }
+    }
+
+
+    static async howTo( { cwd: _cwd } = {} ) {
+        const cmd = appConfig[ 'cliCommand' ]
+        const text = `# ${cmd} — How to use
+
+700+ data tools. Search, activate, call.
+
+## Workflow
+
+1. \`${cmd} search <topic>\`                Find tools
+2. \`${cmd} add <id>\`                      Activate
+3. \`${cmd} call <id> [args]\`              Get data
+
+## ID Format
+
+  namespace/tool/name                      Single tool  (2 slashes)
+  namespace/schema-name                    All tools from a schema  (1 slash)
+
+## Examples
+
+\`\`\`
+${cmd} search ethereum blocks
+${cmd} add etherscan/tool/getContractAbi
+${cmd} call etherscan/tool/getContractAbi '{"address":"0x...","chain":"ETHEREUM_MAINNET"}'
+
+${cmd} add moralis/nftApi
+${cmd} list
+\`\`\`
+
+## Development Commands
+
+Run \`${cmd} dev --help\` for development commands (validate, test, grade,
+allowlist, migrate-config, etc.).
+`
+
+        process.stdout.write( text )
+
+        return { result: { status: true } }
     }
 
 
