@@ -8640,6 +8640,149 @@ allowlist, migrate-config, etc.).
 
         return { result }
     }
+
+
+    static async allowlist( { cwd, action, library } ) {
+        const configPath = join( cwd, 'flowmcp.config.json' )
+        const validActions = [ 'add', 'remove', 'list' ]
+
+        if( !validActions.includes( action ) ) {
+            const result = {
+                'status': false,
+                'error': `Invalid action "${action}".`,
+                'fix': 'Use: add, remove, or list',
+                configPath
+            }
+
+            return { result }
+        }
+
+        if( action !== 'list' ) {
+            if( typeof library !== 'string' || library.trim() === '' ) {
+                const result = {
+                    'status': false,
+                    'error': 'Library name must be a non-empty string.',
+                    'fix': `Provide a valid npm package name, e.g. "talib" or "@scope/pkg"`,
+                    configPath
+                }
+
+                return { result }
+            }
+
+            const validPattern = /^(@[a-z0-9-_]+\/)?[a-z0-9-_\.]+$/i
+            const hasDangerousChars = /[<>|&;`$\\\/\.\.]/.test( library ) && library.includes( '..' )
+            const isPathTraversal = library.includes( '..' ) || library.startsWith( '/' ) || library.startsWith( '.' )
+
+            if( isPathTraversal || !validPattern.test( library ) ) {
+                const result = {
+                    'status': false,
+                    'error': `Invalid library name "${library}". Only npm-style package names are allowed.`,
+                    'fix': 'Use letters, digits, hyphens, underscores. Scoped names like @scope/pkg are allowed.',
+                    configPath
+                }
+
+                return { result }
+            }
+        }
+
+        let config = { 'allowlist': [] }
+
+        try {
+            const raw = await readFile( configPath, 'utf-8' )
+            config = JSON.parse( raw )
+
+            if( !config[ 'allowlist' ] || !Array.isArray( config[ 'allowlist' ] ) ) {
+                config[ 'allowlist' ] = []
+            }
+        } catch {
+            // File does not exist or is invalid — use default structure
+        }
+
+        const configAllowlist = config[ 'allowlist' ]
+
+        if( action === 'add' ) {
+            const alreadyPresent = configAllowlist.includes( library )
+
+            if( !alreadyPresent ) {
+                configAllowlist.push( library )
+                config[ 'allowlist' ] = configAllowlist
+                await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+            }
+
+            const result = {
+                'status': true,
+                action,
+                library,
+                'added': !alreadyPresent,
+                'allowlist': configAllowlist,
+                configPath
+            }
+
+            return { result }
+        }
+
+        if( action === 'remove' ) {
+            const wasPresent = configAllowlist.includes( library )
+            const updatedAllowlist = configAllowlist
+                .filter( ( entry ) => {
+                    const shouldKeep = entry !== library
+
+                    return shouldKeep
+                } )
+
+            config[ 'allowlist' ] = updatedAllowlist
+            await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+
+            const result = {
+                'status': true,
+                action,
+                library,
+                'removed': wasPresent,
+                'allowlist': updatedAllowlist,
+                configPath
+            }
+
+            return { result }
+        }
+
+        // action === 'list'
+        let defaultAllowlist = []
+        let mergedAllowlist = [ ...configAllowlist ]
+        let hasMergeAllowlist = false
+
+        try {
+            const { LibraryLoader } = await import( 'flowmcp/v2' )
+            hasMergeAllowlist = typeof LibraryLoader.mergeAllowlist === 'function'
+            const hasGetDefault = typeof LibraryLoader.getDefaultAllowlist === 'function'
+
+            if( hasGetDefault ) {
+                const { defaultAllowlist: defaults } = LibraryLoader.getDefaultAllowlist()
+                defaultAllowlist = defaults || []
+            }
+
+            if( hasMergeAllowlist ) {
+                const { mergedAllowlist: merged } = LibraryLoader.mergeAllowlist( { 'extraAllowlist': configAllowlist } )
+                mergedAllowlist = merged || [ ...defaultAllowlist, ...configAllowlist ]
+            } else {
+                console.warn( 'LibraryLoader.mergeAllowlist not available in installed flowmcp-core; allowlist extensions stored in flowmcp.config.json will be honored once core is updated.' )
+                mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
+            }
+        } catch {
+            mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
+        }
+
+        const result = {
+            'status': true,
+            action,
+            'default': defaultAllowlist,
+            'extensions': configAllowlist,
+            'merged': mergedAllowlist,
+            hasMergeAllowlist,
+            configPath
+        }
+
+        return { result }
+    }
 }
 
 

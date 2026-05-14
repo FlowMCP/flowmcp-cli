@@ -380,6 +380,31 @@ const runCommand = async () => {
         return true
     }
 
+    if( command === 'allowlist' ) {
+        const subCommand = positionals[ 1 ]
+        const validSubCommands = [ 'add', 'remove', 'list' ]
+
+        if( !subCommand || !validSubCommands.includes( subCommand ) ) {
+            const result = {
+                'status': false,
+                'error': 'Missing or unknown allowlist sub-command.',
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev allowlist add <library>, ${appConfig[ 'cliCommand' ]} dev allowlist remove <library>, or ${appConfig[ 'cliCommand' ]} dev allowlist list`
+            }
+            output( { result } )
+
+            return true
+        }
+
+        const library = ( subCommand === 'add' || subCommand === 'remove' )
+            ? positionals[ 2 ]
+            : null
+
+        const { result } = await FlowMcpCli.allowlist( { cwd, 'action': subCommand, library } )
+        output( { result } )
+
+        return true
+    }
+
     if( command === 'resource' ) {
         const subCommand = positionals[ 1 ]
         const basis = values[ 'basis' ] || 'flowmcp'
