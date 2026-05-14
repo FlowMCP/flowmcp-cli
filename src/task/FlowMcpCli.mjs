@@ -704,23 +704,97 @@ class FlowMcpCli {
 
         const schemasBaseDir = FlowMcpCli.#schemasDir()
         const invalidRefs = []
+        const expandedRefs = []
 
         await toolRefs
             .reduce( ( promise, ref ) => promise.then( async () => {
-                const { schemaRef, routeName } = FlowMcpCli.#parseToolRef( { 'toolRef': ref } )
-                const filePath = join( schemasBaseDir, schemaRef )
+                if( FlowMcpCli.#isSpecId( { 'ref': ref } ) ) {
+                    const { valid, namespace, type, name: specName, error: parseError } = FlowMcpCli.#parseSpecId( { 'specId': ref } )
 
-                try {
-                    await access( filePath, constants.F_OK )
+                    if( !valid ) {
+                        invalidRefs.push( ref )
 
-                    if( routeName ) {
-                        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
-                        if( !main || !main[ 'routes' ] || !main[ 'routes' ][ routeName ] ) {
-                            invalidRefs.push( ref )
-                        }
+                        return
                     }
-                } catch {
-                    invalidRefs.push( ref )
+
+                    const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+
+                    if( type === 'tool' ) {
+                        const specId = `${namespace}/tool/${specName}`
+                        if( !index[ 'tools' ][ specId ] ) {
+                            invalidRefs.push( ref )
+
+                            return
+                        }
+
+                        expandedRefs.push( specId )
+                    } else if( type === 'schema' ) {
+                        const containerKey = `${namespace}/${specName}`
+                        const container = index[ 'containers' ][ containerKey ]
+
+                        if( !container ) {
+                            invalidRefs.push( ref )
+
+                            return
+                        }
+
+                        const toolEntries = Object.entries( index[ 'tools' ] )
+                        const containerSource = toolEntries
+                            .find( ( [ , entry ] ) => {
+                                const matchesFile = container[ 'files' ]
+                                    .find( ( f ) => {
+                                        const isSame = f === entry[ 'file' ]
+
+                                        return isSame
+                                    } )
+
+                                return !!matchesFile
+                            } )
+
+                        const source = containerSource ? containerSource[ 1 ][ 'source' ] : null
+
+                        await container[ 'files' ]
+                            .reduce( ( fp, file ) => fp.then( async () => {
+                                const schemaRef = source ? `${source}/${file}` : file
+                                const filePath = join( schemasBaseDir, schemaRef )
+                                const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                                if( main ) {
+                                    const routeMap = main[ 'routes' ] || main[ 'tools' ] || {}
+                                    const ns = main[ 'namespace' ] || namespace
+
+                                    Object.keys( routeMap )
+                                        .forEach( ( routeName ) => {
+                                            const primitiveId = `${ns}/tool/${routeName}`
+                                            expandedRefs.push( primitiveId )
+                                        } )
+                                } else {
+                                    invalidRefs.push( ref )
+                                }
+                            } ), Promise.resolve() )
+                    } else {
+                        invalidRefs.push( ref )
+                    }
+                } else {
+                    const { schemaRef, routeName } = FlowMcpCli.#parseToolRef( { 'toolRef': ref } )
+                    const filePath = join( schemasBaseDir, schemaRef )
+
+                    try {
+                        await access( filePath, constants.F_OK )
+
+                        if( routeName ) {
+                            const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                            if( !main || !main[ 'routes' ] || !main[ 'routes' ][ routeName ] ) {
+                                invalidRefs.push( ref )
+
+                                return
+                            }
+                        }
+
+                        expandedRefs.push( ref )
+                    } catch {
+                        invalidRefs.push( ref )
+                    }
                 }
             } ), Promise.resolve() )
 
@@ -732,6 +806,8 @@ class FlowMcpCli {
 
             return { result }
         }
+
+        const resolvedRefs = expandedRefs
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
         const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
@@ -745,8 +821,8 @@ class FlowMcpCli {
             ? ( config[ 'groups' ][ name ][ 'tools' ] || config[ 'groups' ][ name ][ 'schemas' ] || [] )
             : []
 
-        const merged = [ ...new Set( [ ...existingTools, ...toolRefs ] ) ]
-        const added = toolRefs
+        const merged = [ ...new Set( [ ...existingTools, ...resolvedRefs ] ) ]
+        const added = resolvedRefs
             .filter( ( ref ) => {
                 const isNew = !existingTools.includes( ref )
 
@@ -2506,6 +2582,42 @@ class FlowMcpCli {
             return { result }
         }
 
+        let resolvedToolName = toolName
+
+        if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
+            const { valid, namespace, type, name: specName } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
+
+            if( !valid ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Invalid Spec-ID "${toolName}".`,
+                    'fix': `Use format: <namespace>/tool/<name>`
+                } )
+
+                return { result }
+            }
+
+            if( type === 'schema' ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Cannot call a container Spec-ID "${toolName}". Specify a tool Spec-ID: <namespace>/tool/<name>`,
+                    'fix': `Use format: ${namespace}/tool/<route-name>`
+                } )
+
+                return { result }
+            }
+
+            if( type !== 'tool' ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Spec-ID type "${type}" cannot be called directly.`,
+                    'fix': `Only tool Spec-IDs are callable: <namespace>/tool/<name>`
+                } )
+
+                return { result }
+            }
+
+            const { toolName: mcpToolName } = FlowMcpCli.#buildToolName( { 'routeName': specName, 'namespace': namespace } )
+            resolvedToolName = mcpToolName
+        }
+
         let resolvedSchemas = null
 
         if( !group ) {
@@ -2587,7 +2699,7 @@ class FlowMcpCli {
                         try {
                             const { toolName: candidateName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
 
-                            if( candidateName === toolName ) {
+                            if( candidateName === resolvedToolName ) {
                                 matchedMain = main
                                 matchedHandlersFn = handlersFn
                                 matchedFile = file
@@ -2895,6 +3007,11 @@ class FlowMcpCli {
                     // Schema could not be loaded — return without enrichment
                 }
 
+                const toolType = tool[ 'type' ] || 'tool'
+                if( tool[ 'namespace' ] && tool[ 'routeName' ] ) {
+                    tool[ 'specId' ] = `${tool[ 'namespace' ]}/${toolType}/${tool[ 'routeName' ]}`
+                }
+
                 delete tool[ 'schemaRef' ]
                 delete tool[ 'routeName' ]
                 acc.push( tool )
@@ -2936,6 +3053,162 @@ class FlowMcpCli {
                 'error': 'Missing tool name.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} add <tool-name>. Use ${appConfig[ 'cliCommand' ]} search <query> to find tools.`
             } )
+
+            return { result }
+        }
+
+        if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
+            const { valid, namespace, type, name: specName, error: parseError } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
+
+            if( !valid ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Invalid Spec-ID: ${parseError}`,
+                    'fix': `Use format: <namespace>/tool/<name> or <namespace>/<schema-name>`
+                } )
+
+                return { result }
+            }
+
+            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+
+            let refsToAdd = []
+
+            if( type === 'tool' ) {
+                const specId = `${namespace}/tool/${specName}`
+                if( !index[ 'tools' ][ specId ] ) {
+                    const result = FlowMcpCli.#error( {
+                        'error': `Spec-ID "${toolName}" not found in namespace index.`,
+                        'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> to find available tools.`
+                    } )
+
+                    return { result }
+                }
+
+                refsToAdd = [ specId ]
+            } else if( type === 'schema' ) {
+                const containerKey = `${namespace}/${specName}`
+                const container = index[ 'containers' ][ containerKey ]
+
+                if( !container ) {
+                    const result = FlowMcpCli.#error( {
+                        'error': `Container Spec-ID "${toolName}" not found in namespace index.`,
+                        'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> to find available schemas.`
+                    } )
+
+                    return { result }
+                }
+
+                const toolEntries = Object.entries( index[ 'tools' ] )
+                const containerSource = toolEntries
+                    .find( ( [ , entry ] ) => {
+                        const matchesFile = container[ 'files' ]
+                            .find( ( f ) => {
+                                const isSame = f === entry[ 'file' ]
+
+                                return isSame
+                            } )
+
+                        return !!matchesFile
+                    } )
+
+                const source = containerSource ? containerSource[ 1 ][ 'source' ] : null
+                const schemasBaseDir = FlowMcpCli.#schemasDir()
+
+                await container[ 'files' ]
+                    .reduce( ( fp, file ) => fp.then( async () => {
+                        const schemaRef = source ? `${source}/${file}` : file
+                        const filePath = join( schemasBaseDir, schemaRef )
+                        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        if( main ) {
+                            const routeMap = main[ 'routes' ] || main[ 'tools' ] || {}
+                            const ns = main[ 'namespace' ] || namespace
+
+                            Object.keys( routeMap )
+                                .forEach( ( routeName ) => {
+                                    const primitiveId = `${ns}/tool/${routeName}`
+                                    refsToAdd.push( primitiveId )
+                                } )
+                        }
+                    } ), Promise.resolve() )
+
+                if( refsToAdd.length === 0 ) {
+                    const result = FlowMcpCli.#error( {
+                        'error': `Container "${toolName}" expanded to zero tools.`,
+                        'fix': `Verify the schema files exist and have routes defined.`
+                    } )
+
+                    return { result }
+                }
+            } else {
+                const sliceKey = type === 'resource' ? 'resources'
+                    : type === 'prompt' ? 'prompts'
+                    : type === 'skill' ? 'skills'
+                    : null
+
+                if( !sliceKey || !index[ sliceKey ] ) {
+                    const result = FlowMcpCli.#error( {
+                        'error': `Spec-ID type "${type}" is not supported by the add command.`,
+                        'fix': `Only tool and schema Spec-IDs are supported.`
+                    } )
+
+                    return { result }
+                }
+
+                const specId = `${namespace}/${type}/${specName}`
+                if( !index[ sliceKey ][ specId ] ) {
+                    const result = FlowMcpCli.#error( {
+                        'error': `Spec-ID "${toolName}" not found in namespace index.`,
+                        'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> to find available tools.`
+                    } )
+
+                    return { result }
+                }
+
+                refsToAdd = [ specId ]
+            }
+
+            const localConfigDir = join( cwd, appConfig[ 'localConfigDirName' ] )
+            const localConfigPath = join( localConfigDir, 'config.json' )
+            const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+
+            let updatedConfig
+            if( !localConfig ) {
+                await mkdir( localConfigDir, { recursive: true } )
+                updatedConfig = {
+                    'root': `~/${appConfig[ 'globalConfigDirName' ]}`,
+                    'tools': [ ...refsToAdd ]
+                }
+            } else {
+                updatedConfig = localConfig
+
+                if( !updatedConfig[ 'tools' ] ) {
+                    updatedConfig[ 'tools' ] = []
+                }
+
+                refsToAdd
+                    .forEach( ( ref ) => {
+                        const alreadyExists = updatedConfig[ 'tools' ]
+                            .find( ( r ) => {
+                                const isDuplicate = r === ref
+
+                                return isDuplicate
+                            } )
+
+                        if( !alreadyExists ) {
+                            updatedConfig[ 'tools' ].push( ref )
+                        }
+                    } )
+            }
+
+            await writeFile( localConfigPath, JSON.stringify( updatedConfig, null, 4 ), 'utf-8' )
+
+            const result = {
+                'status': true,
+                'added': refsToAdd.length === 1 ? refsToAdd[ 0 ] : refsToAdd,
+                'specId': toolName,
+                'parameters': {}
+            }
 
             return { result }
         }
@@ -3144,7 +3417,21 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { schemas } = await FlowMcpCli.#resolveToolRefs( { toolRefs } )
+        const legacyRefs = toolRefs
+            .filter( ( ref ) => {
+                const isLegacy = !FlowMcpCli.#isSpecId( { 'ref': ref } )
+
+                return isLegacy
+            } )
+
+        const specIdRefs = toolRefs
+            .filter( ( ref ) => {
+                const isSpec = FlowMcpCli.#isSpecId( { 'ref': ref } )
+
+                return isSpec
+            } )
+
+        const { schemas } = await FlowMcpCli.#resolveToolRefs( { 'toolRefs': legacyRefs } )
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
@@ -3193,6 +3480,25 @@ class FlowMcpCli {
                         }
                     } )
             } )
+
+        if( specIdRefs.length > 0 ) {
+            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+
+            specIdRefs
+                .forEach( ( ref ) => {
+                    const toolEntry = index[ 'tools' ][ ref ]
+
+                    if( toolEntry ) {
+                        tools.push( {
+                            'name': ref,
+                            'specId': ref,
+                            'description': '',
+                            'tags': [],
+                            'parameters': {}
+                        } )
+                    }
+                } )
+        }
 
         const result = {
             'status': true,
@@ -4591,6 +4897,19 @@ class FlowMcpCli {
         const routeName = toolRef.slice( separatorIndex + 2 )
 
         return { schemaRef, routeName }
+    }
+
+
+    static #isSpecId( { ref } ) {
+        if( typeof ref !== 'string' ) {
+            return false
+        }
+
+        const hasLegacySep = ref.includes( '::' )
+        const hasSlash = ref.includes( '/' )
+        const isMjsPath = ref.endsWith( '.mjs' )
+
+        return !hasLegacySep && hasSlash && !isMjsPath
     }
 
 
