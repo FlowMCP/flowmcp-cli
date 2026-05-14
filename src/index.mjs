@@ -20,6 +20,7 @@ const args = parseArgs( {
         'file': { type: 'string' },
         'all': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
+        'global': { type: 'boolean' },
         'basis': { type: 'string' },
         'yes': { type: 'boolean', short: 'y' },
         'help': { type: 'boolean', short: 'h' }
@@ -365,6 +366,15 @@ const runCommand = async () => {
         const all = values[ 'all' ] || false
         const dryRun = values[ 'dry-run' ] || false
         const { result } = await FlowMcpCli.migrate( { 'schemaPath': targetPath, cwd, all, dryRun } )
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'migrate-config' ) {
+        const isGlobal = values[ 'global' ] || false
+        const dryRun = values[ 'dry-run' ] || false
+        const { result } = await FlowMcpCli.migrateConfig( { cwd, isGlobal, dryRun } )
         output( { result } )
 
         return true

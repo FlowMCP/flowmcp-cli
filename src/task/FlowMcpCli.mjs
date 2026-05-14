@@ -8096,6 +8096,231 @@ allowlist, migrate-config, etc.).
 
         return { index }
     }
+
+
+    static async migrateConfig( { cwd, isGlobal = false, dryRun = false } ) {
+        const configPath = isGlobal
+            ? join( homedir(), appConfig[ 'globalConfigDirName' ], 'config.json' )
+            : join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
+
+        const scope = isGlobal ? 'global' : 'local'
+
+        let rawContent
+        try {
+            rawContent = await readFile( configPath, 'utf-8' )
+        } catch {
+            const result = {
+                'status': false,
+                'error': `Config not found at ${configPath}`
+            }
+
+            return { result }
+        }
+
+        let config
+        try {
+            config = JSON.parse( rawContent )
+        } catch( parseErr ) {
+            const result = {
+                'status': false,
+                'error': `Invalid JSON in config at ${configPath}: ${parseErr.message}`
+            }
+
+            return { result }
+        }
+
+        const groups = config[ 'groups' ]
+        if( !groups || typeof groups !== 'object' ) {
+            const result = {
+                'status': true,
+                configPath,
+                dryRun,
+                scope,
+                'groupsProcessed': 0,
+                'entriesMigrated': 0,
+                'entriesSkipped': 0,
+                'entriesFailed': 0,
+                'backup': null,
+                'changes': []
+            }
+
+            return { result }
+        }
+
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const changes = []
+        let entriesMigrated = 0
+        let entriesSkipped = 0
+        let entriesFailed = 0
+        const groupsProcessed = Object.keys( groups ).length
+
+        await Object.keys( groups )
+            .reduce( ( promise, groupName ) => promise.then( async () => {
+                const group = groups[ groupName ]
+                const toolEntries = group[ 'tools' ] || group[ 'schemas' ]
+
+                if( !toolEntries || !Array.isArray( toolEntries ) ) {
+                    return
+                }
+
+                const newTools = []
+
+                await toolEntries
+                    .reduce( ( innerPromise, entry ) => innerPromise.then( async () => {
+                        const toolRef = typeof entry === 'string' ? entry
+                            : ( entry[ 'toolRef' ] || entry[ 'ref' ] || null )
+
+                        if( !toolRef ) {
+                            newTools.push( entry )
+                            entriesFailed++
+                            changes.push( {
+                                'group': groupName,
+                                'from': JSON.stringify( entry ),
+                                'to': [],
+                                'action': 'failed',
+                                'reason': 'Entry has no parseable toolRef string'
+                            } )
+
+                            return
+                        }
+
+                        const slashCount = ( toolRef.match( /\//g ) || [] ).length
+                        const hasDoubleColon = toolRef.includes( '::' )
+
+                        if( !hasDoubleColon && slashCount >= 2 ) {
+                            newTools.push( toolRef )
+                            entriesSkipped++
+                            changes.push( {
+                                'group': groupName,
+                                'from': toolRef,
+                                'to': [ toolRef ],
+                                'action': 'skipped'
+                            } )
+
+                            return
+                        }
+
+                        const { schemaRef, routeName } = FlowMcpCli.#parseToolRef( { 'toolRef': toolRef } )
+                        const filePath = join( schemasBaseDir, schemaRef )
+                        const { main, error: loadError } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        if( !main || loadError ) {
+                            newTools.push( toolRef )
+                            entriesFailed++
+                            changes.push( {
+                                'group': groupName,
+                                'from': toolRef,
+                                'to': [],
+                                'action': 'failed',
+                                'reason': loadError || `Schema not found: ${filePath}`
+                            } )
+
+                            return
+                        }
+
+                        const namespace = main[ 'namespace' ]
+                        if( !namespace ) {
+                            newTools.push( toolRef )
+                            entriesFailed++
+                            changes.push( {
+                                'group': groupName,
+                                'from': toolRef,
+                                'to': [],
+                                'action': 'failed',
+                                'reason': `Schema at ${schemaRef} has no namespace`
+                            } )
+
+                            return
+                        }
+
+                        if( routeName ) {
+                            const specId = `${namespace}/tool/${routeName}`
+                            newTools.push( specId )
+                            entriesMigrated++
+                            changes.push( {
+                                'group': groupName,
+                                'from': toolRef,
+                                'to': [ specId ],
+                                'action': 'migrated'
+                            } )
+
+                            return
+                        }
+
+                        const toolEntryMap = main[ 'tools' ] || main[ 'routes' ]
+                        if( !toolEntryMap || Object.keys( toolEntryMap ).length === 0 ) {
+                            newTools.push( toolRef )
+                            entriesFailed++
+                            changes.push( {
+                                'group': groupName,
+                                'from': toolRef,
+                                'to': [],
+                                'action': 'failed',
+                                'reason': `Schema at ${schemaRef} has no tools or routes to expand`
+                            } )
+
+                            return
+                        }
+
+                        const expandedIds = Object.keys( toolEntryMap )
+                            .map( ( name ) => {
+                                const specId = `${namespace}/tool/${name}`
+
+                                return specId
+                            } )
+
+                        expandedIds
+                            .forEach( ( specId ) => {
+                                newTools.push( specId )
+                            } )
+
+                        entriesMigrated++
+                        changes.push( {
+                            'group': groupName,
+                            'from': toolRef,
+                            'to': expandedIds,
+                            'action': 'migrated'
+                        } )
+                    } ), Promise.resolve() )
+
+                group[ 'tools' ] = newTools
+                if( group[ 'schemas' ] ) {
+                    delete group[ 'schemas' ]
+                }
+            } ), Promise.resolve() )
+
+        const nothingChanged = changes
+            .every( ( c ) => {
+                const isSkipped = c[ 'action' ] === 'skipped'
+
+                return isSkipped
+            } )
+
+        let backup = null
+
+        if( !dryRun && !nothingChanged ) {
+            const backupPath = `${configPath}.bak`
+            await writeFile( backupPath, rawContent, 'utf-8' )
+            backup = backupPath
+
+            await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+        }
+
+        const result = {
+            'status': true,
+            configPath,
+            dryRun,
+            scope,
+            groupsProcessed,
+            entriesMigrated,
+            entriesSkipped,
+            entriesFailed,
+            backup,
+            changes
+        }
+
+        return { result }
+    }
 }
 
 
