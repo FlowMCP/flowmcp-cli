@@ -104,7 +104,29 @@ const runCommand = async () => {
     }
 
     if( command === 'lists' ) {
-        const listName = positionals[ 1 ] || null
+        const subOrName = positionals[ 1 ] || null
+
+        if( subOrName === 'add-entry' ) {
+            const listName = positionals[ 2 ]
+            const jsonEntry = positionals[ 3 ]
+            const { result } = await FlowMcpCli.listsAddEntry( { cwd, listName, jsonEntry } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subOrName === 'refs' ) {
+            const alias = positionals[ 2 ]
+            const { result } = await FlowMcpCli.listsRefs( { cwd, alias } )
+            output( { result } )
+
+            return true
+        }
+
+        // passthrough: 'list' shows all, 'show <name>' shows one, or bare name
+        const listName = subOrName === 'list' ? null
+            : subOrName === 'show' ? ( positionals[ 2 ] || null )
+            : subOrName
         const { result } = await FlowMcpCli.listSharedLists( { listName } )
         output( { result } )
 
