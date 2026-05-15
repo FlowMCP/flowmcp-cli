@@ -78,6 +78,46 @@ const V3_SCHEMA_CONTENT = `export const main = {
 }
 `
 
+const V4_SCHEMA_CONTENT = `export const main = {
+    'namespace': 'alreadyV4',
+    'name': 'Already V4 API',
+    'description': 'Schema already at v4',
+    'version': '4.0.0',
+    'docs': [],
+    'tags': [],
+    'root': 'https://v4.example.com',
+    'requiredServerParams': [],
+    'headers': {},
+    'tools': {
+        'getData': {
+            'method': 'GET',
+            'description': 'Get data',
+            'path': '/data',
+            'parameters': [],
+            'tests': []
+        }
+    }
+}
+`
+
+const V3_SCHEMA_WITH_MAIN_SKILLS = `export const main = {
+    'namespace': 'playwrightSchema',
+    'name': 'Playwright Schema',
+    'description': 'Schema with main.skills (v4 forbids)',
+    'version': '3.0.0',
+    'docs': [],
+    'tags': [],
+    'root': 'https://example.com',
+    'requiredServerParams': [],
+    'headers': {},
+    'tools': {},
+    'resources': {},
+    'skills': {
+        'do-thing': { 'file': './skills/do-thing.mjs' }
+    }
+}
+`
+
 const NON_SCHEMA_CONTENT = `export const helper = {
     'name': 'not-a-schema',
     'value': 42
@@ -158,11 +198,32 @@ describe( 'FlowMcpCli.migrate', () => {
     } )
 
 
-    it( 'skips a file that is already v3', async () => {
-        const skipDir = join( TEST_DIR, 'skip-test' )
-        await mkdir( skipDir, { recursive: true } )
-        const filePath = join( skipDir, 'v3.mjs' )
+    it( 'migrates a v3 file to v4 - version bump only', async () => {
+        const v3UpDir = join( TEST_DIR, 'v3-up-test' )
+        await mkdir( v3UpDir, { recursive: true } )
+        const filePath = join( v3UpDir, 'v3.mjs' )
         await writeFile( filePath, V3_SCHEMA_CONTENT, 'utf-8' )
+
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': filePath, 'cwd': TEST_DIR } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'migrated' ] ).toBe( 1 )
+        expect( result[ 'skipped' ] ).toBe( 0 )
+        expect( result[ 'results' ][ 0 ][ 'action' ] ).toBe( 'migrated' )
+
+        const updatedContent = await readFile( filePath, 'utf-8' )
+        expect( updatedContent ).toContain( `'4.0.0'` )
+        expect( updatedContent ).not.toContain( `'3.0.0'` )
+
+        await rm( v3UpDir, { recursive: true, force: true } )
+    } )
+
+
+    it( 'skips a file that is already v4', async () => {
+        const skipDir = join( TEST_DIR, 'skip-v4-test' )
+        await mkdir( skipDir, { recursive: true } )
+        const filePath = join( skipDir, 'v4.mjs' )
+        await writeFile( filePath, V4_SCHEMA_CONTENT, 'utf-8' )
 
         const { result } = await FlowMcpCli.migrate( { 'schemaPath': filePath, 'cwd': TEST_DIR } )
 
@@ -172,9 +233,29 @@ describe( 'FlowMcpCli.migrate', () => {
         expect( result[ 'results' ][ 0 ][ 'action' ] ).toBe( 'skipped' )
 
         const unchangedContent = await readFile( filePath, 'utf-8' )
-        expect( unchangedContent ).toBe( V3_SCHEMA_CONTENT )
+        expect( unchangedContent ).toBe( V4_SCHEMA_CONTENT )
 
         await rm( skipDir, { recursive: true, force: true } )
+    } )
+
+
+    it( 'migrates v3 schema with main.skills - version bump + skills removal', async () => {
+        const playDir = join( TEST_DIR, 'playwright-test' )
+        await mkdir( playDir, { recursive: true } )
+        const filePath = join( playDir, 'playwright-schema.mjs' )
+        await writeFile( filePath, V3_SCHEMA_WITH_MAIN_SKILLS, 'utf-8' )
+
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': filePath, 'cwd': TEST_DIR } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'migrated' ] ).toBe( 1 )
+        expect( result[ 'results' ][ 0 ][ 'reason' ] ).toContain( 'main.skills removed' )
+
+        const updatedContent = await readFile( filePath, 'utf-8' )
+        expect( updatedContent ).toContain( `'4.0.0'` )
+        expect( updatedContent ).not.toContain( `'do-thing'` )
+
+        await rm( playDir, { recursive: true, force: true } )
     } )
 
 
@@ -222,7 +303,7 @@ describe( 'FlowMcpCli.migrate', () => {
 
         await writeFile( join( allDir, 'a.mjs' ), V2_SCHEMA_CONTENT, 'utf-8' )
         await writeFile( join( subDir, 'b.mjs' ), V2_SCHEMA_CONTENT_CUSTOM_VERSION, 'utf-8' )
-        await writeFile( join( allDir, 'c.mjs' ), V3_SCHEMA_CONTENT, 'utf-8' )
+        await writeFile( join( allDir, 'c.mjs' ), V4_SCHEMA_CONTENT, 'utf-8' )
 
         const { result } = await FlowMcpCli.migrate( { 'schemaPath': allDir, 'cwd': TEST_DIR, 'all': true } )
 

@@ -1572,7 +1572,28 @@ class FlowMcpCli {
         }
 
         const routesKeyPattern = /(['"])routes\1(\s*:)/g
-        const versionPattern = /(['"]version['"])\s*:\s*['"]2\.\d+\.\d+['"]/g
+        const versionPattern = /(['"]?version['"]?)\s*:\s*['"]2\.\d+\.\d+['"]/g
+        const versionV3Pattern = /(['"]?version['"]?)\s*:\s*['"]3\.\d+\.\d+['"]/g
+        const mainSkillsStartPattern = /,?\s*['"]?skills['"]?\s*:\s*\{/
+
+        const findMainSkillsBlock = ( source ) => {
+            const match = source.match( mainSkillsStartPattern )
+            if( match === null ) { return null }
+            const start = match.index
+            const openBraceIdx = source.indexOf( '{', start + match[ 0 ].length - 1 )
+            let depth = 0
+            let i = openBraceIdx
+            while( i < source.length ) {
+                const ch = source[ i ]
+                if( ch === '{' ) { depth += 1 }
+                else if( ch === '}' ) {
+                    depth -= 1
+                    if( depth === 0 ) { return { start, end: i + 1 } }
+                }
+                i += 1
+            }
+            return null
+        }
 
         let filePaths = []
 
@@ -1643,10 +1664,14 @@ class FlowMcpCli {
                 routesKeyPattern.lastIndex = 0
                 const hasV2Version = versionPattern.test( content )
                 versionPattern.lastIndex = 0
+                const hasV3Version = versionV3Pattern.test( content )
+                versionV3Pattern.lastIndex = 0
+                const skillsBlock = findMainSkillsBlock( content )
+                const hasMainSkills = skillsBlock !== null
 
-                if( !hasRoutes && !hasV2Version ) {
+                if( !hasRoutes && !hasV2Version && !hasV3Version && !hasMainSkills ) {
                     skipped += 1
-                    results.push( { 'file': filePath, 'action': 'skipped', 'reason': 'No v2 routes or version found' } )
+                    results.push( { 'file': filePath, 'action': 'skipped', 'reason': 'No migratable patterns (routes/v2/v3/skills) found' } )
 
                     return
                 }
@@ -1656,20 +1681,42 @@ class FlowMcpCli {
                     const changes = []
                     if( hasRoutes ) { changes.push( 'routes -> tools' ) }
                     if( hasV2Version ) { changes.push( 'version 2.x.x -> 3.0.0' ) }
+                    if( hasV3Version ) { changes.push( 'version 3.x.x -> 4.0.0' ) }
+                    if( hasMainSkills ) { changes.push( 'remove main.skills (v4 forbids)' ) }
                     results.push( { 'file': filePath, 'action': 'migrated', 'reason': `[dry-run] Would apply: ${changes.join( ', ' )}` } )
 
                     return
                 }
 
                 let updatedContent = content
-                updatedContent = updatedContent.replace( routesKeyPattern, '$1tools$1$2' )
-                routesKeyPattern.lastIndex = 0
-                updatedContent = updatedContent.replace( versionPattern, `$1: '3.0.0'` )
-                versionPattern.lastIndex = 0
+                const warnings = []
+
+                if( hasRoutes ) {
+                    updatedContent = updatedContent.replace( routesKeyPattern, '$1tools$1$2' )
+                    routesKeyPattern.lastIndex = 0
+                }
+                if( hasV2Version ) {
+                    updatedContent = updatedContent.replace( versionPattern, `$1: '3.0.0'` )
+                    versionPattern.lastIndex = 0
+                }
+                if( hasV3Version ) {
+                    updatedContent = updatedContent.replace( versionV3Pattern, `$1: '4.0.0'` )
+                    versionV3Pattern.lastIndex = 0
+                }
+                if( hasMainSkills ) {
+                    const fresh = findMainSkillsBlock( updatedContent )
+                    if( fresh !== null ) {
+                        updatedContent = updatedContent.slice( 0, fresh.start ) + updatedContent.slice( fresh.end )
+                    }
+                    warnings.push( 'main.skills removed — keep skill files in providers/<ns>/skills/*.mjs (Memo 022 REV-08)' )
+                }
 
                 await writeFile( filePath, updatedContent, 'utf-8' )
                 migrated += 1
-                results.push( { 'file': filePath, 'action': 'migrated', 'reason': 'Successfully migrated to v3' } )
+                const targetVersion = ( hasV3Version || hasMainSkills ) ? 'v4' : 'v3'
+                const reasonParts = [ `Successfully migrated to ${targetVersion}` ]
+                if( warnings.length > 0 ) { reasonParts.push( `Warnings: ${warnings.join( '; ' )}` ) }
+                results.push( { 'file': filePath, 'action': 'migrated', 'reason': reasonParts.join( '. ' ) } )
             } catch( err ) {
                 failed += 1
                 results.push( { 'file': filePath, 'action': 'failed', 'reason': err.message } )
