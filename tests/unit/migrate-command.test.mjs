@@ -100,6 +100,22 @@ const V4_SCHEMA_CONTENT = `export const main = {
 }
 `
 
+const AGENT_MANIFEST_CONTENT = `export const main = {
+    name: 'trading-strategist',
+    version: 'flowmcp/3.0.0',
+    description: 'Agent manifest — skills{} is a valid v4 primitive on agents',
+    model: 'anthropic/claude-sonnet-4-5',
+    systemPrompt: 'You are a trading analyst.',
+    tools: [],
+    resources: {},
+    prompts: {},
+    skills: {
+        'analysis': { file: './skills/analysis.mjs' }
+    }
+}
+`
+
+
 const V3_SCHEMA_WITH_SHARED_LIST = `export const main = {
     'namespace': 'blocknative',
     'name': 'Blocknative GasPrice',
@@ -409,6 +425,26 @@ describe( 'FlowMcpCli.migrate', () => {
         expect( updatedContent ).not.toContain( `'2.1.3'` )
 
         await rm( versionDir, { recursive: true, force: true } )
+    } )
+
+
+    it( 'leaves agent manifests untouched (skills{} is valid on agents)', async () => {
+        const agentDir = join( TEST_DIR, 'agent-manifest-test' )
+        await mkdir( agentDir, { recursive: true } )
+        const filePath = join( agentDir, 'agent.mjs' )
+        await writeFile( filePath, AGENT_MANIFEST_CONTENT, 'utf-8' )
+
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': filePath, 'cwd': TEST_DIR } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'skipped' ] ).toBe( 1 )
+        expect( result[ 'migrated' ] ).toBe( 0 )
+
+        const unchangedContent = await readFile( filePath, 'utf-8' )
+        expect( unchangedContent ).toBe( AGENT_MANIFEST_CONTENT )
+        expect( unchangedContent ).toContain( `'analysis'` )
+
+        await rm( agentDir, { recursive: true, force: true } )
     } )
 
 

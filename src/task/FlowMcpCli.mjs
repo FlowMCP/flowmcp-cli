@@ -1673,7 +1673,7 @@ class FlowMcpCli {
                 const hasV2Version = versionPattern.test( content )
                 const hasV3Version = versionV3Pattern.test( content )
                 const skillsBlock = findMainSkillsBlock( content )
-                const hasMainSkills = skillsBlock !== null
+                const hasMainSkills = skillsBlock !== null && ( hasV2Version || hasV3Version )
 
                 if( !hasRoutes && !hasV2Version && !hasV3Version && !hasMainSkills ) {
                     skipped += 1
