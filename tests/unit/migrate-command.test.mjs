@@ -100,6 +100,42 @@ const V4_SCHEMA_CONTENT = `export const main = {
 }
 `
 
+const V3_SCHEMA_WITH_SHARED_LIST = `export const main = {
+    'namespace': 'blocknative',
+    'name': 'Blocknative GasPrice',
+    'description': 'Schema with sharedLists ref version that must be preserved',
+    'version': '3.0.0',
+    'docs': [],
+    'tags': [],
+    'root': 'https://api.blocknative.com',
+    'sharedLists': [
+        { ref: 'evmChains', version: '3.1.0' }
+    ],
+    'tools': {
+        'getGasPrice': {
+            'method': 'GET',
+            'description': 'Get gas price',
+            'path': '/gasprices',
+            'parameters': [],
+            'tests': []
+        }
+    }
+}
+`
+
+
+const SHARED_LIST_DEF_CONTENT = `export const list = {
+    meta: {
+        name: 'evmChains',
+        version: '3.1.0',
+        description: 'EVM chain registry',
+        fields: []
+    },
+    data: []
+}
+`
+
+
 const V3_SCHEMA_WITH_MAIN_SKILLS = `export const main = {
     'namespace': 'playwrightSchema',
     'name': 'Playwright Schema',
@@ -373,6 +409,48 @@ describe( 'FlowMcpCli.migrate', () => {
         expect( updatedContent ).not.toContain( `'2.1.3'` )
 
         await rm( versionDir, { recursive: true, force: true } )
+    } )
+
+
+    it( 'preserves sharedLists ref versions when bumping v3 -> v4', async () => {
+        const sharedDir = join( TEST_DIR, 'shared-list-ref-test' )
+        await mkdir( sharedDir, { recursive: true } )
+        const filePath = join( sharedDir, 'schema.mjs' )
+        await writeFile( filePath, V3_SCHEMA_WITH_SHARED_LIST, 'utf-8' )
+
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': filePath, 'cwd': TEST_DIR } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'migrated' ] ).toBe( 1 )
+
+        const updatedContent = await readFile( filePath, 'utf-8' )
+        expect( updatedContent ).toContain( `'version': '4.0.0'` )
+        expect( updatedContent ).toContain( `version: '3.1.0'` )
+        expect( updatedContent ).not.toContain( `'version': '3.0.0'` )
+
+        await rm( sharedDir, { recursive: true, force: true } )
+    } )
+
+
+    it( 'skips files inside _lists/ directories with --all', async () => {
+        const listsDir = join( TEST_DIR, 'lists-skip-test' )
+        const sharedDir = join( listsDir, '_lists' )
+        await mkdir( sharedDir, { recursive: true } )
+        await writeFile( join( sharedDir, 'evm-chains.mjs' ), SHARED_LIST_DEF_CONTENT, 'utf-8' )
+        await writeFile( join( listsDir, 'schema.mjs' ), V3_SCHEMA_CONTENT, 'utf-8' )
+
+        const { result } = await FlowMcpCli.migrate( { 'schemaPath': listsDir, 'cwd': TEST_DIR, 'all': true } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'migrated' ] ).toBe( 1 )
+        expect( result[ 'skipped' ] ).toBe( 1 )
+
+        const listContent = await readFile( join( sharedDir, 'evm-chains.mjs' ), 'utf-8' )
+        expect( listContent ).toBe( SHARED_LIST_DEF_CONTENT )
+        expect( listContent ).toContain( `version: '3.1.0'` )
+        expect( listContent ).not.toContain( `'4.0.0'` )
+
+        await rm( listsDir, { recursive: true, force: true } )
     } )
 
 

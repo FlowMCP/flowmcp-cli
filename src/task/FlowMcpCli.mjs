@@ -1572,9 +1572,10 @@ class FlowMcpCli {
         }
 
         const routesKeyPattern = /(['"])routes\1(\s*:)/g
-        const versionPattern = /(['"]?version['"]?)\s*:\s*['"]2\.\d+\.\d+['"]/g
-        const versionV3Pattern = /(['"]?version['"]?)\s*:\s*['"]3\.\d+\.\d+['"]/g
+        const versionPattern = /(['"]?version['"]?)\s*:\s*['"]2\.\d+\.\d+['"]/
+        const versionV3Pattern = /(['"]?version['"]?)\s*:\s*['"]3\.\d+\.\d+['"]/
         const mainSkillsStartPattern = /,?\s*['"]?skills['"]?\s*:\s*\{/
+        const sharedListPathPattern = /[\/\\]_lists[\/\\]/
 
         const findMainSkillsBlock = ( source ) => {
             const match = source.match( mainSkillsStartPattern )
@@ -1659,13 +1660,18 @@ class FlowMcpCli {
 
         const processFile = async ( filePath ) => {
             try {
+                if( sharedListPathPattern.test( filePath ) ) {
+                    skipped += 1
+                    results.push( { 'file': filePath, 'action': 'skipped', 'reason': 'Shared-list file (_lists/) — independent versioning, not migrated' } )
+
+                    return
+                }
+
                 const content = await readFile( filePath, 'utf-8' )
                 const hasRoutes = routesKeyPattern.test( content )
                 routesKeyPattern.lastIndex = 0
                 const hasV2Version = versionPattern.test( content )
-                versionPattern.lastIndex = 0
                 const hasV3Version = versionV3Pattern.test( content )
-                versionV3Pattern.lastIndex = 0
                 const skillsBlock = findMainSkillsBlock( content )
                 const hasMainSkills = skillsBlock !== null
 
@@ -1697,11 +1703,9 @@ class FlowMcpCli {
                 }
                 if( hasV2Version ) {
                     updatedContent = updatedContent.replace( versionPattern, `$1: '3.0.0'` )
-                    versionPattern.lastIndex = 0
                 }
                 if( hasV3Version ) {
                     updatedContent = updatedContent.replace( versionV3Pattern, `$1: '4.0.0'` )
-                    versionV3Pattern.lastIndex = 0
                 }
                 if( hasMainSkills ) {
                     const fresh = findMainSkillsBlock( updatedContent )
