@@ -9286,6 +9286,221 @@ allowlist, migrate-config, etc.).
 
         return { result }
     }
+
+
+    static #v4Override = null
+
+
+    static __testInjectV4( { v4 } ) {
+        FlowMcpCli.#v4Override = v4
+    }
+
+
+    static async grade( { cwd, path: schemaPath, mock = false, outputDir } ) {
+        // const { status, messages } = Validation.grade( { cwd, schemaPath, mock, outputDir } )
+        // if( !status ) { Validation.error( { messages } ) }
+
+        if( !schemaPath ) {
+            const result = {
+                'status': false,
+                'error': 'Missing schema path.',
+                'fix': 'Usage: flowmcp dev grade <path-to-schema>'
+            }
+
+            return { result }
+        }
+
+        const resolvedPath = resolve( cwd, schemaPath )
+
+        let schemaExists = false
+
+        try {
+            await access( resolvedPath, constants.F_OK )
+            schemaExists = true
+        } catch {
+            schemaExists = false
+        }
+
+        if( !schemaExists ) {
+            const result = {
+                'status': false,
+                'error': `Schema file not found: ${resolvedPath}`,
+                'fix': 'Check the path and try again.'
+            }
+
+            return { result }
+        }
+
+        let v4 = FlowMcpCli.#v4Override
+
+        if( !v4 ) {
+            try {
+                v4 = await import( 'flowmcp/v4' )
+            } catch {
+                // expected when core lacks v4 exports
+            }
+        }
+
+        if( !v4 || !v4[ 'GradeReporter' ] || !v4[ 'MainValidator' ] ) {
+            const result = {
+                'status': false,
+                'error': 'Grade requires flowmcp-core v4 (GradeReporter + MainValidator). Installed flowmcp does not export v4.',
+                'fix': 'Update flowmcp dependency to a commit that includes Memo 025 v4 modules (c787eb4 or later).'
+            }
+
+            return { result }
+        }
+
+        const { GradeReporter, MainValidator } = v4
+
+        let schema = null
+
+        try {
+            const fileUrl = pathToFileURL( resolvedPath ).href
+            const mod = await import( fileUrl )
+            schema = mod[ 'main' ]
+        } catch( error ) {
+            const result = {
+                'status': false,
+                'error': `Cannot load schema: ${error.message}`,
+                'fix': 'Ensure the file exports a valid "main" constant.'
+            }
+
+            return { result }
+        }
+
+        if( !schema ) {
+            const result = {
+                'status': false,
+                'error': 'Schema file does not export a "main" constant.',
+                'fix': 'Add: export const main = { namespace, name, version, ... }'
+            }
+
+            return { result }
+        }
+
+        const { status: validationPassed, errors: validationErrors } = MainValidator.validate( { schema } )
+
+        if( !validationPassed ) {
+            const reportDir = outputDir ? resolve( cwd, outputDir ) : join( cwd, '.grade-reports' )
+            const schemaId = schema[ 'namespace' ] || basename( resolvedPath, extname( resolvedPath ) )
+            const dateStr = new Date().toISOString().slice( 0, 10 )
+            const reportFileName = `${schemaId}-${dateStr}.json`
+            const reportPath = join( reportDir, reportFileName )
+
+            const report = {
+                'grade': 'F',
+                'score': 0,
+                'schemaId': schemaId,
+                'date': dateStr,
+                'validationPassed': false,
+                'validationErrors': validationErrors || [],
+                'dimensions': []
+            }
+
+            await mkdir( reportDir, { recursive: true } )
+            await writeFile( reportPath, JSON.stringify( report, null, 4 ), 'utf-8' )
+
+            const result = {
+                'status': true,
+                'grade': 'F',
+                'score': 0,
+                'schemaId': schemaId,
+                'reportPath': reportPath,
+                'validationPassed': false,
+                'validationErrors': validationErrors || [],
+                'dimensions': []
+            }
+
+            return { result }
+        }
+
+        const apiKey = process.env[ 'ANTHROPIC_API_KEY' ]
+
+        if( !mock && !apiKey ) {
+            const result = {
+                'status': false,
+                'error': 'Missing ANTHROPIC_API_KEY env var.',
+                'fix': 'Set ANTHROPIC_API_KEY in your environment, or use --mock to skip the Anthropic API.'
+            }
+
+            return { result }
+        }
+
+        const { prompts: evalPrompts } = GradeReporter.buildEvalPrompts( { schema } )
+
+        const evalResponses = await Promise.all(
+            evalPrompts.map( async ( prompt ) => {
+                if( mock ) {
+                    return {
+                        'score': 75,
+                        'feedback': 'Mock evaluation response.',
+                        'dimension': prompt[ 'dimension' ] || 'unknown'
+                    }
+                }
+
+                const response = await fetch( 'https://api.anthropic.com/v1/messages', {
+                    'method': 'POST',
+                    'headers': {
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01',
+                        'content-type': 'application/json'
+                    },
+                    'body': JSON.stringify( {
+                        'model': 'claude-haiku-4-5',
+                        'max_tokens': 1024,
+                        'messages': [ { 'role': 'user', 'content': prompt[ 'content' ] || prompt } ]
+                    } )
+                } )
+
+                const json = await response.json()
+                const rawText = json[ 'content' ]?.[ 0 ]?.[ 'text' ] || '{}'
+
+                try {
+                    return JSON.parse( rawText )
+                } catch {
+                    return { 'score': 0, 'feedback': rawText, 'dimension': prompt[ 'dimension' ] || 'unknown' }
+                }
+            } )
+        )
+
+        const { grade, score, dimensions } = GradeReporter.grade( { schema, evalResponses } )
+
+        const reportDir = outputDir ? resolve( cwd, outputDir ) : join( cwd, '.grade-reports' )
+        const schemaId = schema[ 'namespace' ] || basename( resolvedPath, extname( resolvedPath ) )
+        const dateStr = new Date().toISOString().slice( 0, 10 )
+        const reportFileName = `${schemaId}-${dateStr}.json`
+        const reportPath = join( reportDir, reportFileName )
+
+        const report = {
+            grade,
+            score,
+            schemaId,
+            'date': dateStr,
+            'validationPassed': true,
+            evalResponses,
+            dimensions
+        }
+
+        await mkdir( reportDir, { recursive: true } )
+        await writeFile( reportPath, JSON.stringify( report, null, 4 ), 'utf-8' )
+
+        const topDimensions = Array.isArray( dimensions )
+            ? dimensions.slice( 0, 3 )
+            : []
+
+        const result = {
+            'status': true,
+            grade,
+            score,
+            schemaId,
+            reportPath,
+            'validationPassed': true,
+            'topDimensions': topDimensions
+        }
+
+        return { result }
+    }
 }
 
 

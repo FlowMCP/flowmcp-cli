@@ -23,6 +23,8 @@ const args = parseArgs( {
         'global': { type: 'boolean' },
         'basis': { type: 'string' },
         'yes': { type: 'boolean', short: 'y' },
+        'mock': { type: 'boolean' },
+        'output': { type: 'string' },
         'help': { type: 'boolean', short: 'h' }
     }
 } )
@@ -433,6 +435,16 @@ const runCommand = async () => {
             'error': `Unknown selection command "${subCommand}".`,
             'fix': `Available: ${appConfig[ 'cliCommand' ]} dev selection list, ${appConfig[ 'cliCommand' ]} dev selection show <name>, ${appConfig[ 'cliCommand' ]} dev selection validate <path>`
         }
+        output( { result } )
+
+        return true
+    }
+
+    if( command === 'grade' ) {
+        const gradePath = positionals[ 1 ]
+        const mock = values[ 'mock' ] || false
+        const outputDir = values[ 'output' ] || undefined
+        const { result } = await FlowMcpCli.grade( { cwd, 'path': gradePath, mock, outputDir } )
         output( { result } )
 
         return true
