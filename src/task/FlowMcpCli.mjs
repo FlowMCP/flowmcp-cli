@@ -9058,6 +9058,234 @@ allowlist, migrate-config, etc.).
 
         return { result }
     }
+
+
+    static async selectionList( { cwd: _cwd } ) {
+        // const { status, messages } = Validation.selectionList( { cwd } )
+        // if( !status ) { Validation.error( { messages } ) }
+
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const { sources } = await FlowMcpCli.#listSources()
+
+        const sourceDirs = sources
+            .map( ( source ) => join( schemasBaseDir, source[ 'name' ] ) )
+
+        const selections = []
+
+        await sourceDirs
+            .reduce( ( promise, sourceDir ) => promise.then( async () => {
+                let entries = []
+
+                try {
+                    entries = await readdir( sourceDir, { recursive: true } )
+                } catch {
+                    return
+                }
+
+                const selectionFiles = entries
+                    .filter( ( entry ) => {
+                        const isSelectionFile = entry.includes( 'selections' + '/' ) && ( entry.endsWith( '.mjs' ) || entry.endsWith( '.js' ) )
+
+                        return isSelectionFile
+                    } )
+                    .map( ( entry ) => join( sourceDir, entry ) )
+
+                await selectionFiles
+                    .reduce( ( innerPromise, filePath ) => innerPromise.then( async () => {
+                        try {
+                            const fileUrl = pathToFileURL( filePath ).href
+                            const mod = await import( fileUrl )
+                            const selection = mod[ 'selection' ]
+
+                            if( !selection ) {
+                                return
+                            }
+
+                            const { namespace, name, whenToUse, tools, resources, prompts, skills } = selection
+                            const allTools = Array.isArray( tools ) ? tools : []
+                            const allResources = Array.isArray( resources ) ? resources : []
+                            const allPrompts = Array.isArray( prompts ) ? prompts : []
+                            const allSkills = Array.isArray( skills ) ? skills : []
+                            const toolCount = allTools.length + allResources.length + allPrompts.length + allSkills.length
+                            const sourceName = filePath.replace( schemasBaseDir + '/', '' ).split( '/' )[ 0 ]
+                            const whenToUseSnippet = typeof whenToUse === 'string' ? whenToUse.slice( 0, 80 ) : ''
+
+                            const entry = {
+                                namespace,
+                                name,
+                                'file': filePath,
+                                'source': sourceName,
+                                toolCount,
+                                'whenToUse': whenToUseSnippet
+                            }
+
+                            selections.push( entry )
+                        } catch {
+                            // skip unreadable files
+                        }
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        const result = {
+            'status': true,
+            'count': selections.length,
+            selections
+        }
+
+        return { result }
+    }
+
+
+    static async selectionShow( { cwd: _cwd, name } ) {
+        // const { status, messages } = Validation.selectionShow( { name } )
+        // if( !status ) { Validation.error( { messages } ) }
+
+        const { result: listResult } = await FlowMcpCli.selectionList( { 'cwd': _cwd } )
+        const { selections } = listResult
+
+        const matched = selections
+            .find( ( sel ) => {
+                const fullId = `${sel[ 'namespace' ]}/selection/${sel[ 'name' ]}`
+                const shortId = `${sel[ 'namespace' ]}/${sel[ 'name' ]}`
+                const isMatch = fullId === name || shortId === name || sel[ 'name' ] === name
+
+                return isMatch
+            } )
+
+        if( !matched ) {
+            const result = {
+                'status': false,
+                'error': `Selection "${name}" not found.`,
+                'fix': 'Use: flowmcp dev selection list to see available selections'
+            }
+
+            return { result }
+        }
+
+        let fullSelection = null
+
+        try {
+            const fileUrl = pathToFileURL( matched[ 'file' ] ).href
+            const mod = await import( fileUrl )
+            fullSelection = mod[ 'selection' ]
+        } catch( error ) {
+            const result = {
+                'status': false,
+                'error': `Failed to load selection file: ${error.message}`
+            }
+
+            return { result }
+        }
+
+        const result = {
+            'status': true,
+            'file': matched[ 'file' ],
+            'source': matched[ 'source' ],
+            'selection': fullSelection
+        }
+
+        return { result }
+    }
+
+
+    static async selectionValidate( { cwd, path: selectionPath } ) {
+        // const { status, messages } = Validation.selectionValidate( { path } )
+        // if( !status ) { Validation.error( { messages } ) }
+
+        const resolvedPath = resolve( cwd, selectionPath )
+        let mod = null
+
+        try {
+            const fileUrl = pathToFileURL( resolvedPath ).href
+            mod = await import( fileUrl )
+        } catch( error ) {
+            const result = {
+                'status': false,
+                'errors': [ { 'code': 'SEL000', 'message': `Cannot load file: ${error.message}` } ],
+                'warnings': []
+            }
+
+            return { result }
+        }
+
+        const selection = mod[ 'selection' ]
+
+        if( !selection ) {
+            const result = {
+                'status': false,
+                'errors': [ { 'code': 'SEL000', 'message': `File does not export a "selection" constant` } ],
+                'warnings': []
+            }
+
+            return { result }
+        }
+
+        // Try flowmcp/v4 SelectionValidator first
+        try {
+            const v4 = await import( 'flowmcp/v4' )
+            const SelectionValidator = v4 && v4[ 'SelectionValidator' ]
+
+            if( SelectionValidator && typeof SelectionValidator.validate === 'function' ) {
+                const { status, errors, warnings } = SelectionValidator.validate( { selection } )
+                const result = { status, errors, warnings }
+
+                return { result }
+            }
+        } catch {
+            // v4 not available — use inline fallback below
+        }
+
+        // Inline fallback validator
+        const errors = []
+        const warnings = []
+
+        // SEL001: required keys present + whenToUse non-empty
+        const requiredKeys = [ 'namespace', 'name', 'description', 'whenToUse' ]
+        requiredKeys
+            .forEach( ( key ) => {
+                if( !selection[ key ] || ( typeof selection[ key ] === 'string' && selection[ key ].trim() === '' ) ) {
+                    errors.push( { 'code': 'SEL001', 'message': `Required field "${key}" is missing or empty` } )
+                }
+            } )
+
+        // SEL001 (continued): at least one of tools/resources/prompts/skills must be non-empty
+        const toolsArr = Array.isArray( selection[ 'tools' ] ) ? selection[ 'tools' ] : []
+        const resourcesArr = Array.isArray( selection[ 'resources' ] ) ? selection[ 'resources' ] : []
+        const promptsArr = Array.isArray( selection[ 'prompts' ] ) ? selection[ 'prompts' ] : []
+        const skillsArr = Array.isArray( selection[ 'skills' ] ) ? selection[ 'skills' ] : []
+        const totalPrimitives = toolsArr.length + resourcesArr.length + promptsArr.length + skillsArr.length
+
+        if( totalPrimitives === 0 ) {
+            errors.push( { 'code': 'SEL002', 'message': 'At least one of tools/resources/prompts/skills must be non-empty' } )
+        }
+
+        // VAL110: namespace and name must be single words (no slashes)
+        if( selection[ 'namespace' ] && selection[ 'namespace' ].includes( '/' ) ) {
+            errors.push( { 'code': 'VAL110', 'message': `"namespace" must not contain slashes (got: "${selection[ 'namespace' ]}")` } )
+        }
+
+        if( selection[ 'name' ] && selection[ 'name' ].includes( '/' ) ) {
+            errors.push( { 'code': 'VAL110', 'message': `"name" must not contain slashes (got: "${selection[ 'name' ]}")` } )
+        }
+
+        // SEL002: id format check (if id field provided)
+        if( selection[ 'id' ] ) {
+            const idParts = selection[ 'id' ].split( '/' )
+            const isValidId = idParts.length === 3 && idParts[ 1 ] === 'selection'
+
+            if( !isValidId ) {
+                errors.push( { 'code': 'SEL002', 'message': `"id" must follow format namespace/selection/name (got: "${selection[ 'id' ]}")` } )
+            }
+        }
+
+        const result = {
+            'status': errors.length === 0,
+            errors,
+            warnings
+        }
+
+        return { result }
+    }
 }
 
 

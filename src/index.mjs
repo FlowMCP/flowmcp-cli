@@ -402,6 +402,42 @@ const runCommand = async () => {
         return true
     }
 
+    if( command === 'selection' ) {
+        const subCommand = positionals[ 1 ]
+
+        if( subCommand === 'list' ) {
+            const { result } = await FlowMcpCli.selectionList( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'show' ) {
+            const name = positionals[ 2 ]
+            const { result } = await FlowMcpCli.selectionShow( { cwd, name } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'validate' ) {
+            const selectionPath = positionals[ 2 ]
+            const { result } = await FlowMcpCli.selectionValidate( { cwd, 'path': selectionPath } )
+            output( { result } )
+
+            return true
+        }
+
+        const result = {
+            'status': false,
+            'error': `Unknown selection command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} dev selection list, ${appConfig[ 'cliCommand' ]} dev selection show <name>, ${appConfig[ 'cliCommand' ]} dev selection validate <path>`
+        }
+        output( { result } )
+
+        return true
+    }
+
     if( command === 'allowlist' ) {
         const subCommand = positionals[ 1 ]
         const validSubCommands = [ 'add', 'remove', 'list' ]
