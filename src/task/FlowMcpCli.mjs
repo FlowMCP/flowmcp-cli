@@ -10733,7 +10733,26 @@ allowlist, migrate-config, etc.).
             const SelectionValidator = v4 && v4[ 'SelectionValidator' ]
 
             if( SelectionValidator && typeof SelectionValidator.validate === 'function' ) {
-                const { status, errors, warnings } = SelectionValidator.validate( { selection } )
+                const validatorResult = SelectionValidator.validate( { selection } )
+                const rawErrors = validatorResult[ 'errors' ] || []
+                const errors = rawErrors.map( ( e ) => {
+                    if( typeof e === 'string' ) {
+                        const match = e.match( /^([A-Z]+\d*):\s*(.*)$/ )
+                        if( match ) {
+                            return { 'code': match[ 1 ], 'message': match[ 2 ] }
+                        }
+                        return { 'code': 'SEL000', 'message': e }
+                    }
+                    return e
+                } )
+                if( typeof selection[ 'namespace' ] === 'string' && selection[ 'namespace' ].includes( '/' ) ) {
+                    errors.push( { 'code': 'VAL110', 'message': `"namespace" must not contain slashes (got: "${selection[ 'namespace' ]}")` } )
+                }
+                if( typeof selection[ 'name' ] === 'string' && selection[ 'name' ].includes( '/' ) ) {
+                    errors.push( { 'code': 'VAL110', 'message': `"name" must not contain slashes (got: "${selection[ 'name' ]}")` } )
+                }
+                const status = errors.length === 0
+                const warnings = validatorResult[ 'warnings' ] || []
                 const result = { status, errors, warnings }
 
                 return { result }
