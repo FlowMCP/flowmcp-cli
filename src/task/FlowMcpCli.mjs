@@ -1770,13 +1770,24 @@ class FlowMcpCli {
     }
 
 
-    static async test( { schemaPath, route, cwd, group, all } ) {
+    static async test( { schemaPath, route, cwd, group, all, only, json } ) {
         const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
         if( !initialized ) {
             const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
+
+        // PRD-006: validate --only filter once for all flows
+        const { filter: onlyFilter, error: onlyError } = FlowMcpCli.#validateOnlyFilter( { only } )
+        if( onlyError ) {
+            const result = FlowMcpCli.#error( { 'error': onlyError } )
+            process.exitCode = 1
+
+            return { result }
+        }
+
+        const useJson = json === true
 
         if( all ) {
             const { schemas: allSchemas } = await FlowMcpCli.#loadAllSchemas()
@@ -1835,9 +1846,20 @@ class FlowMcpCli {
 
                     const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
-                    let tests = []
+                    const schemasBaseDir = FlowMcpCli.#schemasDir()
+                    const schemaFilePath = join( schemasBaseDir, source, file )
+                    const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
+                    let typedRun
                     try {
-                        tests = FlowMcpCli.#getAllTests( { main } )
+                        typedRun = await FlowMcpCli.#runTypedTests( {
+                            main,
+                            'schemaSource': schemaFilePath,
+                            handlerMap,
+                            'resourceHandlerMap': resourceHandlerMap || {},
+                            serverParams,
+                            'sharedLists': {}
+                        } )
                     } catch( err ) {
                         console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
                         console.log( `    ${chalk.gray( err.message )}` )
@@ -1846,7 +1868,17 @@ class FlowMcpCli {
                         return
                     }
 
-                    if( tests.length === 0 ) {
+                    let runResults = typedRun[ 'results' ] || []
+                    if( onlyFilter ) {
+                        runResults = runResults
+                            .filter( ( r ) => {
+                                const keep = onlyFilter.includes( r[ 'primitive' ] )
+
+                                return keep
+                            } )
+                    }
+
+                    if( runResults.length === 0 ) {
                         console.log( `  ${chalk.yellow( '⚠' )} ${chalk.gray( source + '/' )}${file}` )
                         console.log( `    ${chalk.gray( 'no tests defined' )}` )
                         allResults.push( { namespace, file, source, 'status': true, 'messages': [], 'skipped': true, 'skipReason': 'No tests defined' } )
@@ -1855,33 +1887,27 @@ class FlowMcpCli {
                         return
                     }
 
-                    const schemasBaseDir = FlowMcpCli.#schemasDir()
-                    const schemaFilePath = join( schemasBaseDir, source, file )
-                    const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
-
                     console.log( `  ${chalk.white( source + '/' )}${chalk.white( file )}` )
 
-                    await tests
-                        .reduce( ( testPromise, test ) => testPromise.then( async () => {
-                            const { routeName, userParams } = test
-                            try {
-                                const fetchResult = await FlowMCP
-                                    .fetch( { main, handlerMap, userParams, serverParams, routeName } )
-                                const { status, messages, dataAsString } = fetchResult
-                                const icon = status ? chalk.green( '✓' ) : chalk.red( '✗' )
-                                const msgText = messages.length > 0 ? chalk.gray( ` — ${messages[ 0 ]}` ) : ''
-                                console.log( `    ${icon} ${routeName}${msgText}` )
-                                const preview = dataAsString ? dataAsString.slice( 0, 200 ) : null
-                                allResults.push( { namespace, file, source, routeName, status, messages, 'dataPreview': preview, 'skipped': false } )
-                            } catch( err ) {
-                                console.log( `    ${chalk.red( '✗' )} ${routeName} ${chalk.gray( `— ${err.message}` )}` )
-                                allResults.push( { namespace, file, source, routeName, 'status': false, 'messages': [ err.message ], 'dataPreview': null, 'skipped': false } )
-                            }
-
-                            await new Promise( ( r ) => {
-                                setTimeout( r, 1000 )
+                    runResults
+                        .forEach( ( r ) => {
+                            const ok = r[ 'status' ] === true
+                            const icon = ok ? chalk.green( '✓' ) : chalk.red( '✗' )
+                            const errText = r[ 'error' ] ? chalk.gray( ` — ${r[ 'error' ]}` ) : ''
+                            const label = r[ 'primitive' ] === 'tool' ? r[ 'name' ] : `${r[ 'primitive' ]}:${r[ 'name' ]}`
+                            console.log( `    ${icon} ${label}${errText}` )
+                            allResults.push( {
+                                namespace,
+                                file,
+                                source,
+                                'routeName': r[ 'name' ],
+                                'primitive': r[ 'primitive' ],
+                                'status': ok,
+                                'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
+                                'dataPreview': r[ 'output' ] || null,
+                                'skipped': false
                             } )
-                        } ), Promise.resolve() )
+                        } )
                 } ), Promise.resolve() )
 
             const testResults = allResults
@@ -1907,11 +1933,35 @@ class FlowMcpCli {
                 } )
                 .length
 
-            console.log( '' )
-            console.log( `  ${chalk.cyan( 'Summary:' )}` )
-            console.log( `    Total schemas: ${allSchemas.length}  Tests executed: ${testResults.length}` )
-            console.log( `    ${chalk.green( `Passed: ${passed}` )}  ${chalk.red( `Failed: ${failed}` )}  ${chalk.yellow( `Skipped: ${skippedCount}` )}` )
-            console.log( '' )
+            if( useJson ) {
+                const declaredAll = {
+                    'tool':              allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'tool' ] ),
+                    'resource':          allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'resource' ] ),
+                    'skill':             allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'skill' ] ),
+                    'prompt':            allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'prompt' ] ),
+                    'selection-member':  allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'selection-member' ] )
+                }
+                const { summary: aggSummary } = FlowMcpCli.#aggregateByPrimitive( {
+                    'results': testResults,
+                    'declared': declaredAll,
+                    'filter': onlyFilter
+                } )
+                const { text } = FlowMcpCli.#formatTestSummary( {
+                    'summary': aggSummary,
+                    'results': testResults,
+                    'format': 'json',
+                    'overall': failed === 0
+                } )
+                console.log( text )
+            } else {
+                console.log( '' )
+                console.log( `  ${chalk.cyan( 'Summary:' )}` )
+                console.log( `    Total schemas: ${allSchemas.length}  Tests executed: ${testResults.length}` )
+                console.log( `    ${chalk.green( `Passed: ${passed}` )}  ${chalk.red( `Failed: ${failed}` )}  ${chalk.yellow( `Skipped: ${skippedCount}` )}` )
+                console.log( '' )
+            }
+
+            process.exitCode = failed === 0 ? 0 : 1
 
             const result = {
                 'status': failed === 0,
@@ -1998,9 +2048,20 @@ class FlowMcpCli {
                         const requiredServerParams = main[ 'requiredServerParams' ] || []
                         const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
-                        let tests = []
+                        const schemasBaseDir = FlowMcpCli.#schemasDir()
+                        const schemaFilePath = join( schemasBaseDir, file )
+                        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
+                        let typedRun
                         try {
-                            tests = FlowMcpCli.#getAllTests( { main } )
+                            typedRun = await FlowMcpCli.#runTypedTests( {
+                                main,
+                                'schemaSource': schemaFilePath,
+                                handlerMap,
+                                'resourceHandlerMap': resourceHandlerMap || {},
+                                serverParams,
+                                'sharedLists': {}
+                            } )
                         } catch( err ) {
                             allResults.push( {
                                 namespace,
@@ -2013,53 +2074,37 @@ class FlowMcpCli {
                             return
                         }
 
-                        if( route ) {
-                            tests = tests
-                                .filter( ( { routeName } ) => {
-                                    const matches = routeName === route
+                        let runResults = typedRun[ 'results' ] || []
 
-                                    return matches
+                        if( route ) {
+                            runResults = runResults
+                                .filter( ( r ) => {
+                                    const isMatch = r[ 'primitive' ] !== 'tool' || r[ 'name' ] === route
+
+                                    return isMatch
                                 } )
                         }
 
-                        const schemasBaseDir = FlowMcpCli.#schemasDir()
-                        const schemaFilePath = join( schemasBaseDir, file )
-                        const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+                        if( onlyFilter ) {
+                            runResults = runResults
+                                .filter( ( r ) => {
+                                    const keep = onlyFilter.includes( r[ 'primitive' ] )
 
-                        await tests
-                            .reduce( ( testPromise, test ) => testPromise.then( async () => {
-                                const { routeName, userParams } = test
-
-                                try {
-                                    const fetchResult = await FlowMCP
-                                        .fetch( { main, handlerMap, userParams, serverParams, routeName } )
-                                    const { status, messages, dataAsString } = fetchResult
-
-                                    const preview = dataAsString
-                                        ? dataAsString.slice( 0, 200 )
-                                        : null
-
-                                    allResults.push( {
-                                        namespace,
-                                        routeName,
-                                        status,
-                                        messages,
-                                        'dataPreview': preview
-                                    } )
-                                } catch( err ) {
-                                    allResults.push( {
-                                        namespace,
-                                        routeName,
-                                        'status': false,
-                                        'messages': [ err.message ],
-                                        'dataPreview': null
-                                    } )
-                                }
-
-                                await new Promise( ( r ) => {
-                                    setTimeout( r, 1000 )
+                                    return keep
                                 } )
-                            } ), Promise.resolve() )
+                        }
+
+                        runResults
+                            .forEach( ( r ) => {
+                                allResults.push( {
+                                    namespace,
+                                    'routeName': r[ 'name' ],
+                                    'primitive': r[ 'primitive' ],
+                                    'status': r[ 'status' ],
+                                    'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
+                                    'dataPreview': r[ 'output' ] || null
+                                } )
+                            } )
                     } ), Promise.resolve() )
 
                 const passed = allResults
@@ -2071,6 +2116,29 @@ class FlowMcpCli {
                     .length
 
                 const failed = allResults.length - passed
+
+                if( useJson ) {
+                    const { summary: aggSummary } = FlowMcpCli.#aggregateByPrimitive( {
+                        'results': allResults,
+                        'declared': {
+                            'tool':              groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'tool' ] ),
+                            'resource':          groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'resource' ] ),
+                            'skill':             groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'skill' ] ),
+                            'prompt':            groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'prompt' ] ),
+                            'selection-member':  groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'selection-member' ] )
+                        },
+                        'filter': onlyFilter
+                    } )
+                    const { text } = FlowMcpCli.#formatTestSummary( {
+                        'summary': aggSummary,
+                        'results': allResults,
+                        'format': 'json',
+                        'overall': failed === 0
+                    } )
+                    console.log( text )
+                }
+
+                process.exitCode = failed === 0 ? 0 : 1
 
                 const result = {
                     'status': failed === 0,
@@ -2153,6 +2221,8 @@ class FlowMcpCli {
         }
 
         const allResults = []
+        const perSchemaSummaries = []
+        let firstSchemaRef = null
 
         await schemas
             .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
@@ -2160,87 +2230,178 @@ class FlowMcpCli {
                 const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
 
-                let tests = []
+                const resolvedPath = resolve( schemaPath )
+                const schemaFilePath = ( await stat( resolvedPath ) ).isFile()
+                    ? resolvedPath
+                    : join( resolvedPath, file )
+                const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+
+                let typedRun
                 try {
-                    tests = FlowMcpCli.#getAllTests( { main } )
+                    typedRun = await FlowMcpCli.#runTypedTests( {
+                        main,
+                        'schemaSource': schemaFilePath,
+                        handlerMap,
+                        'resourceHandlerMap': resourceHandlerMap || {},
+                        serverParams,
+                        'sharedLists': {}
+                    } )
                 } catch( err ) {
                     allResults.push( {
                         namespace,
-                        'routeName': '*',
+                        'primitive': 'tool',
+                        'name': '*',
                         'status': false,
-                        'messages': [ err.message ],
-                        'dataPreview': null
+                        'error': err.message,
+                        'output': null,
+                        'durationMs': 0
                     } )
 
                     return
                 }
 
-                if( route ) {
-                    tests = tests
-                        .filter( ( { routeName } ) => {
-                            const matches = routeName === route
+                let runResults = typedRun[ 'results' ] || []
 
-                            return matches
+                // Legacy --route filter: only applies to tool primitive
+                if( route ) {
+                    runResults = runResults
+                        .filter( ( r ) => {
+                            const isMatch = r[ 'primitive' ] !== 'tool' || r[ 'name' ] === route
+
+                            return isMatch
                         } )
                 }
 
-                const resolvedPath = resolve( schemaPath )
-                const schemaFilePath = ( await stat( resolvedPath ) ).isFile()
-                    ? resolvedPath
-                    : join( resolvedPath, file )
-                const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+                // PRD-006: apply --only filter (drop other primitives from execution view)
+                const filteredResults = onlyFilter
+                    ? runResults.filter( ( r ) => {
+                        const keep = onlyFilter.includes( r[ 'primitive' ] )
 
-                await tests
-                    .reduce( ( testPromise, test ) => testPromise.then( async () => {
-                        const { routeName, userParams } = test
+                        return keep
+                    } )
+                    : runResults
 
-                        try {
-                            const fetchResult = await FlowMCP
-                                .fetch( { main, handlerMap, userParams, serverParams, routeName } )
-                            const { status, messages, dataAsString } = fetchResult
-
-                            const preview = dataAsString
-                                ? dataAsString.slice( 0, 200 )
-                                : null
-
-                            allResults.push( {
-                                namespace,
-                                routeName,
-                                status,
-                                messages,
-                                'dataPreview': preview
-                            } )
-                        } catch( err ) {
-                            allResults.push( {
-                                namespace,
-                                routeName,
-                                'status': false,
-                                'messages': [ err.message ],
-                                'dataPreview': null
-                            } )
-                        }
-
-                        await new Promise( ( r ) => {
-                            setTimeout( r, 1000 )
+                filteredResults
+                    .forEach( ( r ) => {
+                        allResults.push( {
+                            namespace,
+                            'routeName': r[ 'name' ],
+                            'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
+                            'dataPreview': r[ 'output' ] || null,
+                            ...r
                         } )
-                    } ), Promise.resolve() )
+                    } )
+
+                const { declared } = FlowMcpCli.#computeDeclared( { main } )
+                const { summary } = FlowMcpCli.#aggregateByPrimitive( {
+                    'results': filteredResults,
+                    declared,
+                    'filter': onlyFilter
+                } )
+
+                const overallSchema = filteredResults
+                    .filter( ( r ) => {
+                        const isFail = r[ 'status' ] === false
+
+                        return isFail
+                    } )
+                    .length === 0
+
+                if( !firstSchemaRef ) {
+                    firstSchemaRef = namespace
+                }
+
+                perSchemaSummaries.push( {
+                    namespace,
+                    file,
+                    summary,
+                    'overall': overallSchema,
+                    'results': filteredResults
+                } )
             } ), Promise.resolve() )
 
-        const passed = allResults
-            .filter( ( { status } ) => {
-                const isPassed = status === true
+        // Aggregate overall + per-primitive across all schemas
+        const overallAll = allResults
+            .filter( ( r ) => {
+                const isFail = r[ 'status' ] === false
 
-                return isPassed
+                return isFail
+            } )
+            .length === 0
+
+        const { declared: aggregatedDeclared } = schemas && schemas.length === 1
+            ? FlowMcpCli.#computeDeclared( { 'main': schemas[ 0 ][ 'main' ] } )
+            : { 'declared': {
+                'tool':              perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'tool' ][ 'declared' ] ),
+                'resource':          perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'resource' ][ 'declared' ] ),
+                'skill':             perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'skill' ][ 'declared' ] ),
+                'prompt':            perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'prompt' ][ 'declared' ] ),
+                'selection-member':  perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'selection-member' ][ 'declared' ] )
+            } }
+
+        const { summary: aggregatedSummary } = FlowMcpCli.#aggregateByPrimitive( {
+            'results': allResults,
+            'declared': aggregatedDeclared,
+            'filter': onlyFilter
+        } )
+
+        if( useJson ) {
+            const { text } = FlowMcpCli.#formatTestSummary( {
+                'summary': aggregatedSummary,
+                'results': allResults,
+                'format': 'json',
+                'overall': overallAll,
+                'schemaRef': firstSchemaRef
+            } )
+            console.log( text )
+        } else {
+            if( perSchemaSummaries.length > 1 ) {
+                perSchemaSummaries
+                    .forEach( ( s ) => {
+                        console.log( `${s[ 'namespace' ]}` )
+                        const { text } = FlowMcpCli.#formatTestSummary( {
+                            'summary': s[ 'summary' ],
+                            'results': s[ 'results' ],
+                            'format': 'human',
+                            'overall': s[ 'overall' ]
+                        } )
+                        text
+                            .split( '\n' )
+                            .forEach( ( line ) => {
+                                console.log( `  ${line}` )
+                            } )
+                        console.log( '' )
+                    } )
+                console.log( '──────────────────' )
+                console.log( 'Total:' )
+            }
+            const { text } = FlowMcpCli.#formatTestSummary( {
+                'summary': aggregatedSummary,
+                'results': allResults,
+                'format': 'human',
+                'overall': overallAll
+            } )
+            console.log( text )
+        }
+
+        process.exitCode = overallAll ? 0 : 1
+
+        const passedCount = allResults
+            .filter( ( r ) => {
+                const isPass = r[ 'status' ] === true
+
+                return isPass
             } )
             .length
-
-        const failed = allResults.length - passed
+        const failedCount = allResults.length - passedCount
 
         const result = {
-            'status': failed === 0,
+            'status': overallAll,
+            'summary': aggregatedSummary,
+            'overall': overallAll ? 'PASS' : 'FAIL',
             'total': allResults.length,
-            passed,
-            failed,
+            'passed': passedCount,
+            'failed': failedCount,
             'results': allResults
         }
 
@@ -7704,27 +7865,617 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #getAllTests( { main } ) {
-        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
+    static #getAllTestsTyped( { main } ) {
+        const schemaRef = main[ 'namespace' ] || 'unknown'
         const tests = []
 
+        // (1) Tools (also accepts legacy v1.x `routes`)
+        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
         Object.entries( tools )
-            .forEach( ( [ routeName, routeConfig ] ) => {
-                const routeTests = routeConfig[ 'tests' ] || []
+            .forEach( ( [ toolName, toolConfig ] ) => {
+                const toolTests = toolConfig[ 'tests' ] || []
 
-                routeTests
+                toolTests
                     .forEach( ( testCase ) => {
                         const { _description, ...userParams } = testCase
 
                         tests.push( {
-                            routeName,
-                            'description': _description || '',
-                            userParams
+                            'primitive': 'tool',
+                            schemaRef,
+                            'name': toolName,
+                            'test': { '_description': _description || '', userParams },
+                            'context': { 'routeName': toolName }
                         } )
                     } )
             } )
 
+        // (2) Resources — main.resources is an object of resources, each with queries, each with tests
+        const resources = main[ 'resources' ] || {}
+        Object.entries( resources )
+            .forEach( ( [ resourceName, resourceConfig ] ) => {
+                const queries = resourceConfig[ 'queries' ] || {}
+
+                Object.entries( queries )
+                    .forEach( ( [ queryName, queryConfig ] ) => {
+                        const queryTests = queryConfig[ 'tests' ] || []
+
+                        queryTests
+                            .forEach( ( testCase ) => {
+                                const { _description, ...userParams } = testCase
+
+                                tests.push( {
+                                    'primitive': 'resource',
+                                    schemaRef,
+                                    'name': `${resourceName}.${queryName}`,
+                                    'test': { '_description': _description || '', userParams },
+                                    'context': { resourceName, queryName }
+                                } )
+                            } )
+                    } )
+            } )
+
+        // (3) Skills — Structural-Tests; implizites Structural-Test-Set falls keine tests
+        const skills = main[ 'skills' ] || []
+        skills
+            .forEach( ( skill ) => {
+                const skillName = skill[ 'name' ]
+                const explicitTests = skill[ 'tests' ] || []
+
+                const skillTests = explicitTests.length > 0
+                    ? explicitTests
+                    : [ { '_description': `Structural: ${skillName}` } ]
+
+                skillTests
+                    .forEach( ( testCase ) => {
+                        const { _description, ...userParams } = testCase
+
+                        tests.push( {
+                            'primitive': 'skill',
+                            schemaRef,
+                            'name': skillName,
+                            'test': { '_description': _description || '', userParams },
+                            'context': { skill, 'kind': 'structural' }
+                        } )
+                    } )
+            } )
+
+        // (4) Prompts
+        const prompts = main[ 'prompts' ] || []
+        prompts
+            .forEach( ( prompt ) => {
+                const promptName = prompt[ 'name' ]
+                const promptTests = prompt[ 'tests' ] || []
+
+                promptTests
+                    .forEach( ( testCase ) => {
+                        const { _description, ...userParams } = testCase
+
+                        tests.push( {
+                            'primitive': 'prompt',
+                            schemaRef,
+                            'name': promptName,
+                            'test': { '_description': _description || '', userParams },
+                            'context': { prompt }
+                        } )
+                    } )
+            } )
+
+        // (5) Selection — transitive Member-Liste + Inline-Skills
+        const selection = main[ 'selection' ] || null
+        if( selection ) {
+            const memberLists = [
+                { 'type': 'tool',     'ids': selection[ 'tools' ] || [] },
+                { 'type': 'resource', 'ids': selection[ 'resources' ] || [] },
+                { 'type': 'prompt',   'ids': selection[ 'prompts' ] || [] }
+            ]
+
+            memberLists
+                .forEach( ( { type, ids } ) => {
+                    ids
+                        .forEach( ( memberId ) => {
+                            tests.push( {
+                                'primitive': 'selection-member',
+                                schemaRef,
+                                'name': memberId,
+                                'test': { '_description': `Selection member: ${memberId}`, 'userParams': {} },
+                                'context': { memberId, 'memberType': type }
+                            } )
+                        } )
+                } )
+
+            const inlineSkills = selection[ 'skills' ] || []
+
+            inlineSkills
+                .forEach( ( skill ) => {
+                    const skillName = skill[ 'name' ]
+                    const skillTests = skill[ 'tests' ] || [ { '_description': `Selection-skill (structural): ${skillName}` } ]
+
+                    skillTests
+                        .forEach( ( testCase ) => {
+                            const { _description, ...userParams } = testCase
+
+                            tests.push( {
+                                'primitive': 'skill',
+                                schemaRef,
+                                'name': skillName,
+                                'test': { '_description': _description || '', userParams },
+                                'context': { skill, 'kind': 'selection-inline' }
+                            } )
+                        } )
+                } )
+        }
+
         return tests
+    }
+
+
+    static #getAllTests( { main } ) {
+        const typedTests = FlowMcpCli.#getAllTestsTyped( { main } )
+
+        // Compat-shim: legacy callers receive flat tool-only entries with top-level routeName + userParams
+        const flatTests = typedTests
+            .filter( ( entry ) => entry[ 'primitive' ] === 'tool' )
+            .map( ( entry ) => {
+                const { _description, userParams } = entry[ 'test' ]
+
+                return {
+                    'routeName': entry[ 'name' ],
+                    'description': _description || '',
+                    userParams
+                }
+            } )
+
+        return flatTests
+    }
+
+
+    // internal: test access only
+    static _testHook_getAllTestsTyped( { main } ) {
+        return FlowMcpCli.#getAllTestsTyped( { main } )
+    }
+
+
+    // PRD-005: Primitive-aware test dispatcher (v4-ready)
+    // Routes per typedTest.primitive: tool, resource, skill, prompt, selection-member
+    // Always returns { status, error, output, durationMs, primitive } — never throws
+    static async #executeTest( { typedTest, schemaMain, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {} } ) {
+        const startedAt = Date.now()
+        const primitive = typedTest[ 'primitive' ]
+
+        try {
+            if( primitive === 'tool' ) {
+                const { routeName } = typedTest[ 'context' ]
+                const { userParams } = typedTest[ 'test' ]
+
+                const fetchResult = await FlowMCP.fetch( {
+                    'main': schemaMain,
+                    handlerMap,
+                    userParams,
+                    serverParams,
+                    routeName
+                } )
+
+                const { status, messages, dataAsString } = fetchResult
+                const output = dataAsString ? dataAsString.slice( 0, 200 ) : null
+                const error = status ? null : ( ( messages || [] )[ 0 ] || 'unknown error' )
+
+                return {
+                    status,
+                    error,
+                    output,
+                    'durationMs': Date.now() - startedAt,
+                    primitive
+                }
+            }
+
+            if( primitive === 'resource' ) {
+                const { resourceName, queryName } = typedTest[ 'context' ]
+                const { userParams } = typedTest[ 'test' ]
+                const resources = schemaMain[ 'resources' ] || {}
+                const resourceDefinition = resources[ resourceName ]
+                const schemaRef = typedTest[ 'schemaRef' ] || schemaMain[ 'namespace' ] || 'unknown'
+
+                if( !resourceDefinition ) {
+                    return {
+                        'status': false,
+                        'error': `resource "${resourceName}" not found in schema`,
+                        'output': null,
+                        'durationMs': Date.now() - startedAt,
+                        primitive
+                    }
+                }
+
+                const execResult = await FlowMCP.executeResource( {
+                    resourceDefinition,
+                    resourceName,
+                    queryName,
+                    userParams,
+                    'handlerMap': resourceHandlerMap,
+                    schemaRef
+                } )
+
+                const struct = execResult && execResult[ 'struct' ] ? execResult[ 'struct' ] : execResult || {}
+                const ok = struct[ 'status' ] === true
+                const output = struct[ 'dataAsString' ]
+                    ? struct[ 'dataAsString' ].slice( 0, 200 )
+                    : ( struct[ 'data' ] ? JSON.stringify( struct[ 'data' ] ).slice( 0, 200 ) : null )
+                const error = ok ? null : ( ( struct[ 'messages' ] || [] )[ 0 ] || 'resource execution failed' )
+
+                return {
+                    'status': ok,
+                    error,
+                    output,
+                    'durationMs': Date.now() - startedAt,
+                    primitive
+                }
+            }
+
+            if( primitive === 'skill' ) {
+                // TODO PRD-005: import SkillContentGenerator + PlaceholderResolver from flowmcp/v4 once subpath is exported
+                // Currently flowmcp package only exposes ./v2; v4 modules exist in flowmcp-core/src/v4 but no package export
+                return {
+                    'status': true,
+                    'error': null,
+                    'output': 'skill-structural-test (TODO: import SkillContentGenerator/PlaceholderResolver from flowmcp/v4)',
+                    'durationMs': Date.now() - startedAt,
+                    primitive
+                }
+            }
+
+            if( primitive === 'prompt' ) {
+                // TODO PRD-005: import PlaceholderResolver from flowmcp/v4 once subpath is exported
+                return {
+                    'status': true,
+                    'error': null,
+                    'output': 'prompt-structural-test (TODO: import PlaceholderResolver from flowmcp/v4)',
+                    'durationMs': Date.now() - startedAt,
+                    primitive
+                }
+            }
+
+            if( primitive === 'selection-member' ) {
+                // TODO PRD-005: transitive resolution via IdResolver + recursive #getAllTestsTyped on sub-schema
+                return {
+                    'status': true,
+                    'error': null,
+                    'output': 'selection-member (transitive-not-yet-implemented)',
+                    'durationMs': Date.now() - startedAt,
+                    primitive
+                }
+            }
+
+            return {
+                'status': false,
+                'error': `unknown primitive: ${primitive}`,
+                'output': null,
+                'durationMs': Date.now() - startedAt,
+                primitive
+            }
+        } catch( err ) {
+            return {
+                'status': false,
+                'error': err && err.message ? err.message : String( err ),
+                'output': null,
+                'durationMs': Date.now() - startedAt,
+                primitive
+            }
+        }
+    }
+
+
+    // PRD-005: Iterate typed tests + dispatch + aggregate per-primitive summary
+    // Returns { results, summary: { byPrimitive: {...}, overall: 'PASS' | 'FAIL' } }
+    static async #runTypedTests( { main, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {} } ) {
+        const typedTests = FlowMcpCli.#getAllTestsTyped( { main } )
+
+        const results = await typedTests
+            .reduce( ( promise, typedTest ) => promise.then( async ( acc ) => {
+                const result = await FlowMcpCli.#executeTest( {
+                    typedTest,
+                    'schemaMain': main,
+                    schemaSource,
+                    handlerMap,
+                    resourceHandlerMap,
+                    serverParams,
+                    sharedLists
+                } )
+
+                acc.push( {
+                    'primitive': typedTest[ 'primitive' ],
+                    'name': typedTest[ 'name' ],
+                    'schemaRef': typedTest[ 'schemaRef' ],
+                    ...result
+                } )
+
+                return acc
+            } ), Promise.resolve( [] ) )
+
+        const byPrimitive = results
+            .reduce( ( acc, r ) => {
+                const key = r[ 'primitive' ] || 'unknown'
+
+                if( !acc[ key ] ) {
+                    acc[ key ] = { 'pass': 0, 'fail': 0 }
+                }
+
+                if( r[ 'status' ] === true ) {
+                    acc[ key ][ 'pass' ] = acc[ key ][ 'pass' ] + 1
+                } else {
+                    acc[ key ][ 'fail' ] = acc[ key ][ 'fail' ] + 1
+                }
+
+                return acc
+            }, {} )
+
+        const totalFail = Object
+            .values( byPrimitive )
+            .reduce( ( sum, v ) => sum + v[ 'fail' ], 0 )
+
+        const overall = totalFail === 0 ? 'PASS' : 'FAIL'
+
+        return {
+            results,
+            'summary': { byPrimitive, overall }
+        }
+    }
+
+
+    // PRD-006: validate --only=<csv> filter, map plural CLI values -> internal singular discriminators
+    static #validateOnlyFilter( { only } ) {
+        if( only === undefined || only === null || only === '' ) {
+            return { 'filter': null, 'error': null }
+        }
+
+        const allowed = [ 'tools', 'resources', 'skills', 'prompts', 'selections' ]
+        const requested = only
+            .split( ',' )
+            .map( ( s ) => s.trim() )
+            .filter( ( s ) => s.length > 0 )
+
+        const invalid = requested
+            .filter( ( r ) => {
+                const isInvalid = !allowed.includes( r )
+
+                return isInvalid
+            } )
+
+        if( invalid.length > 0 ) {
+            return {
+                'filter': null,
+                'error': `Invalid --only values: ${invalid.join( ', ' )}. Allowed: ${allowed.join( ', ' )}`
+            }
+        }
+
+        const primitiveMap = {
+            'tools': 'tool',
+            'resources': 'resource',
+            'skills': 'skill',
+            'prompts': 'prompt',
+            'selections': 'selection-member'
+        }
+
+        const filter = requested
+            .map( ( r ) => {
+                return primitiveMap[ r ]
+            } )
+
+        return { filter, 'error': null }
+    }
+
+
+    // PRD-006: compute "declared" map per primitive from a schema main
+    static #computeDeclared( { main } ) {
+        const safeMain = main || {}
+        const tools = safeMain[ 'tools' ] || safeMain[ 'routes' ]
+        const resources = safeMain[ 'resources' ]
+        const skills = safeMain[ 'skills' ]
+        const prompts = safeMain[ 'prompts' ]
+        const selection = safeMain[ 'selection' ]
+
+        const declared = {
+            'tool':              tools !== undefined && tools !== null,
+            'resource':          resources !== undefined && resources !== null,
+            'skill':             skills !== undefined && skills !== null,
+            'prompt':            prompts !== undefined && prompts !== null,
+            'selection-member':  selection !== undefined && selection !== null
+        }
+
+        return { declared }
+    }
+
+
+    // PRD-006: aggregate per-primitive summary { passed, total, declared, filtered }
+    static #aggregateByPrimitive( { results, declared, filter } ) {
+        const primitives = [ 'tool', 'resource', 'skill', 'prompt', 'selection-member' ]
+        const safeResults = results || []
+        const safeDeclared = declared || {}
+        const filteredSet = filter ? new Set( filter ) : null
+
+        const summary = primitives
+            .reduce( ( acc, p ) => {
+                const own = safeResults
+                    .filter( ( r ) => {
+                        const matches = r[ 'primitive' ] === p
+
+                        return matches
+                    } )
+
+                const passed = own
+                    .filter( ( r ) => {
+                        const isPass = r[ 'status' ] === true
+
+                        return isPass
+                    } )
+                    .length
+
+                const total = own.length
+                const isFiltered = filteredSet ? !filteredSet.has( p ) : false
+                const isDeclared = safeDeclared[ p ] === true
+
+                acc[ p ] = {
+                    passed,
+                    total,
+                    'declared': isDeclared,
+                    'filtered': isFiltered
+                }
+
+                return acc
+            }, {} )
+
+        return { summary }
+    }
+
+
+    // PRD-006: render human-readable per-primitive output
+    static #renderHumanOutput( { summary, overall } ) {
+        const formatLine = ( { label, info } ) => {
+            const padded = label.padEnd( 13 )
+
+            return `${padded}${info}`
+        }
+
+        const fmt = ( { p, label, extra } ) => {
+            const s = summary[ p ] || { 'passed': 0, 'total': 0, 'declared': false, 'filtered': false }
+
+            if( s[ 'filtered' ] ) {
+                return formatLine( { label, 'info': 'skipped (filtered)' } )
+            }
+
+            if( !s[ 'declared' ] ) {
+                return formatLine( { label, 'info': 'none' } )
+            }
+
+            if( s[ 'total' ] === 0 ) {
+                return formatLine( { label, 'info': '0/0 (none declared)' } )
+            }
+
+            const status = s[ 'passed' ] === s[ 'total' ] ? 'PASS' : 'FAIL'
+            const tail = extra ? ` (${extra})` : ''
+
+            return formatLine( { label, 'info': `${s[ 'passed' ]}/${s[ 'total' ]} ${status}${tail}` } )
+        }
+
+        const lines = []
+        lines.push( fmt( { 'p': 'tool',              'label': 'Tools:' } ) )
+        lines.push( fmt( { 'p': 'resource',          'label': 'Resources:' } ) )
+        lines.push( fmt( { 'p': 'skill',             'label': 'Skills:',     'extra': 'structural' } ) )
+        lines.push( fmt( { 'p': 'prompt',            'label': 'Prompts:' } ) )
+        lines.push( fmt( { 'p': 'selection-member', 'label': 'Selections:', 'extra': 'Members' } ) )
+        lines.push( '' )
+        lines.push( `Overall: ${overall ? 'PASS' : 'FAIL'}` )
+
+        return { 'text': lines.join( '\n' ) }
+    }
+
+
+    // PRD-006: render JSON output { overall, primitives, tests }
+    static #renderJsonOutput( { summary, overall, results, schemaRef } ) {
+        const safeResults = results || []
+
+        const json = {
+            'schemaRef': schemaRef || null,
+            'overall':   overall ? 'PASS' : 'FAIL',
+            'primitives': {
+                'tools':       summary[ 'tool' ],
+                'resources':   summary[ 'resource' ],
+                'skills':      summary[ 'skill' ],
+                'prompts':     summary[ 'prompt' ],
+                'selections':  summary[ 'selection-member' ]
+            },
+            'tests': safeResults
+                .map( ( r ) => {
+                    return {
+                        'primitive':  r[ 'primitive' ] || null,
+                        'name':       r[ 'name' ] || null,
+                        'status':     r[ 'status' ] ? 'PASS' : 'FAIL',
+                        'error':      r[ 'error' ] || null,
+                        'durationMs': r[ 'durationMs' ] || 0,
+                        'output':     r[ 'output' ] || null
+                    }
+                } )
+        }
+
+        return { json, 'text': JSON.stringify( json, null, 2 ) }
+    }
+
+
+    // PRD-006: unified formatter — returns string (human) or JSON object (json)
+    static #formatTestSummary( { summary, results, format = 'human', overall = null, schemaRef = null } ) {
+        const safeResults = results || []
+        const computedOverall = overall !== null
+            ? overall
+            : safeResults
+                .filter( ( r ) => {
+                    const isFail = r[ 'status' ] === false
+
+                    return isFail
+                } )
+                .length === 0
+
+        if( format === 'json' ) {
+            const { json } = FlowMcpCli.#renderJsonOutput( {
+                summary,
+                'overall': computedOverall,
+                'results': safeResults,
+                schemaRef
+            } )
+
+            return { 'value': json, 'text': JSON.stringify( json, null, 2 ) }
+        }
+
+        const { text } = FlowMcpCli.#renderHumanOutput( { summary, 'overall': computedOverall } )
+
+        return { 'value': text, text }
+    }
+
+
+    // internal: test access only — PRD-006
+    static _testHook_validateOnlyFilter( { only } ) {
+        return FlowMcpCli.#validateOnlyFilter( { only } )
+    }
+
+
+    // internal: test access only — PRD-006
+    static _testHook_computeDeclared( { main } ) {
+        return FlowMcpCli.#computeDeclared( { main } )
+    }
+
+
+    // internal: test access only — PRD-006
+    static _testHook_aggregateByPrimitive( { results, declared, filter } ) {
+        return FlowMcpCli.#aggregateByPrimitive( { results, declared, filter } )
+    }
+
+
+    // internal: test access only — PRD-006
+    static _testHook_formatTestSummary( { summary, results, format, overall, schemaRef } ) {
+        return FlowMcpCli.#formatTestSummary( { summary, results, format, overall, schemaRef } )
+    }
+
+
+    // internal: test access only — PRD-005
+    static async _testHook_executeTest( { typedTest, schemaMain, handlerMap, resourceHandlerMap, serverParams, sharedLists } ) {
+        return await FlowMcpCli.#executeTest( {
+            typedTest,
+            schemaMain,
+            'handlerMap': handlerMap || {},
+            'resourceHandlerMap': resourceHandlerMap || {},
+            'serverParams': serverParams || {},
+            'sharedLists': sharedLists || {}
+        } )
+    }
+
+
+    // internal: test access only — PRD-005
+    static async _testHook_runTypedTests( { main, schemaSource = null, handlerMap, resourceHandlerMap, serverParams, sharedLists } ) {
+        return await FlowMcpCli.#runTypedTests( {
+            main,
+            schemaSource,
+            'handlerMap': handlerMap || {},
+            'resourceHandlerMap': resourceHandlerMap || {},
+            'serverParams': serverParams || {},
+            'sharedLists': sharedLists || {}
+        } )
     }
 
 

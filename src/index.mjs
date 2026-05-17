@@ -33,7 +33,8 @@ const args = parseArgs( {
         'print-guide': { type: 'boolean' },
         'key': { type: 'string' },
         'mode': { type: 'string' },
-        'schema': { type: 'string' }
+        'schema': { type: 'string' },
+        'only': { type: 'string' }
     }
 } )
 
@@ -590,25 +591,33 @@ const runCommand = async () => {
         const subCommand = positionals[ 1 ]
         const route = values[ 'route' ]
         const group = values[ 'group' ]
+        const only = values[ 'only' ]
+        const json = values[ 'json' ] === true
 
         if( subCommand === 'project' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false } )
-            output( { result } )
+            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false, only, json } )
+            if( !json ) {
+                output( { result } )
+            }
 
             return true
         }
 
         if( subCommand === 'user' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true } )
-            output( { result } )
+            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true, only, json } )
+            if( !json ) {
+                output( { result } )
+            }
 
             return true
         }
 
         if( subCommand === 'single' ) {
             const filePath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false } )
-            output( { result } )
+            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false, only, json } )
+            if( !json ) {
+                output( { result } )
+            }
 
             return true
         }
