@@ -7268,7 +7268,11 @@ Validation & Testing:
   dev validate [path]                 Validate schema(s) structurally
   dev test project                    Test all schemas in default/specified group
   dev test user                       Test all user schemas
-  dev test single <path>              Test a single schema file
+  dev test single <path>              Test a single schema file (all v4 primitives:
+                                      tools, resources, skills, prompts, selections)
+    --only=<csv>                      Restrict to selected primitives. Allowed:
+                                      tools | resources | skills | prompts | selections
+    --json                            Emit machine-readable JSON summary
   dev grade <path>                    Generate Grade Report (deterministic + LLM-eval)
 
 Configuration:

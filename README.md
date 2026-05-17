@@ -200,6 +200,60 @@ flowmcp test single ./my-schema.mjs
 flowmcp test single ./my-schema.mjs --route getBalance
 ```
 
+## Testing
+
+`flowmcp dev test single <path>` validates all five v4 primitives declared in a
+single schema file and prints a consolidated summary:
+
+| Primitive  | Source in Schema                       | Test Strategy                                  |
+|------------|-----------------------------------------|------------------------------------------------|
+| Tools      | `main.tools[*].tests`                   | HTTP fetch via `FlowMCP.fetch`                 |
+| Resources  | `main.resources[*].queries[*].tests`    | `FlowMCP.executeResource` (SQLite readonly)    |
+| Skills     | `main.skills[*].tests`                  | Structural (placeholder + prefill resolution)  |
+| Prompts    | `main.prompts[*].tests`                 | Placeholder resolution                          |
+| Selections | Selection file (transitive)             | Member iteration + aggregate                   |
+
+Example output:
+
+```
+Tools:       0/0 (none declared)
+Resources:   6/6 PASS (3 queries × 2 tests each)
+Skills:      1/1 PASS (structural)
+Prompts:     none
+Selections:  4/4 Members PASS
+
+Overall: PASS
+```
+
+### Filtering with `--only`
+
+Use `--only=<csv>` to restrict a run to selected primitives. Allowed values:
+`tools`, `resources`, `skills`, `prompts`, `selections` (comma-separated for
+multiple).
+
+```bash
+# Only run Resource tests
+flowmcp dev test single ./schema.mjs --only=resources
+
+# Run Resources and Skills only
+flowmcp dev test single ./schema.mjs --only=resources,skills
+```
+
+### Structured Output with `--json`
+
+Add `--json` to emit a machine-readable summary. The JSON object contains
+`overall`, `primitives` (per-primitive counts), and `tests` (per-test detail).
+This format is consumed by downstream tooling such as the Memo 035 conformance
+report and the Memo 028 Grade Report.
+
+```bash
+flowmcp dev test single ./schema.mjs --json
+```
+
+One-shot LLM tests for Skills are intentionally not a CLI feature; they run in
+the Harness (see Spec v4.0.0 §10).
+
+
 ### Schema Migration (v2 to v3)
 
 ```bash
