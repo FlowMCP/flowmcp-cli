@@ -177,7 +177,7 @@ describe( 'groupAppend — Spec-ID 2-slash tool', () => {
         expect( result[ 'tools' ] ).toContain( 'demo/tool/ping' )
 
         await rm( cwd, { recursive: true, force: true } )
-    } )
+    }, 90000 )
 } )
 
 

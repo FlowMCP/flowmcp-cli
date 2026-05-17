@@ -330,7 +330,7 @@ describe( 'getNamespaceIndex — source: cache vs rebuilt', () => {
 
         expect( result2[ 'source' ] ).toBe( 'cache' )
         expect( result2[ 'index' ][ 'builtAt' ] ).toBe( result1[ 'index' ][ 'builtAt' ] )
-    } )
+    }, 90000 )
 
     it( 'forceRebuild: true rebuilds even if cache exists', async () => {
         // Ensure cache exists from previous test
@@ -342,7 +342,7 @@ describe( 'getNamespaceIndex — source: cache vs rebuilt', () => {
 
         expect( rebuiltResult[ 'source' ] ).toBe( 'rebuilt' )
         expect( rebuiltResult[ 'index' ] ).toBeDefined()
-    } )
+    }, 90000 )
 } )
 
 

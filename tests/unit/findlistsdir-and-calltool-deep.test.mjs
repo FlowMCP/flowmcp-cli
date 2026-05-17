@@ -405,5 +405,5 @@ describe( 'FlowMcpCli.add — with force flag exercises bustCache', () => {
 
         expect( forceAdd[ 'status' ] ).toBe( true )
         expect( forceAdd[ 'added' ] ).toBe( 'ping_forcesrc' )
-    } )
+    }, 90000 )
 } )

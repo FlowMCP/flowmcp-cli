@@ -55,7 +55,21 @@ function createTestHome( { suite } ) {
         },
         async teardown() {
             globalThis.__FLOWMCP_TEST_HOME__ = null
-            await rm( root, { recursive: true, force: true } )
+            const attempts = [ 1, 2, 3 ]
+            const result = await attempts
+                .reduce( async ( prev, attempt ) => {
+                    const done = await prev
+                    if( done ) { return true }
+                    try {
+                        await rm( root, { recursive: true, force: true } )
+                        return true
+                    } catch( err ) {
+                        if( attempt === attempts.length ) { return true }
+                        await new Promise( ( res ) => setTimeout( res, 100 * attempt ) )
+                        return false
+                    }
+                }, Promise.resolve( false ) )
+            return result
         }
     }
 }
