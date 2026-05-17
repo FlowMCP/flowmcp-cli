@@ -1443,6 +1443,8 @@ class FlowMcpCli {
             return { result }
         }
 
+        const v4 = await FlowMcpCli.#loadV4Module()
+
         if( !schemaPath && cwd ) {
             const { schemas: groupSchemas, error: groupError } = await FlowMcpCli.#resolveDefaultGroupSchemas( { cwd } )
             if( groupError ) {
@@ -1452,28 +1454,7 @@ class FlowMcpCli {
             }
 
             const results = groupSchemas
-                .map( ( { main, file } ) => {
-                    try {
-                        const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
-                        const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
-                        const namespace = main[ 'namespace' ] || 'unknown'
-                        const toolCount = Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} ).length
-                        const resourceCount = Object.keys( main[ 'resources' ] || {} ).length
-                        const skillCount = ( main[ 'skills' ] || [] ).length
-                        const entry = { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
-
-                        return entry
-                    } catch( err ) {
-                        const entry = {
-                            file,
-                            'namespace': main[ 'namespace' ] || 'unknown',
-                            'status': false,
-                            'messages': [ err.message ]
-                        }
-
-                        return entry
-                    }
-                } )
+                .map( ( { main, file } ) => FlowMcpCli.#validateSingleSchema( { main, file, v4 } ) )
 
             const passed = results
                 .filter( ( { status } ) => {
@@ -1511,28 +1492,7 @@ class FlowMcpCli {
         }
 
         const results = schemas
-            .map( ( { main, file } ) => {
-                try {
-                    const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
-                    const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
-                    const namespace = main[ 'namespace' ] || 'unknown'
-                    const toolCount = Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} ).length
-                    const resourceCount = Object.keys( main[ 'resources' ] || {} ).length
-                    const skillCount = ( main[ 'skills' ] || [] ).length
-                    const entry = { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
-
-                    return entry
-                } catch( err ) {
-                    const entry = {
-                        file,
-                        'namespace': main[ 'namespace' ] || 'unknown',
-                        'status': false,
-                        'messages': [ err.message ]
-                    }
-
-                    return entry
-                }
-            } )
+            .map( ( { main, file } ) => FlowMcpCli.#validateSingleSchema( { main, file, v4 } ) )
 
         const passed = results
             .filter( ( { status } ) => {
@@ -9074,6 +9034,72 @@ allowlist, migrate-config, etc.).
         }
 
         return main
+    }
+
+
+    static async #loadV4Module() {
+        if( FlowMcpCli.#v4Override ) { return FlowMcpCli.#v4Override }
+        try {
+            const v4 = await import( 'flowmcp/v4' )
+            return v4
+        } catch {
+            return null
+        }
+    }
+
+
+    static #enrichV4WithRuntimeMeta( { main, MetaGenerator } ) {
+        const tools = main && main[ 'tools' ] ? main[ 'tools' ] : null
+        if( !tools || typeof tools !== 'object' ) { return main }
+
+        const enrichedEntries = Object
+            .entries( tools )
+            .map( ( [ name, tool ] ) => {
+                if( tool && tool[ 'meta' ] ) { return [ name, tool ] }
+                const { meta } = MetaGenerator.generate( { tool, 'toolName': name } )
+                return [ name, { ...tool, meta } ]
+            } )
+
+        return { ...main, 'tools': Object.fromEntries( enrichedEntries ) }
+    }
+
+
+    static #validateSingleSchema( { main, file, v4 } ) {
+        const namespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : 'unknown'
+        const toolCount = Object.keys( ( main && ( main[ 'tools' ] || main[ 'routes' ] ) ) || {} ).length
+        const resourceCount = Object.keys( ( main && main[ 'resources' ] ) || {} ).length
+        const skillCount = ( ( main && main[ 'skills' ] ) || [] ).length
+        const version = main && main[ 'version' ] ? String( main[ 'version' ] ) : ''
+        const isV4 = version.startsWith( '4.' )
+
+        try {
+            if( isV4 ) {
+                if( !v4 || !v4[ 'MainValidator' ] ) {
+                    return {
+                        file, namespace,
+                        'status': false,
+                        'messages': [ 'v4 validator unavailable: install flowmcp-core with v4 export' ],
+                        'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
+                    }
+                }
+                const enriched = v4[ 'MetaGenerator' ]
+                    ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
+                    : main
+                const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
+                return { file, namespace, status, messages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+            }
+
+            const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
+            const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
+            return { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+        } catch( err ) {
+            return {
+                file, namespace,
+                'status': false,
+                'messages': [ err.message ],
+                'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
+            }
+        }
     }
 
 
