@@ -28,6 +28,9 @@ temp/
 # Local FlowMCP config
 .flowmcp/
 
+# Test isolation directory (Memo 032 PRD-02)
+.test-home/
+
 # Environment
 .env
 .env.local

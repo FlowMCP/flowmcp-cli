@@ -25,7 +25,15 @@ const args = parseArgs( {
         'yes': { type: 'boolean', short: 'y' },
         'mock': { type: 'boolean' },
         'output': { type: 'string' },
-        'help': { type: 'boolean', short: 'h' }
+        'help': { type: 'boolean', short: 'h' },
+        'strict': { type: 'boolean' },
+        'fix-template': { type: 'boolean' },
+        'json': { type: 'boolean' },
+        'print-signups': { type: 'boolean' },
+        'print-guide': { type: 'boolean' },
+        'key': { type: 'string' },
+        'mode': { type: 'string' },
+        'schema': { type: 'string' }
     }
 } )
 
@@ -471,6 +479,70 @@ const runCommand = async () => {
 
         const { result } = await FlowMcpCli.allowlist( { cwd, 'action': subCommand, library } )
         output( { result } )
+
+        return true
+    }
+
+    if( command === 'env' ) {
+        const subCommand = positionals[ 1 ]
+        const validSubCommands = [ 'doctor', 'acquire', 'backup', 'restore', 'diff' ]
+
+        if( !subCommand || !validSubCommands.includes( subCommand ) ) {
+            const result = {
+                'status': false,
+                'error': 'Missing or unknown env sub-command.',
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env doctor | acquire | backup | restore <file> | diff <file>`
+            }
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'doctor' ) {
+            const schema = values[ 'schema' ] || null
+            const strict = values[ 'strict' ] || false
+            const fixTemplate = values[ 'fix-template' ] || false
+            const json = values[ 'json' ] || false
+            const printSignups = values[ 'print-signups' ] || false
+            const { result } = await FlowMcpCli.devEnvDoctor( { schema, strict, fixTemplate, json, printSignups, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'acquire' ) {
+            const key = values[ 'key' ] || null
+            const mode = values[ 'mode' ] || null
+            const printGuide = values[ 'print-guide' ] || false
+            const json = values[ 'json' ] || false
+            const { result } = await FlowMcpCli.devEnvAcquire( { key, mode, printGuide, json, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'backup' ) {
+            const { result } = await FlowMcpCli.devEnvBackup( { cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'restore' ) {
+            const file = positionals[ 2 ]
+            const { result } = await FlowMcpCli.devEnvRestore( { file, cwd } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'diff' ) {
+            const file = positionals[ 2 ]
+            const { result } = await FlowMcpCli.devEnvDiff( { file, cwd } )
+            output( { result } )
+
+            return true
+        }
 
         return true
     }

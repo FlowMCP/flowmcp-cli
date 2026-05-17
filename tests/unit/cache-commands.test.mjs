@@ -1,36 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
-import { writeFile, mkdir, rm, readFile } from 'node:fs/promises'
+import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir, homedir } from 'node:os'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import { VALID_GLOBAL_CONFIG } from '../helpers/config.mjs'
+import { createTestHome } from '../helpers/test-home.mjs'
+
+const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
-const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
-const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
-const CACHE_DIR = join( GLOBAL_CONFIG_DIR, 'cache' )
-
-let originalGlobalConfig = null
-let globalConfigExisted = false
+const testHome = createTestHome( { suite: 'cache' } )
+const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
+const CACHE_DIR = testHome.cacheDir
 
 
 beforeAll( async () => {
-    try {
-        originalGlobalConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
-        globalConfigExisted = true
-    } catch {
-        globalConfigExisted = false
-    }
-
-    await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
+    await testHome.setup()
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
 } )
 
 afterAll( async () => {
-    if( globalConfigExisted && originalGlobalConfig ) {
-        await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
-    }
+    await testHome.teardown()
 } )
 
 

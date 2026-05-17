@@ -1,29 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import { VALID_GLOBAL_CONFIG_WITH_SOURCES, VALID_REGISTRY } from '../helpers/config.mjs'
+import { createTestHome } from '../helpers/test-home.mjs'
+
+const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
-const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
-const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
-const SCHEMAS_DIR = join( GLOBAL_CONFIG_DIR, 'schemas' )
-
-let originalGlobalConfig = null
-let globalConfigExisted = false
+const testHome = createTestHome( { suite: 'schemas-cmd' } )
+const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
+const SCHEMAS_DIR = testHome.schemasDir
 
 beforeAll( async () => {
-    try {
-        const { readFile } = await import( 'node:fs/promises' )
-        originalGlobalConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
-        globalConfigExisted = true
-    } catch {
-        globalConfigExisted = false
-    }
-
-    await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
+    await testHome.setup()
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( VALID_GLOBAL_CONFIG_WITH_SOURCES, null, 4 ), 'utf-8' )
 
     const demoDir = join( SCHEMAS_DIR, 'demo' )
@@ -58,11 +48,7 @@ beforeAll( async () => {
 } )
 
 afterAll( async () => {
-    if( globalConfigExisted && originalGlobalConfig ) {
-        await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
-    }
-
-    await rm( join( SCHEMAS_DIR, 'flowmcp-community' ), { recursive: true, force: true } )
+    await testHome.teardown()
 } )
 
 

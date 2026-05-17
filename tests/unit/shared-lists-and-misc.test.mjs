@@ -1,22 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
-import { writeFile, mkdir, rm, readFile } from 'node:fs/promises'
+import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { createTestHome } from '../helpers/test-home.mjs'
+
+const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
-const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
-const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
-const SCHEMAS_DIR = join( GLOBAL_CONFIG_DIR, 'schemas' )
+const testHome = createTestHome( { suite: 'shared-lists' } )
+const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
+const SCHEMAS_DIR = testHome.schemasDir
 const SOURCE_NAME = 'slsrc'
 const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME )
 const LISTS_DIR = join( SOURCE_DIR, '_lists' )
-const ENV_PATH = join( GLOBAL_CONFIG_DIR, '.env.sltest' )
-const CACHE_DIR = join( GLOBAL_CONFIG_DIR, 'cache' )
-
-let originalGlobalConfig = null
-let globalConfigExisted = false
+const ENV_PATH = testHome.envPath( '.sltest' )
 
 const SHARED_LIST_CONTENT = `export const items = [ 'alpha', 'beta', 'gamma' ]\n`
 
@@ -97,12 +95,7 @@ const REGISTRY = {
 
 
 beforeAll( async () => {
-    try {
-        originalGlobalConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
-        globalConfigExisted = true
-    } catch {
-        globalConfigExisted = false
-    }
+    await testHome.setup()
 
     await mkdir( LISTS_DIR, { recursive: true } )
     await writeFile( join( SOURCE_DIR, 'withLists.mjs' ), SCHEMA_WITH_SHARED_LISTS, 'utf-8' )
@@ -127,26 +120,12 @@ beforeAll( async () => {
         }
     }
 
-    if( globalConfigExisted && originalGlobalConfig ) {
-        const parsed = JSON.parse( originalGlobalConfig )
-        parsed[ 'sources' ] = parsed[ 'sources' ] || {}
-        parsed[ 'sources' ][ SOURCE_NAME ] = globalConfig[ 'sources' ][ SOURCE_NAME ]
-        parsed[ 'envPath' ] = ENV_PATH
-        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( parsed, null, 4 ), 'utf-8' )
-    } else {
-        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )
-    }
+    await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )
 } )
 
 
 afterAll( async () => {
-    if( globalConfigExisted && originalGlobalConfig ) {
-        await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
-    }
-
-    await rm( SOURCE_DIR, { recursive: true, force: true } ).catch( () => {} )
-    await rm( ENV_PATH, { force: true } ).catch( () => {} )
-    await rm( CACHE_DIR, { recursive: true, force: true } ).catch( () => {} )
+    await testHome.teardown()
 } )
 
 

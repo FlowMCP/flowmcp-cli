@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, readdir, stat, access, unlink, rename } fro
 import { join, resolve, basename, extname, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { constants, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
@@ -3219,6 +3219,49 @@ class FlowMcpCli {
                 refsToAdd = [ specId ]
             }
 
+            const namespacesToCheck = Array.from( new Set( refsToAdd
+                .map( ( ref ) => {
+                    const ns = ref.split( '/' )[ 0 ]
+
+                    return ns
+                } ) ) )
+
+            // Resolve the schema files corresponding to refsToAdd so the guard
+            // checks only those exact schemas (not the whole namespace).
+            const schemaFilesForGuard = []
+            refsToAdd
+                .forEach( ( ref ) => {
+                    const toolEntry = index[ 'tools' ] && index[ 'tools' ][ ref ]
+                    if( !toolEntry ) {
+                        return
+                    }
+
+                    const { source, file } = toolEntry
+                    const schemaRef = `${source}/${file}`
+                    const alreadyTracked = schemaFilesForGuard
+                        .find( ( r ) => {
+                            const isSame = r === schemaRef
+
+                            return isSame
+                        } )
+
+                    if( !alreadyTracked ) {
+                        schemaFilesForGuard.push( schemaRef )
+                    }
+                } )
+
+            const { allowed: guardAllowed, result: guardResult } = await FlowMcpCli.#activationGuard( {
+                'namespaces': namespacesToCheck,
+                'schemaFiles': schemaFilesForGuard,
+                cwd,
+                force,
+                toolName
+            } )
+
+            if( !guardAllowed ) {
+                return { 'result': guardResult }
+            }
+
             const localConfigDir = join( cwd, appConfig[ 'localConfigDirName' ] )
             const localConfigPath = join( localConfigDir, 'config.json' )
             const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
@@ -3294,6 +3337,21 @@ class FlowMcpCli {
             const { sharedLists: resolvedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': schemaFilePath } )
             const { parameters: transformed } = FlowMcpCli.#extractParameters( { routeParameters, 'sharedLists': resolvedLists } )
             extractedParameters = transformed
+        }
+
+        const namespaceForGuard = main && main[ 'namespace' ] ? main[ 'namespace' ] : null
+        if( namespaceForGuard ) {
+            const { allowed: guardAllowed, result: guardResult } = await FlowMcpCli.#activationGuard( {
+                'namespaces': [ namespaceForGuard ],
+                'schemaFiles': [ schemaRef ],
+                cwd,
+                force,
+                toolName
+            } )
+
+            if( !guardAllowed ) {
+                return { 'result': guardResult }
+            }
         }
 
         const localConfigDir = join( cwd, appConfig[ 'localConfigDirName' ] )
@@ -6278,6 +6336,641 @@ class FlowMcpCli {
     }
 
 
+    /**
+     * Resolve env keys with local override + global fallback (Memo 032 PRD-07).
+     *
+     * Search order:
+     *   1. Local: <cwd>/.flowmcp/.env (project-specific override, optional)
+     *   2. Global: configured envPath in ~/.flowmcp/config.json, or fallback ~/.flowmcp/.env
+     *
+     * Local keys override global keys when both present (merge, not replace).
+     *
+     * @param {Object} params
+     * @param {string} params.cwd - Current working directory
+     * @returns {Promise<{envObject: Object, sources: {local: string|null, global: string|null}}>}
+     */
+    static async #resolveEnv( { cwd } ) {
+        const localEnvPath = join( cwd, appConfig[ 'localConfigDirName' ], '.env' )
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const configuredGlobalEnv = ( globalConfig && globalConfig[ 'envPath' ] )
+            ? globalConfig[ 'envPath' ]
+            : join( FlowMcpCli.#globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
+
+        let globalEnv = {}
+        let globalSourcePath = null
+        const { data: globalContent } = await FlowMcpCli.#readText( { filePath: configuredGlobalEnv } )
+        if( globalContent !== null ) {
+            globalEnv = FlowMcpCli.#parseEnvFile( { envContent: globalContent } ).envObject
+            globalSourcePath = configuredGlobalEnv
+        }
+
+        let localEnv = {}
+        let localSourcePath = null
+        const { data: localContent } = await FlowMcpCli.#readText( { filePath: localEnvPath } )
+        if( localContent !== null ) {
+            localEnv = FlowMcpCli.#parseEnvFile( { envContent: localContent } ).envObject
+            localSourcePath = localEnvPath
+        }
+
+        const envObject = { ...globalEnv, ...localEnv }
+
+        return {
+            envObject,
+            'sources': {
+                'local': localSourcePath,
+                'global': globalSourcePath
+            }
+        }
+    }
+
+
+    // Test-only accessor for #resolveEnv (Memo 032 PRD-07). Do not use in production code.
+    static async _testResolveEnv( { cwd } ) {
+        return FlowMcpCli.#resolveEnv( { cwd } )
+    }
+
+
+    /**
+     * Check whether an env value is "filled" (non-placeholder, sufficiently long, real).
+     * Used by env doctor to bucket keys into filled vs missing.
+     */
+    static #isKeyFilled( { value } ) {
+        if( value === undefined || value === null ) {
+            return false
+        }
+
+        if( typeof value !== 'string' ) {
+            return false
+        }
+
+        const trimmed = value.trim()
+        if( trimmed.length === 0 ) {
+            return false
+        }
+
+        if( trimmed.length < 10 ) {
+            return false
+        }
+
+        const placeholders = [ 'your_key_here', '<your-key', '# Example', 'YOUR_KEY', 'TODO' ]
+        const lowered = trimmed.toLowerCase()
+        const isPlaceholder = placeholders
+            .find( ( pattern ) => {
+                const match = lowered.includes( pattern.toLowerCase() )
+
+                return match
+            } )
+
+        if( isPlaceholder ) {
+            return false
+        }
+
+        return true
+    }
+
+
+    /**
+     * Walk all active schemas, collect requiredServerParams from main.
+     * Optional schemaFilter limits to a single namespace.
+     */
+    static async #collectAllRequiredServerParams( { cwd, schemaFilter = null } ) {
+        const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+        const tools = index[ 'tools' ] || {}
+        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const keyToSchemas = new Map()
+        const loadedFiles = new Set()
+
+        const entries = Object.entries( tools )
+        await entries
+            .reduce( ( promise, [ specId, entry ] ) => promise.then( async () => {
+                const { file, source } = entry
+                const namespace = specId.split( '/' )[ 0 ]
+
+                if( schemaFilter && namespace !== schemaFilter ) {
+                    return
+                }
+
+                const fileKey = `${source}/${file}`
+                if( loadedFiles.has( fileKey ) ) {
+                    return
+                }
+                loadedFiles.add( fileKey )
+
+                const filePath = join( schemasBaseDir, source, file )
+                const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                if( !main ) {
+                    return
+                }
+
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
+                requiredServerParams
+                    .forEach( ( paramKey ) => {
+                        if( !keyToSchemas.has( paramKey ) ) {
+                            keyToSchemas.set( paramKey, [] )
+                        }
+
+                        const existing = keyToSchemas.get( paramKey )
+                        const schemaId = `${main[ 'namespace' ] || namespace}/${file}`
+                        const alreadyTracked = existing
+                            .find( ( s ) => {
+                                const isSame = s === schemaId
+
+                                return isSame
+                            } )
+
+                        if( !alreadyTracked ) {
+                            existing.push( schemaId )
+                        }
+                    } )
+            } ), Promise.resolve() )
+
+        const keys = Array.from( keyToSchemas.keys() ).sort()
+
+        return { keys, keyToSchemas }
+    }
+
+
+    /**
+     * `flowmcp dev env doctor` (Memo 032 PRD-09).
+     *
+     * Reports which required keys are filled / missing / unused.
+     * Supports JSON output, --fix-template, --print-signups, --strict and --schema filter.
+     */
+    static async devEnvDoctor( { schema = null, strict = false, fixTemplate = false, json = false, printSignups = false, cwd } ) {
+        const { envObject, sources } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const { keys: required } = await FlowMcpCli.#collectAllRequiredServerParams( { cwd, 'schemaFilter': schema } )
+
+        const filled = []
+        const missing = []
+
+        required
+            .forEach( ( key ) => {
+                const value = envObject[ key ]
+                const isFilled = FlowMcpCli.#isKeyFilled( { value } )
+
+                if( isFilled ) {
+                    filled.push( key )
+                } else {
+                    missing.push( key )
+                }
+            } )
+
+        const requiredSet = new Set( required )
+        const unused = Object.keys( envObject )
+            .filter( ( key ) => {
+                const isInRequired = requiredSet.has( key )
+
+                return !isInRequired
+            } )
+            .sort()
+
+        if( json ) {
+            const result = {
+                'status': true,
+                sources,
+                filled,
+                missing,
+                unused,
+                required
+            }
+
+            if( strict && missing.length > 0 ) {
+                process.exitCode = 1
+                result[ 'status' ] = false
+            }
+
+            return { result }
+        }
+
+        if( fixTemplate ) {
+            const template = missing
+                .map( ( key ) => {
+                    const line = `${key}=`
+
+                    return line
+                } )
+                .join( '\n' )
+
+            return { result: { 'status': true, template } }
+        }
+
+        if( printSignups ) {
+            const guidePath = join( dirname( fileURLToPath( import.meta.url ) ), '..', 'data', 'acquisition-guide.json' )
+            const { data: guide } = await FlowMcpCli.#readJson( { filePath: guidePath } )
+            const guideKeys = ( guide && guide[ 'keys' ] ) || {}
+
+            const lines = missing
+                .map( ( key ) => {
+                    const entry = guideKeys[ key ]
+                    const url = entry ? entry[ 'signupUrl' ] : 'no signup URL'
+                    const line = `${key}: ${url}`
+
+                    return line
+                } )
+
+            return { result: { 'status': true, 'signups': lines.join( '\n' ) } }
+        }
+
+        const globalLabel = sources[ 'global' ] || '(none)'
+        const localLabel = sources[ 'local' ] || '(none)'
+
+        console.log( '' )
+        console.log( chalk.cyan( '  Env Doctor' ) )
+        console.log( `  ${chalk.gray( 'Global:' )} ${globalLabel}` )
+        console.log( `  ${chalk.gray( 'Local: ' )} ${localLabel}` )
+        console.log( '' )
+        console.log( `  ${chalk.green( '✓' )} Filled:  ${filled.length}` )
+        console.log( `  ${chalk.yellow( '⚠' )} Missing: ${missing.length}` )
+        console.log( `  ${chalk.gray( '·' )} Unused:  ${unused.length}` )
+        console.log( '' )
+
+        if( missing.length > 0 ) {
+            console.log( chalk.yellow( '  Missing keys:' ) )
+            missing
+                .forEach( ( key ) => {
+                    console.log( `    - ${key}` )
+                } )
+            console.log( '' )
+        }
+
+        const summary = `Filled ${filled.length}, Missing ${missing.length}, Unused ${unused.length}`
+
+        if( strict && missing.length > 0 ) {
+            process.exitCode = 1
+
+            return { result: { 'status': false, summary, missing } }
+        }
+
+        return { result: { 'status': true, summary } }
+    }
+
+
+    /**
+     * `flowmcp dev env backup` (Memo 032 PRD-11).
+     * Snapshots the resolved env to ~/.flowmcp/.env-backups/{ISO}.env.
+     */
+    static async devEnvBackup( { cwd } ) {
+        const { sources } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const source = sources[ 'global' ] || sources[ 'local' ]
+
+        if( !source ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'No env file found to back up.',
+                'fix': `Create one at ~/${appConfig[ 'globalConfigDirName' ]}/${appConfig[ 'defaultEnvFileName' ]} first.`
+            } )
+
+            return { result }
+        }
+
+        const { data: content } = await FlowMcpCli.#readText( { filePath: source } )
+        if( content === null ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Cannot read env file: ${source}`,
+                'fix': 'Check filesystem permissions.'
+            } )
+
+            return { result }
+        }
+
+        const backupDir = join( FlowMcpCli.#globalConfigDir(), '.env-backups' )
+        await mkdir( backupDir, { recursive: true } )
+
+        const iso = new Date().toISOString().replace( /:/g, '-' )
+        const backup = join( backupDir, `${iso}.env` )
+        await writeFile( backup, content, 'utf-8' )
+
+        const result = { 'status': true, source, backup }
+
+        return { result }
+    }
+
+
+    /**
+     * `flowmcp dev env restore <file>` (Memo 032 PRD-11).
+     * Restores a previous backup to the global env path. Prompts for confirmation.
+     */
+    static async devEnvRestore( { file, cwd: _cwd } ) {
+        if( !file || typeof file !== 'string' ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing backup file path.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} dev env restore <file>`
+            } )
+
+            return { result }
+        }
+
+        const { data: content } = await FlowMcpCli.#readText( { filePath: file } )
+        if( content === null ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Backup file not found: ${file}`,
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env backup to create a snapshot first.`
+            } )
+
+            return { result }
+        }
+
+        const targetPath = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
+
+        const { confirmed } = await inquirer.prompt( [
+            {
+                'type': 'confirm',
+                'name': 'confirmed',
+                'message': `Restore ${file} to ${targetPath}? Existing keys will be overwritten.`,
+                'default': false
+            }
+        ] )
+
+        if( !confirmed ) {
+            const result = { 'status': false, 'error': 'Restore cancelled by user.' }
+
+            return { result }
+        }
+
+        await mkdir( dirname( targetPath ), { recursive: true } )
+        await writeFile( targetPath, content, 'utf-8' )
+
+        const result = { 'status': true, 'restored': targetPath }
+
+        return { result }
+    }
+
+
+    /**
+     * `flowmcp dev env diff <file>` (Memo 032 PRD-11).
+     * Diff current resolved env against a backup file. Returns key NAMES only — never values.
+     */
+    static async devEnvDiff( { file, cwd } ) {
+        if( !file || typeof file !== 'string' ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing backup file path.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} dev env diff <file>`
+            } )
+
+            return { result }
+        }
+
+        const { data: backupContent } = await FlowMcpCli.#readText( { filePath: file } )
+        if( backupContent === null ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Backup file not found: ${file}`,
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env backup to create a snapshot first.`
+            } )
+
+            return { result }
+        }
+
+        const { envObject: current } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const { envObject: backup } = FlowMcpCli.#parseEnvFile( { 'envContent': backupContent } )
+
+        const currentKeys = new Set( Object.keys( current ) )
+        const backupKeys = new Set( Object.keys( backup ) )
+
+        const onlyInCurrent = Array.from( currentKeys )
+            .filter( ( key ) => {
+                const inBackup = backupKeys.has( key )
+
+                return !inBackup
+            } )
+            .sort()
+
+        const onlyInBackup = Array.from( backupKeys )
+            .filter( ( key ) => {
+                const inCurrent = currentKeys.has( key )
+
+                return !inCurrent
+            } )
+            .sort()
+
+        const valueDiffKeys = Array.from( currentKeys )
+            .filter( ( key ) => {
+                const inBoth = backupKeys.has( key )
+                if( !inBoth ) {
+                    return false
+                }
+
+                const differs = current[ key ] !== backup[ key ]
+
+                return differs
+            } )
+            .sort()
+
+        const result = {
+            'status': true,
+            onlyInCurrent,
+            onlyInBackup,
+            valueDiffKeys
+        }
+
+        return { result }
+    }
+
+
+    /**
+     * `flowmcp dev env acquire` (Memo 032 PRD-08).
+     * Lists/filters acquisition guidance for missing keys.
+     */
+    static async devEnvAcquire( { key = null, mode = null, printGuide = false, json = false, cwd } ) {
+        const guidePath = join( dirname( fileURLToPath( import.meta.url ) ), '..', 'data', 'acquisition-guide.json' )
+        const { data: guide } = await FlowMcpCli.#readJson( { filePath: guidePath } )
+
+        if( !guide || !guide[ 'keys' ] ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Acquisition guide not found.',
+                'fix': 'Reinstall flowmcp-cli or check src/data/acquisition-guide.json'
+            } )
+
+            return { result }
+        }
+
+        const { result: doctorResult } = await FlowMcpCli.devEnvDoctor( { 'json': true, cwd } )
+        const missing = doctorResult[ 'missing' ] || []
+
+        let candidates = missing
+            .map( ( missingKey ) => {
+                const entry = guide[ 'keys' ][ missingKey ]
+                const wrapped = entry ? { 'key': missingKey, ...entry } : null
+
+                return wrapped
+            } )
+            .filter( ( entry ) => {
+                const isKnown = entry !== null
+
+                return isKnown
+            } )
+
+        if( key ) {
+            candidates = candidates
+                .filter( ( entry ) => {
+                    const matches = entry[ 'key' ] === key
+
+                    return matches
+                } )
+        }
+
+        if( mode ) {
+            candidates = candidates
+                .filter( ( entry ) => {
+                    const matches = entry[ 'authMode' ] === mode
+
+                    return matches
+                } )
+        }
+
+        if( json ) {
+            const result = { 'status': true, 'count': candidates.length, 'entries': candidates }
+
+            return { result }
+        }
+
+        if( printGuide ) {
+            const lines = []
+            lines.push( '# FlowMCP — API Key Acquisition Guide' )
+            lines.push( '' )
+            lines.push( `Generated: ${new Date().toISOString()}` )
+            lines.push( '' )
+
+            candidates
+                .forEach( ( entry ) => {
+                    lines.push( `## ${entry[ 'key' ]}` )
+                    lines.push( '' )
+                    lines.push( `- Provider: ${entry[ 'provider' ]}` )
+                    lines.push( `- Signup URL: ${entry[ 'signupUrl' ]}` )
+                    lines.push( `- Auth mode: ${entry[ 'authMode' ]}` )
+                    lines.push( `- Free tier: ${entry[ 'freeTier' ]}` )
+
+                    if( entry[ 'notes' ] && entry[ 'notes' ].length > 0 ) {
+                        lines.push( `- Notes: ${entry[ 'notes' ]}` )
+                    }
+
+                    lines.push( '' )
+                    lines.push( 'Steps:' )
+                    const steps = entry[ 'steps' ] || []
+                    steps
+                        .forEach( ( step, index ) => {
+                            lines.push( `${index + 1}. ${step}` )
+                        } )
+                    lines.push( '' )
+                } )
+
+            const markdown = lines.join( '\n' )
+
+            return { result: { 'status': true, 'markdown': markdown } }
+        }
+
+        console.log( '' )
+        console.log( chalk.cyan( '  Env Acquire' ) )
+        console.log( `  ${chalk.gray( 'Missing keys with guidance:' )} ${candidates.length}` )
+        console.log( '' )
+
+        candidates
+            .forEach( ( entry ) => {
+                console.log( `  ${chalk.yellow( entry[ 'key' ] )} (${entry[ 'authMode' ]})` )
+                console.log( `    Provider: ${entry[ 'provider' ]}` )
+                console.log( `    Signup:   ${entry[ 'signupUrl' ]}` )
+                console.log( '' )
+            } )
+
+        const result = { 'status': true, 'count': candidates.length }
+
+        return { result }
+    }
+
+
+    /**
+     * Activation guard (Memo 032 PRD-10).
+     *
+     * Returns allowed:false with an explanatory result when keys are missing.
+     * Checks only schemas relevant to the activation:
+     *   - If schemaFiles is provided, restrict to those exact files.
+     *   - Otherwise, fall back to namespace-wide scan via devEnvDoctor.
+     */
+    static async #activationGuard( { namespaces, schemaFiles = null, cwd, force, toolName } ) {
+        const { envObject } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const aggregatedMissing = []
+
+        if( schemaFiles && schemaFiles.length > 0 ) {
+            const schemasBaseDir = FlowMcpCli.#schemasDir()
+
+            await schemaFiles
+                .reduce( ( promise, schemaRef ) => promise.then( async () => {
+                    const filePath = join( schemasBaseDir, schemaRef )
+                    const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                    if( !main ) {
+                        return
+                    }
+
+                    const requiredServerParams = main[ 'requiredServerParams' ] || []
+                    requiredServerParams
+                        .forEach( ( key ) => {
+                            const isFilled = FlowMcpCli.#isKeyFilled( { 'value': envObject[ key ] } )
+
+                            if( isFilled ) {
+                                return
+                            }
+
+                            const alreadyTracked = aggregatedMissing
+                                .find( ( m ) => {
+                                    const isSame = m === key
+
+                                    return isSame
+                                } )
+
+                            if( !alreadyTracked ) {
+                                aggregatedMissing.push( key )
+                            }
+                        } )
+                } ), Promise.resolve() )
+        } else {
+            await namespaces
+                .reduce( ( promise, namespace ) => promise.then( async () => {
+                    const { result } = await FlowMcpCli.devEnvDoctor( { 'schema': namespace, 'json': true, cwd } )
+                    const namespaceMissing = result[ 'missing' ] || []
+
+                    namespaceMissing
+                        .forEach( ( key ) => {
+                            const alreadyTracked = aggregatedMissing
+                                .find( ( m ) => {
+                                    const isSame = m === key
+
+                                    return isSame
+                                } )
+
+                            if( !alreadyTracked ) {
+                                aggregatedMissing.push( key )
+                            }
+                        } )
+                } ), Promise.resolve() )
+        }
+
+        if( aggregatedMissing.length === 0 ) {
+            return { 'allowed': true, 'result': null }
+        }
+
+        // process.exitCode may have been set by devEnvDoctor with strict:true.
+        // Activation-guard is informative — clear it.
+        if( process.exitCode === 1 ) {
+            process.exitCode = 0
+        }
+
+        if( force ) {
+            console.warn( chalk.yellow( `Warning: activating "${toolName}" with ${aggregatedMissing.length} missing key(s): ${aggregatedMissing.join( ', ' )}` ) )
+
+            return { 'allowed': true, 'result': null }
+        }
+
+        const result = {
+            'status': false,
+            'error': `Cannot activate "${toolName}" — ${aggregatedMissing.length} required key(s) missing: ${aggregatedMissing.join( ', ' )}`,
+            'fix': `Get keys: ${appConfig[ 'cliCommand' ]} dev env acquire --key ${aggregatedMissing[ 0 ]}. Or use --force.`
+        }
+
+        return { 'allowed': false, result }
+    }
+
+
     static #mergeConfig( { existing, updates } ) {
         const merged = { ...existing }
 
@@ -6536,7 +7229,15 @@ allowlist, migrate-config, etc.).
             try {
                 await access( envPath, constants.F_OK )
             } catch {
-                await writeFile( envPath, '# Add your API keys here\n# Example: ETHERSCAN_API_KEY=your_key_here\n', 'utf-8' )
+                throw new Error(
+                    `FlowMCP requires an .env file at ${envPath}.\n` +
+                    `Create it manually with your API keys, then re-run this command.\n` +
+                    `Or specify a custom path: flowmcp init --env-path <path>\n` +
+                    `Template:\n` +
+                    `  ETHERSCAN_API_KEY=your_key\n` +
+                    `  MORALIS_API_KEY=your_key\n` +
+                    `  # See 'flowmcp dev env doctor --print-signups' for all required keys.`
+                )
             }
         }
 

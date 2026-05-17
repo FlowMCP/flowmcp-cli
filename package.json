@@ -13,7 +13,8 @@
     "scripts": {
         "test": "node --experimental-vm-modules node_modules/.bin/jest",
         "test:coverage:src": "node --experimental-vm-modules node_modules/.bin/jest --coverage --collectCoverageFrom='src/**/*.mjs'",
-        "test:file": "node --experimental-vm-modules node_modules/.bin/jest"
+        "test:file": "node --experimental-vm-modules node_modules/.bin/jest",
+        "test:isolation": "bash scripts/friction-test-isolation.sh"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",

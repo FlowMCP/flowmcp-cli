@@ -1,0 +1,695 @@
+{
+    "version": "1.0.0",
+    "lastUpdated": "2026-05-15",
+    "keys": {
+        "ALTMETRIC_API_KEY": {
+            "provider": "Altmetric",
+            "signupUrl": "https://docs.altmetric.com/detail-pages-api/",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://docs.altmetric.com/detail-pages-api/",
+                "Follow the provider's signup or contact instructions",
+                "Copy the API key from your account/dashboard",
+                "Add to ~/.flowmcp/.env: ALTMETRIC_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "AQICN_API_TOKEN": {
+            "provider": "AQICN",
+            "signupUrl": "https://aqicn.org/json-api/doc/",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://aqicn.org/json-api/doc/",
+                "Follow the provider's signup or contact instructions",
+                "Copy the API token from your account/dashboard",
+                "Add to ~/.flowmcp/.env: AQICN_API_TOKEN=<your_token>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "AVIATIONSTACK_API_KEY": {
+            "provider": "AviationStack",
+            "signupUrl": "https://aviationstack.com/documentation",
+            "authMode": "possibly-paid",
+            "steps": [
+                "Open https://aviationstack.com/documentation",
+                "Sign up for an account (free tier may exist with limits)",
+                "Verify your email if required and pick a plan",
+                "Add to ~/.flowmcp/.env: AVIATIONSTACK_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": "Provider may require a paid plan for production use"
+        },
+        "CONGRESS_API_KEY": {
+            "provider": "US Congress",
+            "signupUrl": "https://api.congress.gov/",
+            "authMode": "government-us",
+            "steps": [
+                "Open https://api.congress.gov/",
+                "Request a free API key via the api.data.gov signup form",
+                "Copy the key delivered by email or shown on screen",
+                "Add to ~/.flowmcp/.env: CONGRESS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Generous free tier via api.data.gov",
+            "notes": "Shared api.data.gov key works across US gov APIs"
+        },
+        "CONNECTED_PAPERS_API_KEY": {
+            "provider": "Connected Papers",
+            "signupUrl": "https://github.com/ConnectedPapers/connectedpapers-py",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://github.com/ConnectedPapers/connectedpapers-py",
+                "Follow the provider's signup or contact instructions",
+                "Copy the API key from your account/dashboard",
+                "Add to ~/.flowmcp/.env: CONNECTED_PAPERS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "CORE_API_KEY": {
+            "provider": "CORE Academic",
+            "signupUrl": "https://api.core.ac.uk/docs/v3",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://api.core.ac.uk/docs/v3",
+                "Register for an API key via the provider's registration page",
+                "Copy the API key from your account/dashboard",
+                "Add to ~/.flowmcp/.env: CORE_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "DB_API_KEY": {
+            "provider": "Deutsche Bahn",
+            "signupUrl": "https://developers.deutschebahn.com/db-api-marketplace/apis/product/fasta",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://developers.deutschebahn.com/db-api-marketplace/apis/product/fasta",
+                "Create a developer account at developers.deutschebahn.com",
+                "Subscribe to the desired DB API product to receive credentials",
+                "Add to ~/.flowmcp/.env: DB_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier available for many DB APIs",
+            "notes": "DB_CLIENT_ID is typically issued together with DB_API_KEY"
+        },
+        "DB_CLIENT_ID": {
+            "provider": "Deutsche Bahn",
+            "signupUrl": "https://developers.deutschebahn.com/db-api-marketplace/apis/product/fasta",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://developers.deutschebahn.com/db-api-marketplace/apis/product/fasta",
+                "Create a developer account at developers.deutschebahn.com",
+                "Subscribe to the desired DB API product to receive credentials",
+                "Add to ~/.flowmcp/.env: DB_CLIENT_ID=<your_client_id>"
+            ],
+            "freeTier": "Free tier available for many DB APIs",
+            "notes": "DB_API_KEY is typically issued together with DB_CLIENT_ID"
+        },
+        "DDB_API_KEY": {
+            "provider": "Deutsche Digitale Bibliothek",
+            "signupUrl": "https://labs.deutsche-digitale-bibliothek.de/app/ddbapi/",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://labs.deutsche-digitale-bibliothek.de/app/ddbapi/",
+                "Register a user account on the DDB Labs site",
+                "Request an API key in your account area",
+                "Add to ~/.flowmcp/.env: DDB_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "DIP_BUNDESTAG_API_KEY": {
+            "provider": "Bundestag DIP",
+            "signupUrl": "https://dip.bundestag.de",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://dip.bundestag.de",
+                "Contact parlamentsdokumentation@bundestag.de to request an API key",
+                "Receive the API key via email after approval",
+                "Add to ~/.flowmcp/.env: DIP_BUNDESTAG_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for research and journalism",
+            "notes": "Email-based approval, typically within a few days"
+        },
+        "DPLA_API_KEY": {
+            "provider": "DPLA",
+            "signupUrl": "https://pro.dp.la/developers/api-codex",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://pro.dp.la/developers/api-codex",
+                "Follow the provider's signup or contact instructions",
+                "Copy the API key from your account or email",
+                "Add to ~/.flowmcp/.env: DPLA_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "EBIRD_API_KEY": {
+            "provider": "eBird",
+            "signupUrl": "https://documenter.getpostman.com/view/664302/S1ENwy59",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://documenter.getpostman.com/view/664302/S1ENwy59",
+                "Create a Cornell Lab account and verify your email",
+                "Request an API token from the eBird account settings",
+                "Add to ~/.flowmcp/.env: EBIRD_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "ELECTRICITYMAPS_AUTH_TOKEN": {
+            "provider": "Electricity Maps",
+            "signupUrl": "https://static.electricitymaps.com/api/docs/index.html",
+            "authMode": "possibly-paid",
+            "steps": [
+                "Open https://static.electricitymaps.com/api/docs/index.html",
+                "Sign up via the Electricity Maps portal",
+                "Pick a plan (a free or trial tier may exist)",
+                "Add to ~/.flowmcp/.env: ELECTRICITYMAPS_AUTH_TOKEN=<your_token>"
+            ],
+            "freeTier": "Limited free/trial tier, paid plans for production",
+            "notes": ""
+        },
+        "ENTGELTATLAS_API_KEY": {
+            "provider": "Bundesagentur f. Arbeit",
+            "signupUrl": "https://entgeltatlas.api.bund.dev/",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://entgeltatlas.api.bund.dev/",
+                "Register at the Bundesagentur fuer Arbeit developer portal",
+                "Receive an API key for the Entgeltatlas product",
+                "Add to ~/.flowmcp/.env: ENTGELTATLAS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier for public data",
+            "notes": ""
+        },
+        "EUROPEANA_API_KEY": {
+            "provider": "Europeana",
+            "signupUrl": "https://pro.europeana.eu/page/search",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://pro.europeana.eu/page/search",
+                "Apply for an API key on the Europeana Pro site",
+                "Receive the key via email",
+                "Add to ~/.flowmcp/.env: EUROPEANA_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "FARMSUBSIDY_API_KEY": {
+            "provider": "FarmSubsidy",
+            "signupUrl": "https://farmsubsidy.org",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://farmsubsidy.org",
+                "Contact the FarmSubsidy maintainers to request access",
+                "Receive credentials via email",
+                "Add to ~/.flowmcp/.env: FARMSUBSIDY_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "FEC_API_KEY": {
+            "provider": "US OpenFEC",
+            "signupUrl": "https://api.open.fec.gov/developers/",
+            "authMode": "government-us",
+            "steps": [
+                "Open https://api.open.fec.gov/developers/",
+                "Sign up via the api.data.gov form",
+                "Receive the API key by email",
+                "Add to ~/.flowmcp/.env: FEC_API_KEY=<your_key>"
+            ],
+            "freeTier": "Generous free tier via api.data.gov",
+            "notes": "Shared api.data.gov key works across US gov APIs"
+        },
+        "FOOTBALLDATA_API_KEY": {
+            "provider": "Football-Data",
+            "signupUrl": "https://docs.football-data.org/general/v4/index.html",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://docs.football-data.org/general/v4/index.html",
+                "Fill the signup form (name, email)",
+                "Copy the API token shown on the confirmation page or email",
+                "Add to ~/.flowmcp/.env: FOOTBALLDATA_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier with daily request limit",
+            "notes": ""
+        },
+        "FRED_API_KEY": {
+            "provider": "FRED St. Louis",
+            "signupUrl": "https://fred.stlouisfed.org/docs/api/fred/",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://fred.stlouisfed.org/docs/api/fred/",
+                "Create a free FRED account",
+                "Generate an API key on the account page (instant)",
+                "Add to ~/.flowmcp/.env: FRED_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free, generous rate limits",
+            "notes": ""
+        },
+        "GEONAMES_USERNAME": {
+            "provider": "GeoNames",
+            "signupUrl": "https://www.geonames.org/export/web-services.html",
+            "authMode": "free-email-identifier",
+            "steps": [
+                "Open https://www.geonames.org/export/web-services.html",
+                "Register a username at geonames.org",
+                "Confirm your email and enable free web services in account settings",
+                "Add to ~/.flowmcp/.env: GEONAMES_USERNAME=<your_username>"
+            ],
+            "freeTier": "Free, daily request limit per username",
+            "notes": "Identifier is the username itself, not a token"
+        },
+        "GOOGLE_API_KEY": {
+            "provider": "Google Fact Check",
+            "signupUrl": "https://developers.google.com/fact-check/tools/api",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://developers.google.com/fact-check/tools/api",
+                "Create a Google Cloud project and enable the Fact Check Tools API",
+                "Create an API key under APIs & Services > Credentials",
+                "Add to ~/.flowmcp/.env: GOOGLE_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check Google Cloud quota",
+            "notes": "Requires a Google Cloud project"
+        },
+        "HARVARD_ART_API_KEY": {
+            "provider": "Harvard Art Museums",
+            "signupUrl": "https://github.com/harvardartmuseums/api-docs",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://github.com/harvardartmuseums/api-docs",
+                "Email the address listed in the API docs to request a key",
+                "Receive the API key by email",
+                "Add to ~/.flowmcp/.env: HARVARD_ART_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "IGDB_ACCESS_TOKEN": {
+            "provider": "IGDB",
+            "signupUrl": "https://api-docs.igdb.com/",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://api-docs.igdb.com/",
+                "Create a Twitch developer account and verify email/phone",
+                "Register an application to obtain a Client ID and generate an access token",
+                "Add to ~/.flowmcp/.env: IGDB_ACCESS_TOKEN=<your_token>"
+            ],
+            "freeTier": "Free via Twitch developer program",
+            "notes": "Token expires; refresh via Twitch OAuth"
+        },
+        "IGDB_CLIENT_ID": {
+            "provider": "IGDB",
+            "signupUrl": "https://api-docs.igdb.com/",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://api-docs.igdb.com/",
+                "Create a Twitch developer account and verify email/phone",
+                "Register an application to obtain a Client ID",
+                "Add to ~/.flowmcp/.env: IGDB_CLIENT_ID=<your_client_id>"
+            ],
+            "freeTier": "Free via Twitch developer program",
+            "notes": "Pair with IGDB_ACCESS_TOKEN"
+        },
+        "IUCN_API_TOKEN": {
+            "provider": "IUCN Red List",
+            "signupUrl": "https://api.iucnredlist.org/api-docs/index.html",
+            "authMode": "free-approval-needed",
+            "steps": [
+                "Open https://api.iucnredlist.org/api-docs/index.html",
+                "Fill the API access request form describing your use case",
+                "Wait for IUCN approval (typically a few business days)",
+                "Add to ~/.flowmcp/.env: IUCN_API_TOKEN=<your_token>"
+            ],
+            "freeTier": "Free for research and non-commercial use",
+            "notes": "Manual approval required"
+        },
+        "LASTFM_API_KEY": {
+            "provider": "Last.fm",
+            "signupUrl": "https://www.last.fm/api",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://www.last.fm/api",
+                "Sign in or create a Last.fm account",
+                "Create an API account to receive an instant API key",
+                "Add to ~/.flowmcp/.env: LASTFM_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "LEBENSMITTELWARNUNGEN_API_KEY": {
+            "provider": "Lebensmittelwarnung.de",
+            "signupUrl": "https://lebensmittelwarnung.api.bund.dev/",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://lebensmittelwarnung.api.bund.dev/",
+                "Follow the bund.dev instructions to request access",
+                "Receive an API key for the Lebensmittelwarnungen product",
+                "Add to ~/.flowmcp/.env: LEBENSMITTELWARNUNGEN_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free, public data",
+            "notes": ""
+        },
+        "LENS_API_KEY": {
+            "provider": "Lens.org",
+            "signupUrl": "https://docs.api.lens.org/getting-started.html",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://docs.api.lens.org/getting-started.html",
+                "Create a Lens.org account and verify your email",
+                "Request an API key via the Lens dashboard",
+                "Add to ~/.flowmcp/.env: LENS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free academic tier, paid tiers for production",
+            "notes": ""
+        },
+        "LOBBYREGISTER_API_KEY": {
+            "provider": "Bundestag Lobbyregister",
+            "signupUrl": "https://www.lobbyregister.bundestag.de/informationen-und-hilfe/open-data-1049716",
+            "authMode": "government-de",
+            "steps": [
+                "Open https://www.lobbyregister.bundestag.de/informationen-und-hilfe/open-data-1049716",
+                "Follow the Lobbyregister open-data instructions to request a key",
+                "Receive an API key by email",
+                "Add to ~/.flowmcp/.env: LOBBYREGISTER_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free, public data",
+            "notes": ""
+        },
+        "MOBILITY_DB_TOKEN": {
+            "provider": "MobilityData",
+            "signupUrl": "https://mobilitydata.github.io/mobility-feed-api/SwaggerUI/index.html",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://mobilitydata.github.io/mobility-feed-api/SwaggerUI/index.html",
+                "Create a MobilityData account",
+                "Generate an API token in your account",
+                "Add to ~/.flowmcp/.env: MOBILITY_DB_TOKEN=<your_token>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "NASA_API_KEY": {
+            "provider": "NASA Open APIs",
+            "signupUrl": "https://github.com/nasa/apod-api",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://api.nasa.gov/",
+                "Fill the signup form (name, email, optional use case)",
+                "Copy the API key shown immediately on the page",
+                "Add to ~/.flowmcp/.env: NASA_API_KEY=<your_key>"
+            ],
+            "freeTier": "1000 requests/hour, no daily limit",
+            "notes": "Demo key 'DEMO_KEY' works for testing with low rate limit"
+        },
+        "OMDB_API_KEY": {
+            "provider": "OMDB",
+            "signupUrl": "https://www.omdbapi.com/",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://www.omdbapi.com/",
+                "Fill the API key request form (email, plan)",
+                "Receive the API key by email instantly",
+                "Add to ~/.flowmcp/.env: OMDB_API_KEY=<your_key>"
+            ],
+            "freeTier": "1000 daily requests on free tier",
+            "notes": ""
+        },
+        "OMIM_API_KEY": {
+            "provider": "OMIM",
+            "signupUrl": "https://omim.org/help/api",
+            "authMode": "free-approval-needed",
+            "steps": [
+                "Open https://omim.org/help/api",
+                "Submit the OMIM API registration form with institutional details",
+                "Wait for OMIM approval and receive the API key by email",
+                "Add to ~/.flowmcp/.env: OMIM_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for research, manual approval",
+            "notes": ""
+        },
+        "OPENCELLID_API_KEY": {
+            "provider": "OpenCellID",
+            "signupUrl": "https://wiki.opencellid.org/wiki/API",
+            "authMode": "possibly-paid",
+            "steps": [
+                "Open https://wiki.opencellid.org/wiki/API",
+                "Sign up at opencellid.org",
+                "Pick a plan (free trial may exist, paid plans for production)",
+                "Add to ~/.flowmcp/.env: OPENCELLID_API_KEY=<your_key>"
+            ],
+            "freeTier": "Limited free/trial tier",
+            "notes": ""
+        },
+        "OPENCHARGEMAP_API_KEY": {
+            "provider": "Open Charge Map",
+            "signupUrl": "https://openchargemap.org/site/develop/api",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://openchargemap.org/site/develop/api",
+                "Create an Open Charge Map account",
+                "Generate an API key from your profile page",
+                "Add to ~/.flowmcp/.env: OPENCHARGEMAP_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for fair use",
+            "notes": ""
+        },
+        "OPENCORPORATES_API_KEY": {
+            "provider": "OpenCorporates",
+            "signupUrl": "https://api.opencorporates.com/documentation/API-Reference",
+            "authMode": "free-approval-needed",
+            "steps": [
+                "Open https://api.opencorporates.com/documentation/API-Reference",
+                "Apply for an API key describing your use case",
+                "Wait for manual approval",
+                "Add to ~/.flowmcp/.env: OPENCORPORATES_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier for non-commercial use",
+            "notes": ""
+        },
+        "OPENSANCTIONS_API_KEY": {
+            "provider": "OpenSanctions",
+            "signupUrl": "https://www.opensanctions.org/docs/api/",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://www.opensanctions.org/docs/api/",
+                "Sign up and verify your email",
+                "Generate an API key in your account",
+                "Add to ~/.flowmcp/.env: OPENSANCTIONS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier for non-commercial use",
+            "notes": ""
+        },
+        "OPENSTATES_API_KEY": {
+            "provider": "OpenStates",
+            "signupUrl": "https://docs.openstates.org/api-v3/",
+            "authMode": "government-us",
+            "steps": [
+                "Open https://docs.openstates.org/api-v3/",
+                "Register for an OpenStates account",
+                "Generate an API key in your account",
+                "Add to ~/.flowmcp/.env: OPENSTATES_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier with rate limits",
+            "notes": ""
+        },
+        "ORS_API_KEY": {
+            "provider": "OpenRouteService",
+            "signupUrl": "https://openrouteservice.org/dev/#/api-docs",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://openrouteservice.org/dev/#/api-docs",
+                "Sign up at openrouteservice.org",
+                "Generate an API key in the dev dashboard",
+                "Add to ~/.flowmcp/.env: ORS_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier with daily request limit",
+            "notes": ""
+        },
+        "PATENTSVIEW_API_KEY": {
+            "provider": "PatentsView",
+            "signupUrl": "https://search.patentsview.org/docs/",
+            "authMode": "government-us",
+            "steps": [
+                "Open https://search.patentsview.org/docs/",
+                "Request an API key via the api.data.gov form",
+                "Receive the API key by email",
+                "Add to ~/.flowmcp/.env: PATENTSVIEW_API_KEY=<your_key>"
+            ],
+            "freeTier": "Generous free tier via api.data.gov",
+            "notes": "Shared api.data.gov key works across US gov APIs"
+        },
+        "PODCASTINDEX_API_KEY": {
+            "provider": "PodcastIndex",
+            "signupUrl": "https://podcastindex-org.github.io/docs-api/",
+            "authMode": "multi-step",
+            "steps": [
+                "Open https://podcastindex-org.github.io/docs-api/",
+                "Create a Podcast Index account",
+                "Generate API credentials (key + secret) in your account",
+                "Add to ~/.flowmcp/.env: PODCASTINDEX_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for fair use",
+            "notes": "Pair with PODCASTINDEX_API_SECRET"
+        },
+        "PODCASTINDEX_API_SECRET": {
+            "provider": "PodcastIndex",
+            "signupUrl": "https://podcastindex-org.github.io/docs-api/",
+            "authMode": "multi-step",
+            "steps": [
+                "Open https://podcastindex-org.github.io/docs-api/",
+                "Create a Podcast Index account",
+                "Generate API credentials (key + secret) in your account",
+                "Add to ~/.flowmcp/.env: PODCASTINDEX_API_SECRET=<your_secret>"
+            ],
+            "freeTier": "Free for fair use",
+            "notes": "Pair with PODCASTINDEX_API_KEY"
+        },
+        "REGIONALSTATISTIK_PASSWORD": {
+            "provider": "Destatis",
+            "signupUrl": "https://www.regionalstatistik.de/genesis/online?Menu=Webservice",
+            "authMode": "multi-step",
+            "steps": [
+                "Open https://www.regionalstatistik.de/genesis/online?Menu=Webservice",
+                "Register for a GENESIS web-service account",
+                "Set a username and password during signup",
+                "Add to ~/.flowmcp/.env: REGIONALSTATISTIK_PASSWORD=<your_password>"
+            ],
+            "freeTier": "Free for public data",
+            "notes": "Pair with REGIONALSTATISTIK_USERNAME"
+        },
+        "REGIONALSTATISTIK_USERNAME": {
+            "provider": "Destatis",
+            "signupUrl": "https://www.regionalstatistik.de/genesis/online?Menu=Webservice",
+            "authMode": "multi-step",
+            "steps": [
+                "Open https://www.regionalstatistik.de/genesis/online?Menu=Webservice",
+                "Register for a GENESIS web-service account",
+                "Set a username and password during signup",
+                "Add to ~/.flowmcp/.env: REGIONALSTATISTIK_USERNAME=<your_username>"
+            ],
+            "freeTier": "Free for public data",
+            "notes": "Pair with REGIONALSTATISTIK_PASSWORD"
+        },
+        "SCITE_API_KEY": {
+            "provider": "scite.ai",
+            "signupUrl": "https://api.scite.ai/docs",
+            "authMode": "free-email-verified",
+            "steps": [
+                "Open https://api.scite.ai/docs",
+                "Sign up at scite.ai and verify your email",
+                "Generate an API key from your account settings",
+                "Add to ~/.flowmcp/.env: SCITE_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier with rate limits",
+            "notes": ""
+        },
+        "SHERPA_API_KEY": {
+            "provider": "SHERPA RoMEO",
+            "signupUrl": "https://v2.sherpa.ac.uk/api/",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://v2.sherpa.ac.uk/api/",
+                "Register at v2.sherpa.ac.uk",
+                "Obtain an API key from your account",
+                "Add to ~/.flowmcp/.env: SHERPA_API_KEY=<your_key>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "SI_API_KEY": {
+            "provider": "Smithsonian",
+            "signupUrl": "https://www.si.edu/openaccess/devtools",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://www.si.edu/openaccess/devtools",
+                "Sign up via the Smithsonian developer portal",
+                "Receive an API key by email",
+                "Add to ~/.flowmcp/.env: SI_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "TMDB_API_KEY": {
+            "provider": "The Movie DB",
+            "signupUrl": "https://developer.themoviedb.org/reference/intro/getting-started",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://developer.themoviedb.org/reference/intro/getting-started",
+                "Create a TMDB account",
+                "Apply for an API key (instant approval for personal use)",
+                "Add to ~/.flowmcp/.env: TMDB_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free for non-commercial use",
+            "notes": ""
+        },
+        "UNPAYWALL_EMAIL": {
+            "provider": "Unpaywall",
+            "signupUrl": "https://unpaywall.org/products/api",
+            "authMode": "free-email-identifier",
+            "steps": [
+                "Open https://unpaywall.org/products/api",
+                "No signup required; you only need a contact email",
+                "Use that email as the identifier on requests",
+                "Add to ~/.flowmcp/.env: UNPAYWALL_EMAIL=<your_email>"
+            ],
+            "freeTier": "Free, identifier is your email",
+            "notes": "Identifier is the email itself, not a token"
+        },
+        "USDA_API_KEY": {
+            "provider": "USDA Food Data",
+            "signupUrl": "https://fdc.nal.usda.gov/api-guide/",
+            "authMode": "free-instant",
+            "steps": [
+                "Open https://fdc.nal.usda.gov/api-guide/",
+                "Request an API key via the api.data.gov signup form",
+                "Receive the API key by email instantly",
+                "Add to ~/.flowmcp/.env: USDA_API_KEY=<your_key>"
+            ],
+            "freeTier": "Generous free tier via api.data.gov",
+            "notes": "Shared api.data.gov key works across US gov APIs"
+        },
+        "USPTO_API_KEY": {
+            "provider": "USPTO",
+            "signupUrl": "https://data.uspto.gov/apis/getting-started",
+            "authMode": "government-us",
+            "steps": [
+                "Open https://data.uspto.gov/apis/getting-started",
+                "Register at the USPTO developer portal",
+                "Generate an API key in your account",
+                "Add to ~/.flowmcp/.env: USPTO_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier with rate limits",
+            "notes": ""
+        },
+        "WEB3_CAREER_API_TOKEN": {
+            "provider": "Web3.career",
+            "signupUrl": "https://web3.career/developer-api",
+            "authMode": "unclear",
+            "steps": [
+                "Open https://web3.career/developer-api",
+                "Sign up via the Web3.career developer page",
+                "Generate an API token in your account",
+                "Add to ~/.flowmcp/.env: WEB3_CAREER_API_TOKEN=<your_token>"
+            ],
+            "freeTier": "Check provider docs",
+            "notes": ""
+        },
+        "WTO_API_KEY": {
+            "provider": "WTO Timeseries",
+            "signupUrl": "https://apiportal.wto.org/",
+            "authMode": "free-approval-needed",
+            "steps": [
+                "Open https://apiportal.wto.org/",
+                "Register at the WTO API portal",
+                "Subscribe to the Timeseries product (manual approval)",
+                "Add to ~/.flowmcp/.env: WTO_API_KEY=<your_key>"
+            ],
+            "freeTier": "Free tier for research",
+            "notes": ""
+        }
+    }
+}

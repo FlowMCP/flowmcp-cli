@@ -1,10 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
 import { writeFile, mkdir, rm, readFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { constants } from 'node:fs'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { createTestHome } from '../helpers/test-home.mjs'
+
+const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
+
+
+const testHome = createTestHome( { suite: 'migrate-config' } )
+
+
+beforeAll( async () => {
+    await testHome.setup()
+} )
+
+
+afterAll( async () => {
+    await testHome.teardown()
+} )
 
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -131,7 +146,7 @@ describe( 'migrateConfig — old format path::routeName', () => {
         tmpCwd = join( tmpdir(), `flowmcp-mc-routename-${Date.now()}` )
         await mkdir( join( tmpCwd, '.flowmcp' ), { recursive: true } )
 
-        const globalSchemasDir = join( homedir(), '.flowmcp', 'schemas' )
+        const globalSchemasDir = testHome.schemasDir
         schemaDir = join( globalSchemasDir, SCHEMA_SOURCE )
         await mkdir( schemaDir, { recursive: true } )
 
@@ -201,7 +216,7 @@ describe( 'migrateConfig — container entry (no routeName) expands all tools', 
         tmpCwd = join( tmpdir(), `flowmcp-mc-container-${Date.now()}` )
         await mkdir( join( tmpCwd, '.flowmcp' ), { recursive: true } )
 
-        const globalSchemasDir = join( homedir(), '.flowmcp', 'schemas' )
+        const globalSchemasDir = testHome.schemasDir
         schemaDir = join( globalSchemasDir, SCHEMA_SOURCE )
         await mkdir( schemaDir, { recursive: true } )
 
@@ -275,7 +290,7 @@ describe( 'migrateConfig — dry-run: no file writes', () => {
         tmpCwd = join( tmpdir(), `flowmcp-mc-dryrun-${Date.now()}` )
         await mkdir( join( tmpCwd, '.flowmcp' ), { recursive: true } )
 
-        const globalSchemasDir = join( homedir(), '.flowmcp', 'schemas' )
+        const globalSchemasDir = testHome.schemasDir
         schemaDir = join( globalSchemasDir, SCHEMA_SOURCE )
         await mkdir( schemaDir, { recursive: true } )
 
@@ -391,7 +406,7 @@ describe( 'migrateConfig — idempotent: second run skips all', () => {
         tmpCwd = join( tmpdir(), `flowmcp-mc-idem-${Date.now()}` )
         await mkdir( join( tmpCwd, '.flowmcp' ), { recursive: true } )
 
-        const globalSchemasDir = join( homedir(), '.flowmcp', 'schemas' )
+        const globalSchemasDir = testHome.schemasDir
         schemaDir = join( globalSchemasDir, SCHEMA_SOURCE )
         await mkdir( schemaDir, { recursive: true } )
 

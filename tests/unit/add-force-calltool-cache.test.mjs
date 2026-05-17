@@ -1,27 +1,23 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals'
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises'
+import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { createTestHome } from '../helpers/test-home.mjs'
+
+const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
-const GLOBAL_CONFIG_DIR = join( homedir(), '.flowmcp' )
-const GLOBAL_CONFIG_PATH = join( GLOBAL_CONFIG_DIR, 'config.json' )
-const SCHEMAS_DIR = join( GLOBAL_CONFIG_DIR, 'schemas' )
+const testHome = createTestHome( { suite: 'force' } )
+const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
+const SCHEMAS_DIR = testHome.schemasDir
 const SOURCE_NAME = 'forcesrc'
 const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME )
-const ENV_FILE_PATH = join( GLOBAL_CONFIG_DIR, '.env.forcetest' )
-
-let originalGlobalConfig = null
+const ENV_FILE_PATH = testHome.envPath( '.forcetest' )
 
 
 beforeAll( async () => {
-    if( existsSync( GLOBAL_CONFIG_PATH ) ) {
-        originalGlobalConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
-    }
+    await testHome.setup()
 
     await mkdir( SOURCE_DIR, { recursive: true } )
 
@@ -104,25 +100,12 @@ beforeAll( async () => {
         }
     }
 
-    if( originalGlobalConfig ) {
-        const parsed = JSON.parse( originalGlobalConfig )
-        parsed[ 'sources' ] = parsed[ 'sources' ] || {}
-        parsed[ 'sources' ][ 'forcesrc' ] = globalConfig[ 'sources' ][ 'forcesrc' ]
-        parsed[ 'envPath' ] = ENV_FILE_PATH
-        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( parsed, null, 4 ), 'utf-8' )
-    } else {
-        await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )
-    }
+    await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )
 } )
 
 
 afterAll( async () => {
-    if( originalGlobalConfig ) {
-        await writeFile( GLOBAL_CONFIG_PATH, originalGlobalConfig, 'utf-8' )
-    }
-
-    await rm( SOURCE_DIR, { recursive: true, force: true } ).catch( () => {} )
-    await rm( ENV_FILE_PATH, { force: true } ).catch( () => {} )
+    await testHome.teardown()
 } )
 
 
