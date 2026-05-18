@@ -21,7 +21,7 @@
         "better-sqlite3": "^12.6.2",
         "chalk": "^5.6.2",
         "figlet": "^1.10.0",
-        "flowmcp": "github:FlowMCP/flowmcp-core#feb94ea0b2261015ac5883f387903b0635a8b17d",
+        "flowmcp": "github:FlowMCP/flowmcp-core#bca23b1fb8727fb4cd4877b1c0ea94f4ac14acb5",
         "inquirer": "^12.3.0"
     },
     "devDependencies": {
