@@ -23,8 +23,12 @@ const args = parseArgs( {
         'global': { type: 'boolean' },
         'basis': { type: 'string' },
         'yes': { type: 'boolean', short: 'y' },
-        'mock': { type: 'boolean' },
         'output': { type: 'string' },
+        'emit-prompts': { type: 'boolean' },
+        'consume-scores': { type: 'string' },
+        'workdir': { type: 'string' },
+        'reports-dir': { type: 'string' },
+        'on-conflict': { type: 'string' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
         'fix-template': { type: 'boolean' },
@@ -451,9 +455,22 @@ const runCommand = async () => {
 
     if( command === 'grade' ) {
         const gradePath = positionals[ 1 ]
-        const mock = values[ 'mock' ] || false
-        const outputDir = values[ 'output' ] || undefined
-        const { result } = await FlowMcpCli.grade( { cwd, 'path': gradePath, mock, outputDir } )
+        const emitPrompts = values[ 'emit-prompts' ] || false
+        const consumeScores = values[ 'consume-scores' ] || null
+        const workdir = values[ 'workdir' ] || null
+        const reportsDir = values[ 'reports-dir' ] || null
+        const onConflict = values[ 'on-conflict' ] || 'skip'
+        const outputDir = values[ 'output' ] || null
+        const { result } = await FlowMcpCli.grade( {
+            cwd,
+            'path': gradePath,
+            emitPrompts,
+            consumeScores,
+            workdir,
+            reportsDir,
+            onConflict,
+            outputDir
+        } )
         output( { result } )
 
         return true

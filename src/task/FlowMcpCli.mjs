@@ -10848,210 +10848,269 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async grade( { cwd, path: schemaPath, mock = false, outputDir } ) {
-        // const { status, messages } = Validation.grade( { cwd, schemaPath, mock, outputDir } )
-        // if( !status ) { Validation.error( { messages } ) }
+    static #toSchemaIdSlug( { schemaId } ) {
+        return schemaId.replace( /\//g, '_' )
+    }
 
+
+    static async #writeAtomic( { path, content, onConflict } ) {
+        const absolutePath = resolve( path )
+        if( existsSync( absolutePath ) ) {
+            if( onConflict === 'abort' ) {
+                throw new Error( `NO-OVERWRITE conflict: ${absolutePath} already exists` )
+            }
+            return { 'skipped': true, absolutePath }
+        }
+        const tmp = `${absolutePath}.tmp`
+        await writeFile( tmp, content, 'utf-8' )
+        await rename( tmp, absolutePath )
+        return { 'skipped': false, absolutePath }
+    }
+
+
+    static async grade( { cwd, path: schemaPath, emitPrompts = false, consumeScores = null, workdir = null, reportsDir = null, onConflict = 'skip', outputDir = null } ) {
         if( !schemaPath ) {
             const result = {
                 'status': false,
                 'error': 'Missing schema path.',
-                'fix': 'Usage: flowmcp dev grade <path-to-schema>'
+                'fix': 'Usage: flowmcp dev grade <path> --emit-prompts | --consume-scores <scores-path>'
             }
+            return { result }
+        }
 
+        if( !emitPrompts && !consumeScores ) {
+            const result = {
+                'status': false,
+                'error': 'Mode required: --emit-prompts or --consume-scores <path>.',
+                'fix': 'See Memo 036 / README for the 2-phase grading workflow.'
+            }
             return { result }
         }
 
         const resolvedPath = resolve( cwd, schemaPath )
-
-        let schemaExists = false
-
         try {
             await access( resolvedPath, constants.F_OK )
-            schemaExists = true
         } catch {
-            schemaExists = false
+            return { 'result': { 'status': false, 'error': `Schema file not found: ${resolvedPath}` } }
         }
 
-        if( !schemaExists ) {
-            const result = {
-                'status': false,
-                'error': `Schema file not found: ${resolvedPath}`,
-                'fix': 'Check the path and try again.'
-            }
-
-            return { result }
-        }
-
-        let v4 = FlowMcpCli.#v4Override
-
-        if( !v4 ) {
-            try {
-                v4 = await import( 'flowmcp/v4' )
-            } catch {
-                // expected when core lacks v4 exports
-            }
-        }
-
+        const v4 = await FlowMcpCli.#loadV4Module()
         if( !v4 || !v4[ 'GradeReporter' ] || !v4[ 'MainValidator' ] ) {
-            const result = {
-                'status': false,
-                'error': 'Grade requires flowmcp-core v4 (GradeReporter + MainValidator). Installed flowmcp does not export v4.',
-                'fix': 'Update flowmcp dependency to a commit that includes Memo 025 v4 modules (c787eb4 or later).'
+            return {
+                'result': {
+                    'status': false,
+                    'error': 'Grade requires flowmcp-core v4 (GradeReporter + MainValidator).',
+                    'fix': 'Update flowmcp dependency to a commit with v4 modules (Memo 025).'
+                }
             }
-
-            return { result }
         }
 
-        const { GradeReporter, MainValidator } = v4
+        const { GradeReporter, MainValidator, MetaGenerator } = v4
 
         let schema = null
-
         try {
             const fileUrl = pathToFileURL( resolvedPath ).href
             const mod = await import( fileUrl )
             schema = mod[ 'main' ]
         } catch( error ) {
-            const result = {
-                'status': false,
-                'error': `Cannot load schema: ${error.message}`,
-                'fix': 'Ensure the file exports a valid "main" constant.'
-            }
-
-            return { result }
+            return { 'result': { 'status': false, 'error': `Cannot load schema: ${error.message}` } }
         }
 
-        if( !schema ) {
-            const result = {
-                'status': false,
-                'error': 'Schema file does not export a "main" constant.',
-                'fix': 'Add: export const main = { namespace, name, version, ... }'
-            }
-
-            return { result }
+        if( !schema || !schema[ 'namespace' ] ) {
+            return { 'result': { 'status': false, 'error': 'Schema must export "main" with "namespace" field.' } }
         }
 
-        const { status: validationPassed, errors: validationErrors } = MainValidator.validate( { schema } )
+        const schemaFileBase = basename( resolvedPath, extname( resolvedPath ) )
+        const schemaId = `${schema[ 'namespace' ]}/${schemaFileBase}`
+        const schemaIdSlug = FlowMcpCli.#toSchemaIdSlug( { schemaId } )
 
-        if( !validationPassed ) {
-            const reportDir = outputDir ? resolve( cwd, outputDir ) : join( cwd, '.grade-reports' )
-            const schemaId = schema[ 'namespace' ] || basename( resolvedPath, extname( resolvedPath ) )
-            const dateStr = new Date().toISOString().slice( 0, 10 )
-            const reportFileName = `${schemaId}-${dateStr}.json`
-            const reportPath = join( reportDir, reportFileName )
+        const workdirPath = workdir ? resolve( cwd, workdir ) : resolve( cwd, 'proofs/grade-work' )
+        const reportsDirPath = reportsDir
+            ? resolve( cwd, reportsDir )
+            : ( outputDir ? resolve( cwd, outputDir ) : resolve( cwd, 'proofs/grade-reports' ) )
+        const slugDir = join( workdirPath, schemaIdSlug )
+        const promptsPath = join( slugDir, 'prompts.json' )
+        const statePath = join( slugDir, 'state.json' )
 
-            const report = {
-                'grade': 'F',
-                'score': 0,
-                'schemaId': schemaId,
-                'date': dateStr,
-                'validationPassed': false,
-                'validationErrors': validationErrors || [],
-                'dimensions': []
-            }
-
-            await mkdir( reportDir, { recursive: true } )
-            await writeFile( reportPath, JSON.stringify( report, null, 4 ), 'utf-8' )
-
-            const result = {
-                'status': true,
-                'grade': 'F',
-                'score': 0,
-                'schemaId': schemaId,
-                'reportPath': reportPath,
-                'validationPassed': false,
-                'validationErrors': validationErrors || [],
-                'dimensions': []
-            }
-
-            return { result }
-        }
-
-        const apiKey = process.env[ 'ANTHROPIC_API_KEY' ]
-
-        if( !mock && !apiKey ) {
-            const result = {
-                'status': false,
-                'error': 'Missing ANTHROPIC_API_KEY env var.',
-                'fix': 'Set ANTHROPIC_API_KEY in your environment, or use --mock to skip the Anthropic API.'
-            }
-
-            return { result }
-        }
-
-        const { prompts: evalPrompts } = GradeReporter.buildEvalPrompts( { schema } )
-
-        const evalResponses = await Promise.all(
-            evalPrompts.map( async ( prompt ) => {
-                if( mock ) {
-                    return {
-                        'score': 75,
-                        'feedback': 'Mock evaluation response.',
-                        'dimension': prompt[ 'dimension' ] || 'unknown'
+        if( emitPrompts ) {
+            if( existsSync( promptsPath ) ) {
+                if( onConflict === 'abort' ) {
+                    return { 'result': { 'status': false, 'error': `NO-OVERWRITE conflict: ${resolve( promptsPath )}` } }
+                }
+                return {
+                    'result': {
+                        'status': true,
+                        'mode': 'emit-prompts',
+                        'skipped': true,
+                        schemaId, schemaIdSlug,
+                        'promptsPath': resolve( promptsPath ),
+                        'statePath': resolve( statePath )
                     }
                 }
+            }
 
-                const response = await fetch( 'https://api.anthropic.com/v1/messages', {
-                    'method': 'POST',
-                    'headers': {
-                        'x-api-key': apiKey,
-                        'anthropic-version': '2023-06-01',
-                        'content-type': 'application/json'
-                    },
-                    'body': JSON.stringify( {
-                        'model': 'claude-haiku-4-5',
-                        'max_tokens': 1024,
-                        'messages': [ { 'role': 'user', 'content': prompt[ 'content' ] || prompt } ]
-                    } )
-                } )
+            const { evalPrompts } = GradeReporter.buildEvalPrompts( { schema } )
+            const now = new Date().toISOString()
 
-                const json = await response.json()
-                const rawText = json[ 'content' ]?.[ 0 ]?.[ 'text' ] || '{}'
+            const promptsDoc = {
+                schemaId, schemaIdSlug,
+                'schemaPath': resolvedPath,
+                'scoringProtocol': 'v1',
+                'scoringInstructions': 'Du bist ein Schema-Bewerter. Bewerte unabhaengig basierend nur auf den unten gelieferten Informationen. Antworte als JSON-Array: [ { "dimension": "...", "score": <1.0-5.0>, "reasoning": "..." }, ... ]. Keine externen Annahmen, keine Kontext-Vermutungen.',
+                'prompts': evalPrompts.map( ( p ) => ( { 'dimension': p[ 'dimension' ], 'prompt': p[ 'prompt' ] } ) )
+            }
 
-                try {
-                    return JSON.parse( rawText )
-                } catch {
-                    return { 'score': 0, 'feedback': rawText, 'dimension': prompt[ 'dimension' ] || 'unknown' }
+            const stateDoc = {
+                schemaId, schemaIdSlug,
+                'absolutePath': resolvedPath,
+                'status': 'prompts-emitted',
+                'scoringProtocol': 'v1',
+                'createdAt': now,
+                'lastUpdatedAt': now,
+                'phases': {
+                    'promptsEmitted': now,
+                    'scoresReceived': null,
+                    'gradeComputed': null,
+                    'reportWritten': null
                 }
+            }
+
+            await mkdir( slugDir, { recursive: true } )
+            await FlowMcpCli.#writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), onConflict } )
+            await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': 'skip' } )
+
+            return {
+                'result': {
+                    'status': true,
+                    'mode': 'emit-prompts',
+                    schemaId, schemaIdSlug,
+                    'promptsPath': resolve( promptsPath ),
+                    'statePath': resolve( statePath )
+                }
+            }
+        }
+
+        if( consumeScores ) {
+            const scoresAbsPath = resolve( cwd, consumeScores )
+            if( !existsSync( scoresAbsPath ) ) {
+                return { 'result': { 'status': false, 'error': `Scores file not found: ${scoresAbsPath}` } }
+            }
+
+            const scoresContent = await readFile( scoresAbsPath, 'utf-8' )
+            let scoresDoc = null
+            try {
+                scoresDoc = JSON.parse( scoresContent )
+            } catch( err ) {
+                return { 'result': { 'status': false, 'error': `Invalid JSON in scores file: ${err.message}` } }
+            }
+
+            if( !Array.isArray( scoresDoc[ 'scores' ] ) ) {
+                return { 'result': { 'status': false, 'error': 'Invalid scores format: "scores" must be an array.' } }
+            }
+
+            const enriched = MetaGenerator
+                ? FlowMcpCli.#enrichV4WithRuntimeMeta( { 'main': schema, MetaGenerator } )
+                : schema
+            const { status: validationPassed, messages: validationMessages } = MainValidator.validate( { 'main': enriched } )
+            const validationErrors = validationMessages || []
+
+            const scoresArray = scoresDoc[ 'scores' ].map( ( s ) => ( { 'dimension': s[ 'dimension' ], 'score': s[ 'score' ] } ) )
+            const deterministicStatus = validationPassed ? 'PASS' : 'FAIL'
+            const { grade, report: gradeReport } = GradeReporter.grade( {
+                schemaId,
+                'deterministicResult': { 'status': deterministicStatus, 'errors': validationErrors },
+                'scores': scoresArray,
+                'validatorVersion': 'validation/4.0'
             } )
-        )
 
-        const { grade, score, dimensions } = GradeReporter.grade( { schema, evalResponses } )
+            const schemaContent = await readFile( resolvedPath, 'utf-8' )
+            const schemaHash = `sha256:${createHash( 'sha256' ).update( schemaContent ).digest( 'hex' )}`
 
-        const reportDir = outputDir ? resolve( cwd, outputDir ) : join( cwd, '.grade-reports' )
-        const schemaId = schema[ 'namespace' ] || basename( resolvedPath, extname( resolvedPath ) )
-        const dateStr = new Date().toISOString().slice( 0, 10 )
-        const reportFileName = `${schemaId}-${dateStr}.json`
-        const reportPath = join( reportDir, reportFileName )
+            const dateStr = new Date().toISOString().slice( 0, 10 )
+            const reportFileName = `${schemaIdSlug}-${dateStr}.json`
+            const reportPath = join( reportsDirPath, reportFileName )
 
-        const report = {
-            grade,
-            score,
-            schemaId,
-            'date': dateStr,
-            'validationPassed': true,
-            evalResponses,
-            dimensions
+            if( existsSync( reportPath ) ) {
+                if( onConflict === 'abort' ) {
+                    return { 'result': { 'status': false, 'error': `NO-OVERWRITE conflict: ${resolve( reportPath )}` } }
+                }
+                return {
+                    'result': {
+                        'status': true,
+                        'mode': 'consume-scores',
+                        'skipped': true,
+                        'reportPath': resolve( reportPath )
+                    }
+                }
+            }
+
+            let startedAt = null
+            if( existsSync( statePath ) ) {
+                try {
+                    const sc = await readFile( statePath, 'utf-8' )
+                    const sd = JSON.parse( sc )
+                    startedAt = sd[ 'createdAt' ] || null
+                } catch {
+                    // ignore corrupt state
+                }
+            }
+
+            const nowIso = new Date().toISOString()
+            const reportDoc = {
+                schemaId, schemaIdSlug,
+                'schemaPath': resolvedPath,
+                schemaHash,
+                'date': dateStr,
+                grade,
+                'score': gradeReport && typeof gradeReport[ 'averageScore' ] === 'number' ? gradeReport[ 'averageScore' ] : 0,
+                'scoringProtocol': scoresDoc[ 'scoringProtocol' ] || 'v1',
+                'creator': scoresDoc[ 'creator' ] || null,
+                'harness': scoresDoc[ 'harness' ] || null,
+                'timestamps': {
+                    startedAt,
+                    'scoredAt': scoresDoc[ 'timestamp' ] || null,
+                    'gradedAt': nowIso,
+                    'reportedAt': nowIso
+                },
+                'dimensions': scoresDoc[ 'scores' ],
+                validationPassed,
+                validationErrors
+            }
+
+            await mkdir( reportsDirPath, { recursive: true } )
+            await FlowMcpCli.#writeAtomic( { 'path': reportPath, 'content': JSON.stringify( reportDoc, null, 4 ), 'onConflict': onConflict } )
+
+            if( existsSync( statePath ) ) {
+                try {
+                    const sc = await readFile( statePath, 'utf-8' )
+                    const sd = JSON.parse( sc )
+                    sd[ 'status' ] = 'reported'
+                    sd[ 'lastUpdatedAt' ] = nowIso
+                    sd[ 'phases' ][ 'gradeComputed' ] = nowIso
+                    sd[ 'phases' ][ 'reportWritten' ] = nowIso
+                    const tmp = `${statePath}.tmp`
+                    await writeFile( tmp, JSON.stringify( sd, null, 4 ), 'utf-8' )
+                    await rename( tmp, statePath )
+                } catch {
+                    // ignore state update errors
+                }
+            }
+
+            return {
+                'result': {
+                    'status': true,
+                    'mode': 'consume-scores',
+                    grade,
+                    'score': reportDoc[ 'score' ],
+                    schemaId, schemaIdSlug,
+                    'reportPath': resolve( reportPath ),
+                    validationPassed,
+                    validationErrors
+                }
+            }
         }
 
-        await mkdir( reportDir, { recursive: true } )
-        await writeFile( reportPath, JSON.stringify( report, null, 4 ), 'utf-8' )
-
-        const topDimensions = Array.isArray( dimensions )
-            ? dimensions.slice( 0, 3 )
-            : []
-
-        const result = {
-            'status': true,
-            grade,
-            score,
-            schemaId,
-            reportPath,
-            'validationPassed': true,
-            'topDimensions': topDimensions
-        }
-
-        return { result }
+        return { 'result': { 'status': false, 'error': 'Unexpected: neither --emit-prompts nor --consume-scores was matched.' } }
     }
 }
 
