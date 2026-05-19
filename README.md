@@ -375,7 +375,7 @@ flowmcp prompt remove analysis token-report
 
 ## Documentation
 
-Full documentation at [docs.flowmcp.org](https://docs.flowmcp.org). See the [CLI Reference](https://docs.flowmcp.org/guides/cli-reference) for detailed command documentation.
+Full documentation at [flowmcp.github.io](https://flowmcp.github.io). See the [CLI Reference](https://flowmcp.github.io/docs/reference/cli-reference/) for detailed command documentation.
 
 ## License & Terms of Services
 
