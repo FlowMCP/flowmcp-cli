@@ -263,8 +263,8 @@ flowmcp dev test single ./schema.mjs --only=resources,skills
 
 Add `--json` to emit a machine-readable summary. The JSON object contains
 `overall`, `primitives` (per-primitive counts), and `tests` (per-test detail).
-This format is consumed by downstream tooling such as the Memo 035 conformance
-report and the Memo 028 Grade Report.
+This format is consumed by downstream tooling such as conformance and grade
+reports.
 
 ```bash
 flowmcp dev test single ./schema.mjs --json
