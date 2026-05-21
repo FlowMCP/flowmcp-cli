@@ -158,6 +158,167 @@ source/file.mjs              # All tools from a schema
 source/file.mjs::routeName   # Single tool from a schema
 ```
 
+## Add-ons
+
+### Konzept
+
+Add-ons sind formatspezifische Adapter, die FlowMCP-CLI bei Bedarf laedt, wenn ein Schema eine Resource mit einem nicht-trivialen Datenformat deklariert. Sie kapseln Wissen, das nicht in die Schema-Definition gehoert — etwa wie eine bestimmte SQLite-DB aufgebaut sein muss, welche Auto-Tools daraus ableitbar sind, oder wie eine Qualitaets-Garantie (Seal) zu pruefen ist.
+
+Add-ons leben als eigenstaendige GitHub-Repos, nicht als Teil der CLI. Das trennt Schema-Logik (Was wird abgefragt?) von Format-Logik (Wie ist das Format aufgebaut?) und erlaubt parallele Weiterentwicklung. Die CLI laedt Add-ons via `github:`-Shorthand on-demand, sobald ein Schema sie referenziert.
+
+Das Versprechen: ein Schema, das auf ein Add-on zeigt, bekommt automatisch generierte Tools auf einer Datenquelle, die der Add-on als spec-konform und qualitaetsgesichert verifiziert hat. Der Schema-Autor schreibt keinen SQL-Code, der Add-on-Autor keinen Schema-Boilerplate.
+
+### Beispiel: sqlite-gtfs
+
+Der erste Add-on ist [`gtfs-sqlite-toolkit`](https://github.com/FlowMCP/gtfs-sqlite-toolkit). Er konvertiert GTFS-Schedule-Feeds (CSV in ZIP) in spec-konforme SQLite-Datenbanken und liefert dazu eine Capability-basierte Auto-Tool-Generierung. Ein Schema referenziert ihn so:
+
+```javascript
+export const schema = {
+    namespace: 'gtfsde',
+    name: 'gtfsde-transit-v2',
+    version: '2.0.0',
+    main: {
+        resources: [
+            {
+                source:      'sqlite-gtfs',
+                mode:        'file-based',
+                path:        '${FLOWMCP_RESOURCES}/gtfs-de.db',
+                addon:       'gtfs-sqlite-toolkit',
+                addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
+            }
+        ]
+    }
+}
+```
+
+`source: 'sqlite-gtfs'` signalisiert der CLI, dass ein Add-on noetig ist. `addon` benennt das Repo, `addonSource` zeigt auf den Bezugsort (immer `github:<org>/<repo>` — keine npm-Registry). `${FLOWMCP_RESOURCES}` ist eine Pfad-Variable (siehe naechsten Abschnitt) und entspricht dem Default `~/.flowmcp/resources/`.
+
+### Discovery: ADDON_REGISTRY
+
+Die CLI haelt einen kleinen, in `src/data/addons.mjs` **hardcoded** in V1 gepflegten Registry-Eintrag pro bekanntem `source`-Typ. Ein Eintrag besteht aus drei Feldern:
+
+```javascript
+export const ADDON_REGISTRY = {
+    'sqlite-gtfs': {
+        name:           'gtfs-sqlite-toolkit',
+        source:         'github:FlowMCP/gtfs-sqlite-toolkit',
+        defaultVersion: 'main'
+    }
+}
+```
+
+`name` ist der Add-on-Bezeichner (muss mit `addon` im Schema uebereinstimmen), `source` ist der `github:`-Bezugsort, `defaultVersion` ist der Git-Ref, der genutzt wird, wenn das Schema keinen `addonVersion` setzt. In V1 ist die Registry hardcoded; spaetere Versionen koennen sie ueber externe Quellen erweitern.
+
+Spec-Referenz: [`flowmcp-spec/spec/v4.0.0/13-resources.md`](../flowmcp-spec/spec/v4.0.0/13-resources.md) Abschnitt "SQLite-GTFS Resources".
+
+Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (`${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Ort `~/.flowmcp/resources/`), [Datenquellen — User-Verantwortung](#datenquellen--user-verantwortung) (DBs werden vom User selbst angelegt).
+
+## Pfad-Variablen
+
+Pfad-Variablen erlauben User-Konfigurierbarkeit, ohne dass ein Schema fuer jeden Setup neu geschrieben werden muss. Sie tauchen typischerweise im `path`-Feld einer Schema-Resource auf — etwa um auf eine lokal abgelegte SQLite-DB zu zeigen, deren Ort der User selbst bestimmt.
+
+Die CLI loest folgende Variablen auf:
+
+| Variable | Aufloesung | Default | Spec-Bezug |
+|----------|------------|---------|------------|
+| `${FLOWMCP_RESOURCES}` | Env-Var `FLOWMCP_RESOURCES` | `~/.flowmcp/resources/` | Spec-Primitive `main.resources` |
+| `${HOME}` | Env-Var `HOME` | obligatorisch (OS) | — |
+| `~` | Tilde-Expansion auf `$HOME` | obligatorisch (OS) | — |
+
+Die Aufloesung erfolgt in zwei Stufen: zuerst pruefen, ob die Env-Var gesetzt ist; wenn nicht, den dokumentierten Default einsetzen. Variablen ohne Default (wie `${HOME}`) muessen vom Betriebssystem bereitgestellt sein, sonst greift der Fehlerfall.
+
+### Fehler `RES035`
+
+Wenn die CLI eine Variable nicht aufloesen kann — etwa weil eine unbekannte Variable im `path` steht oder eine Env-Var ohne Default leer ist — bricht `flowmcp add` mit `RES035` ab. User beheben das, indem sie die Env-Var explizit setzen (`export FLOWMCP_RESOURCES=/path/to/dir`) oder die DB an den Default-Ort verschieben.
+
+### Namens-Familie `FLOWMCP_*`
+
+Pfad-Variablen folgen dem Pattern Spec-Primitive-Name → Variablen-Name. `${FLOWMCP_RESOURCES}` bindet direkt an das Spec-Primitive `main.resources` und etabliert die `FLOWMCP_*`-Namensfamilie. Zukuenftige Erweiterungen sind absehbar — etwa `${FLOWMCP_LOGS}` fuer Log-Verzeichnisse oder `${FLOWMCP_CACHE}` als expliziter Cache-Hook. In V1 ist nur `${FLOWMCP_RESOURCES}` implementiert.
+
+Beispiel fuer einen alternativen Ort:
+
+```bash
+export FLOWMCP_RESOURCES=/Volumes/MyData/flowmcp
+flowmcp add gtfsde-transit-v2
+```
+
+Verwandte Abschnitte: [Add-ons](#add-ons) (Schema-Beispiele mit `${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Aufloesung).
+
+## Datenquellen — User-Verantwortung
+
+FlowMCP verteilt **keine** Provider-Daten in seinen oeffentlichen Repos. Das hat drei Gruende, die alle gleichzeitig gelten.
+
+**Lizenz.** GTFS-Feeds und vergleichbare Provider-Datensaetze unterliegen jeweils eigenen Lizenz-Bedingungen — von CC BY 4.0 ueber custom EULAs bis zu Provider-spezifischen Klauseln. Wer die Daten in ein Public-Repo legt, verschiebt diese Konformitaets-Pflicht ungewollt auf das Repo und alle Forks. FlowMCP vermeidet das, indem die Daten beim User bleiben.
+
+**Skalierung.** Reale Provider-Feeds erreichen 40 MB und mehr (DB Bahn FV-Schedule liegt bei ~50 MB, regionale VBB-Feeds darueber). Solche Datenmengen im Git-History blaehen jedes Clone-Setup auf und machen den Repo schwerfaellig. Code und Daten gehoeren in unterschiedliche Lebenszyklen.
+
+**Aktualitaet.** Feeds werden taeglich oder woechentlich aktualisiert. Ein Repo-State waere immer veraltet — der User muesste regelmaessig pruefen, ob die im Repo enthaltene Version noch der Realitaet entspricht. Sauberer ist es, wenn der User direkt vom Provider zieht und konvertiert.
+
+### User-Workflow
+
+Der Weg von einem Provider-Feed zu einer von FlowMCP nutzbaren DB hat vier Schritte:
+
+1. **Download** des GTFS-Feeds vom Provider (Beispiele: `gtfs.de/de/feeds/`, regionale Open-Data-Portale, Provider-eigene Download-Seiten)
+2. **Konvertierung** via Add-on `gtfs-sqlite-toolkit` (siehe Add-on-README fuer den genauen Aufruf)
+3. **Ablage** der DB unter `${FLOWMCP_RESOURCES}/<name>.db` (Default `~/.flowmcp/resources/<name>.db`)
+4. **Aktivierung** via `flowmcp add <schema>`
+
+Konkrete Befehlsbeispiele:
+
+```bash
+# 1. GTFS-Feed laden (Beispiel)
+curl -O https://download.gtfs.de/germany/free/latest.zip
+
+# 2. Konvertieren via Add-on (siehe gtfs-sqlite-toolkit README)
+cd ~/code/gtfs-sqlite-toolkit
+node convert.mjs --input=~/Downloads/latest.zip --output=~/.flowmcp/resources/gtfs-de.db
+
+# 3. Optional: DB an anderen Ort verschieben
+#    (wenn ${FLOWMCP_RESOURCES} nicht auf den Default zeigt)
+
+# 4. Schema aktivieren
+flowmcp add gtfsde-transit-v2
+```
+
+### Pre-Push-Schutz
+
+Das Add-on-Repo (`gtfs-sqlite-toolkit`) liefert ein Verifikations-Skript `scripts/check-no-provider-data.sh`, das vor jedem Commit bzw. Push grosse oder provider-spezifische Dateien erkennt und den Push abbricht. Diese Policy gilt auch fuer User-Forks — wer mitarbeitet, sollte das Skript in eigene Pre-Push-Hooks einbinden.
+
+Wer ein Schema fuer einen neuen Provider beitragen moechte, liefert **nur das Schema und die Pfad-Variable** — niemals den Feed selbst.
+
+Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (Schritt 3 nutzt `${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Ablage-Ort), [Add-ons](#add-ons) (Schritt 2 erfordert ein Add-on).
+
+## FlowMCP-Verzeichnis-Struktur
+
+FlowMCP nutzt ein zentrales User-Verzeichnis `~/.flowmcp/`, das ueber alle Projekte hinweg konsistent ist. Es haelt API-Keys, Cache und User-Resources an einem Ort — projekt-lokal koennen einzelne Werte ueberschrieben werden, der Default-Lookup bleibt zentral.
+
+```
+~/.flowmcp/
+├── .env             ← API Keys (Single Source of Truth)
+├── cache/           ← Schema cache (CLI-managed)
+└── resources/       ← User DBs (NEW — Default fuer ${FLOWMCP_RESOURCES}, ab Memo 051)
+```
+
+| Pfad | Zweck | Verwaltung | Quer-Verweis |
+|------|-------|------------|--------------|
+| `~/.flowmcp/.env` | API Keys, Provider-Credentials | User (manuell) | Memo 032 Credentials Management |
+| `~/.flowmcp/cache/` | Schema-Cache, Add-on-Cache | CLI (automatisch) | — |
+| `~/.flowmcp/resources/` | User-DBs (z.B. konvertierte GTFS) | User (manuell oder via Add-on) | `${FLOWMCP_RESOURCES}` Default |
+
+### `.env` — Single Source of Truth
+
+Die globale `~/.flowmcp/.env` ist die Single Source of Truth fuer API-Keys aller FlowMCP-Tools. Sie wird vom User manuell gepflegt; die CLI legt sie nie automatisch an und ueberschreibt nie. Projekt-lokal kann ein Override unter `projects/<name>/.flowmcp/.env` abgelegt werden — der Lookup-Pfad ist erst projekt-lokal, dann global (siehe Memo 032 fuer das Credential-Modell).
+
+### `resources/` — Default fuer `${FLOWMCP_RESOURCES}`
+
+Das Verzeichnis `~/.flowmcp/resources/` ist mit Memo 051 hinzugekommen und dient als Default-Aufloesung fuer die Pfad-Variable `${FLOWMCP_RESOURCES}`. User koennen die Env-Var auf einen anderen Ort setzen — etwa eine externe Festplatte oder ein zentrales Datenlaufwerk — die CLI loest dann dynamisch dorthin auf.
+
+```bash
+export FLOWMCP_RESOURCES=/Volumes/MyData/flowmcp
+```
+
+Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (Aufloesungs-Logik), [Datenquellen — User-Verantwortung](#datenquellen--user-verantwortung) (warum die DBs hier landen, nicht im Repo).
+
 ## Global Flags
 
 | Flag | Short | Description |
