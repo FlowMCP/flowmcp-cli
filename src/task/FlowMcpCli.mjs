@@ -26,6 +26,10 @@ import { FlowMCP } from 'flowmcp/v2'
 import { ZodBuilder } from './ZodBuilder.mjs'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
+import { ADDON_REGISTRY } from '../data/addons.mjs'
+import { PathVariableResolver } from '../path/resolvePathVariables.mjs'
+import { AddonLoader } from '../addons/loadAddon.mjs'
+import { SqliteGtfsResourceValidator } from '../validators/SqliteGtfsResourceValidator.mjs'
 
 
 class FlowMcpCli {
@@ -2765,6 +2769,17 @@ class FlowMcpCli {
             return { result }
         }
 
+        // Memo 051 PRD-20 — route auto-injected sqlite-gtfs tools to addon handlers
+        const autoToolRoute = await FlowMcpCli.#maybeCallSqliteGtfsAutoTool( {
+            toolName,
+            jsonArgs,
+            noCache,
+            refresh
+        } )
+        if( autoToolRoute ) {
+            return autoToolRoute
+        }
+
         let resolvedToolName = toolName
 
         if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
@@ -3240,6 +3255,13 @@ class FlowMcpCli {
             return { result }
         }
 
+        // Memo 051 PRD-18 — when add target is a local schema file (.mjs)
+        // containing a `sqlite-gtfs` resource, use the addon pipeline.
+        const sqliteGtfsRoute = await FlowMcpCli.#maybeAddSqliteGtfsSchema( { toolName, cwd, force } )
+        if( sqliteGtfsRoute ) {
+            return sqliteGtfsRoute
+        }
+
         if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
             const { valid, namespace, type, name: specName, error: parseError } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
 
@@ -3648,11 +3670,31 @@ class FlowMcpCli {
 
         const { toolRefs } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
 
+        // Memo 051 PRD-19 — auto-injected sqlite-gtfs tools come from the seal cache
+        // and are visible even when no traditional toolRefs are active.
         if( toolRefs.length === 0 ) {
+            const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
+            const autoToolsOnly = []
+            sealCacheEntries
+                .forEach( ( entry ) => {
+                    const entryTools = entry && entry[ 'tools' ] ? entry[ 'tools' ] : []
+                    entryTools
+                        .forEach( ( tool ) => {
+                            autoToolsOnly.push( {
+                                'name': tool.name,
+                                'description': tool.description || '',
+                                'tags': [],
+                                'parameters': {},
+                                'auto': tool.auto === true,
+                                'schema': entry[ 'schemaName' ]
+                            } )
+                        } )
+                } )
+
             const result = {
                 'status': true,
-                'toolCount': 0,
-                'tools': []
+                'toolCount': autoToolsOnly.length,
+                'tools': autoToolsOnly
             }
 
             return { result }
@@ -3740,6 +3782,24 @@ class FlowMcpCli {
                     }
                 } )
         }
+
+        // Memo 051 PRD-19 — include auto-injected tools from cached sqlite-gtfs schemas
+        const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
+        sealCacheEntries
+            .forEach( ( entry ) => {
+                const entryTools = entry && entry[ 'tools' ] ? entry[ 'tools' ] : []
+                entryTools
+                    .forEach( ( tool ) => {
+                        tools.push( {
+                            'name': tool.name,
+                            'description': tool.description || '',
+                            'tags': [],
+                            'parameters': {},
+                            'auto': tool.auto === true,
+                            'schema': entry[ 'schemaName' ]
+                        } )
+                    } )
+            } )
 
         const result = {
             'status': true,
@@ -5392,6 +5452,664 @@ class FlowMcpCli {
         }
 
         return collected
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Memo 051 — sqlite-gtfs add-pipeline helpers (PRD-18, PRD-19, PRD-20,
+    // PRD-21, PRD-22). All entry points route through `#maybeAddSqliteGtfsSchema`
+    // which is invoked at the top of `add()`.
+    // ---------------------------------------------------------------------
+
+    static #sqliteGtfsCacheDir() {
+        const dir = join( FlowMcpCli.#cacheDir(), 'sqlite-gtfs' )
+
+        return dir
+    }
+
+
+    static #sqliteGtfsCachePath( { schemaNamespace, schemaName } ) {
+        const fileName = `${schemaNamespace}-${schemaName}.json`
+        const filePath = join( FlowMcpCli.#sqliteGtfsCacheDir(), fileName )
+
+        return { filePath }
+    }
+
+
+    static async #writeSealCache( { schemaNamespace, schemaName, schemaFile, dbPath, sourceKey, addonName, namespace, meta, tools, overridden } ) {
+        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName } )
+        await mkdir( dirname( filePath ), { recursive: true } )
+
+        let dbMtime = null
+        try {
+            const st = await stat( dbPath )
+            dbMtime = st.mtime.toISOString()
+        } catch {
+            dbMtime = null
+        }
+
+        const entry = {
+            'schemaName': schemaName,
+            'schemaNamespace': schemaNamespace,
+            'schemaFile': schemaFile,
+            'sourceKey': sourceKey,
+            'addonName': addonName,
+            'namespace': namespace,
+            'dbPath': dbPath,
+            'sealedAt': new Date().toISOString(),
+            'dbMtime': dbMtime,
+            'meta': meta,
+            'tools': tools,
+            'overridden': overridden || []
+        }
+
+        await writeFile( filePath, JSON.stringify( entry, null, 2 ), 'utf-8' )
+
+        return { filePath, entry }
+    }
+
+
+    static async #readSealCache( { schemaNamespace, schemaName } ) {
+        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName } )
+
+        try {
+            const raw = await readFile( filePath, 'utf-8' )
+            const entry = JSON.parse( raw )
+            const { isStale } = await FlowMcpCli.#checkSealCacheStale( { entry, 'dbPath': entry[ 'dbPath' ] } )
+
+            return { entry, isStale }
+        } catch {
+            return { 'entry': null, 'isStale': true }
+        }
+    }
+
+
+    static async #checkSealCacheStale( { entry, dbPath } ) {
+        if( !entry || !entry[ 'dbMtime' ] ) { return { 'isStale': true } }
+
+        try {
+            const st = await stat( dbPath )
+            const currentMtime = st.mtime.toISOString()
+            const isStale = currentMtime !== entry[ 'dbMtime' ]
+
+            return { isStale }
+        } catch {
+            return { 'isStale': true }
+        }
+    }
+
+
+    static async #listSqliteGtfsCacheEntries() {
+        const dir = FlowMcpCli.#sqliteGtfsCacheDir()
+        const entries = []
+
+        try {
+            const files = await readdir( dir )
+            const jsonFiles = files
+                .filter( ( name ) => {
+                    const isJson = name.endsWith( '.json' )
+
+                    return isJson
+                } )
+
+            await jsonFiles
+                .reduce( ( promise, name ) => promise.then( async () => {
+                    try {
+                        const raw = await readFile( join( dir, name ), 'utf-8' )
+                        const parsed = JSON.parse( raw )
+                        entries.push( parsed )
+                    } catch {
+                        // corrupt — skip
+                    }
+                } ), Promise.resolve() )
+        } catch {
+            // cache dir doesn't exist yet
+        }
+
+        return { entries }
+    }
+
+
+    static async #maybeAddSqliteGtfsSchema( { toolName, cwd, force } ) {
+        const looksLikeFile = toolName.endsWith( '.mjs' ) || toolName.endsWith( '.js' )
+        if( !looksLikeFile ) { return null }
+
+        const resolvedSchemaPath = resolve( toolName )
+
+        let schemaExists = false
+        try {
+            await access( resolvedSchemaPath, constants.F_OK )
+            schemaExists = true
+        } catch {
+            schemaExists = false
+        }
+
+        if( !schemaExists ) { return null }
+
+        const { main, error: loadError } = await FlowMcpCli.#loadSchema( { 'filePath': resolvedSchemaPath, 'bustCache': force } )
+        if( !main ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Cannot load schema file: ${loadError || 'unknown error'}`,
+                'fix': `Verify the schema file exports 'main' or 'schema': ${resolvedSchemaPath}`
+            } )
+
+            return { result }
+        }
+
+        const resourcesRaw = main[ 'resources' ]
+        if( !resourcesRaw ) { return null }
+
+        const resourcesArr = Array.isArray( resourcesRaw )
+            ? resourcesRaw
+            : Object.values( resourcesRaw )
+
+        const sqliteGtfsResources = resourcesArr
+            .filter( ( r ) => {
+                const isMatch = r && r.source === 'sqlite-gtfs'
+
+                return isMatch
+            } )
+
+        if( sqliteGtfsResources.length === 0 ) { return null }
+
+        const pipeline = await FlowMcpCli.#executeSqliteGtfsAddPipeline( {
+            'main': main,
+            'sqliteGtfsResources': sqliteGtfsResources,
+            'schemaFile': resolvedSchemaPath,
+            cwd,
+            force
+        } )
+
+        return pipeline
+    }
+
+
+    static async #executeSqliteGtfsAddPipeline( { main, sqliteGtfsResources, schemaFile, cwd, force } ) {
+        const namespace = main[ 'namespace' ] || 'unknown'
+        const schemaName = main[ 'name' ] || namespace
+
+        console.log( `Loading schema ${schemaName} ...` )
+
+        // PRD-17 structural validation
+        const structuralErrors = FlowMcpCli.#runSqliteGtfsResourceChecks( { main } )
+        if( structuralErrors.length > 0 ) {
+            const messages = structuralErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` )
+            const result = FlowMcpCli.#error( {
+                'error': `Schema validation failed: ${messages.join( '; ' )}`,
+                'fix': `Fix the resource definition in ${schemaFile} (see Memo 051 / Spec v4.1.0 RES030..RES035).`
+            } )
+
+            return { result }
+        }
+
+        console.log( 'Validating spec compliance ... OK (v4.1.0)' )
+
+        const resource = sqliteGtfsResources[ 0 ]
+        const sourceKey = resource.source
+
+        // PRD-14 path resolution
+        let resolved
+        try {
+            resolved = PathVariableResolver.resolvePathVariables( { 'path': resource.path } )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `RES035: ${err.message}`,
+                'fix': `Set FLOWMCP_RESOURCES or use a literal path in ${schemaFile}`
+            } )
+
+            return { result }
+        }
+
+        const { resolvedPath } = resolved
+        console.log( `Resolving path: ${resource.path} → ${resolvedPath}` )
+
+        // RES033 — DB existence + readable
+        let dbExists = false
+        try {
+            await access( resolvedPath, constants.R_OK )
+            dbExists = true
+        } catch {
+            dbExists = false
+        }
+
+        if( !dbExists ) {
+            const result = FlowMcpCli.#error( {
+                'error': `RES033: DB unter ${resolvedPath} kann nicht geoeffnet werden (Datei nicht gefunden / korrupt).`,
+                'fix': `Place the converted GTFS SQLite at ${resolvedPath} (see gtfs-sqlite-toolkit docs).`
+            } )
+
+            return { result }
+        }
+
+        // PRD-15 + PRD-16 load addon
+        console.log( 'Loading resource ...' )
+
+        let addonLoaded
+        try {
+            addonLoaded = await AddonLoader.loadAddon( { sourceKey } )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to load addon for source '${sourceKey}': ${err.message}`,
+                'fix': `Ensure '${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey}' is installed as a package.json dependency.`
+            } )
+
+            return { result }
+        }
+
+        const { addonName, addonModule } = addonLoaded
+        const FlowMcpAdapter = addonModule.FlowMcpAdapter
+        if( !FlowMcpAdapter ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Addon ${addonName} does not export FlowMcpAdapter.`,
+                'fix': `Update ${addonName} to expose the FlowMcpAdapter consumer API.`
+            } )
+
+            return { result }
+        }
+
+        // PRD-06 verifySeal — RES032 on miss
+        let sealResult
+        try {
+            sealResult = FlowMcpAdapter.verifySeal( { 'dbPath': resolvedPath } )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `RES033: DB unter ${resolvedPath} kann nicht geoeffnet werden: ${err.message}`,
+                'fix': `Verify the DB file is readable and not corrupt.`
+            } )
+
+            return { result }
+        }
+
+        if( !sealResult || sealResult.sealed !== true ) {
+            const reason = sealResult ? sealResult.reason : 'UNKNOWN'
+            const result = FlowMcpCli.#error( {
+                'error': `RES032: DB unter ${resolvedPath} enthaelt nicht meta.qualitySeal === 'sqlite-gtfs'. Schema abgelehnt. (reason=${reason})`,
+                'fix': `Convert the GTFS source via gtfs-sqlite-toolkit to obtain a sealed DB.`
+            } )
+
+            return { result }
+        }
+
+        const { meta } = sealResult
+        const specRevision = meta && meta.specRevision ? meta.specRevision : 'unknown'
+        const converterVersion = meta && meta.converterVersion ? meta.converterVersion : 'unknown'
+
+        console.log( `  → Seal: sqlite-gtfs ✓` )
+        console.log( `  → Spec-Revision: ${specRevision}` )
+        console.log( `  → Converter: ${addonName}@${converterVersion}` )
+
+        const capabilities = ( meta && meta.capabilities ) || {}
+        const activeCapabilities = Object
+            .entries( capabilities )
+            .filter( ( [ , value ] ) => {
+                const isActive = value === true
+
+                return isActive
+            } )
+            .map( ( [ key ] ) => {
+                return key
+            } )
+
+        console.log( `Capabilities: ${activeCapabilities.length > 0 ? activeCapabilities.join( ', ' ) : '(none)'}` )
+
+        // PRD-08 buildToolDefinitions
+        let toolDefs
+        try {
+            const built = FlowMcpAdapter.buildToolDefinitions( { 'dbPath': resolvedPath, namespace } )
+            toolDefs = built.tools || []
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to build tool definitions from addon ${addonName}: ${err.message}`,
+                'fix': `Verify the addon supports the schema namespace.`
+            } )
+
+            return { result }
+        }
+
+        // PRD-22 override: schema-defined tools win over auto-tools
+        const schemaToolsRaw = main[ 'tools' ] || {}
+        const schemaToolsArr = Array.isArray( schemaToolsRaw )
+            ? schemaToolsRaw
+            : Object.entries( schemaToolsRaw )
+                .map( ( [ name, def ] ) => {
+                    const merged = { name, ...def }
+
+                    return merged
+                } )
+
+        const schemaToolNames = new Set(
+            schemaToolsArr
+                .filter( ( t ) => {
+                    const hasName = t && typeof t.name === 'string' && t.name.length > 0
+
+                    return hasName
+                } )
+                .map( ( t ) => {
+                    const fullName = t.name.includes( '.' ) ? t.name : `${namespace}.${t.name}`
+
+                    return fullName
+                } )
+        )
+
+        const overriddenAutoTools = toolDefs
+            .filter( ( t ) => {
+                const isOverridden = schemaToolNames.has( t.name )
+
+                return isOverridden
+            } )
+            .map( ( t ) => {
+                return t.name
+            } )
+
+        const filteredAutoTools = toolDefs
+            .filter( ( t ) => {
+                const keep = !schemaToolNames.has( t.name )
+
+                return keep
+            } )
+
+        const overrideSuffix = overriddenAutoTools.length > 0
+            ? ` (${overriddenAutoTools.length} overridden by schema)`
+            : ''
+
+        console.log( `Auto-injecting ${filteredAutoTools.length} tools from ${addonName}${overrideSuffix}:` )
+        filteredAutoTools
+            .forEach( ( tool ) => {
+                console.log( `  - ${tool.name}  [auto]` )
+            } )
+
+        if( overriddenAutoTools.length > 0 ) {
+            console.log( 'Schema-defined tools (override auto-tools):' )
+            overriddenAutoTools
+                .forEach( ( name ) => {
+                    console.log( `  - ${name}` )
+                } )
+        }
+
+        // PRD-21 cache write
+        const registryTools = []
+        filteredAutoTools
+            .forEach( ( tool ) => {
+                registryTools.push( {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'inputSchema': tool.inputSchema,
+                    'outputSchema': tool.outputSchema,
+                    'auto': true,
+                    'localName': tool.name.includes( '.' ) ? tool.name.split( '.' ).slice( 1 ).join( '.' ) : tool.name
+                } )
+            } )
+
+        schemaToolsArr
+            .forEach( ( tool ) => {
+                if( !tool || typeof tool.name !== 'string' ) { return }
+                const fullName = tool.name.includes( '.' ) ? tool.name : `${namespace}.${tool.name}`
+                registryTools.push( {
+                    'name': fullName,
+                    'description': tool.description || '',
+                    'inputSchema': tool.inputSchema || null,
+                    'auto': false,
+                    'localName': tool.name
+                } )
+            } )
+
+        await FlowMcpCli.#writeSealCache( {
+            schemaNamespace: namespace,
+            schemaName,
+            schemaFile,
+            dbPath: resolvedPath,
+            sourceKey,
+            addonName,
+            namespace,
+            meta,
+            'tools': registryTools,
+            'overridden': overriddenAutoTools
+        } )
+
+        console.log( 'Schema active.' )
+
+        const result = {
+            'status': true,
+            'schema': schemaName,
+            'namespace': namespace,
+            'dbPath': resolvedPath,
+            'addon': addonName,
+            'sourceKey': sourceKey,
+            'autoToolCount': filteredAutoTools.length,
+            'schemaToolCount': schemaToolsArr.length,
+            'overriddenAutoTools': overriddenAutoTools,
+            'tools': registryTools.map( ( t ) => {
+                return { 'name': t.name, 'auto': t.auto }
+            } ),
+            'capabilities': activeCapabilities
+        }
+
+        if( force ) {
+            result[ 'message' ] = 'Schema reloaded from source.'
+        }
+
+        return { result }
+    }
+
+
+    static #executeSqliteGtfsSqlTemplate( { dbPath, sqlTemplate, paramDefs, userParams } ) {
+        // Build named-parameter map from user params + defaults
+        const merged = {}
+        Object
+            .entries( paramDefs )
+            .forEach( ( [ key, def ] ) => {
+                if( userParams[ key ] !== undefined ) {
+                    merged[ key ] = userParams[ key ]
+                } else if( def && Object.prototype.hasOwnProperty.call( def, 'default' ) ) {
+                    merged[ key ] = def.default
+                }
+            } )
+
+        // better-sqlite3 named-parameter binding uses `:name`. The sqlTemplate
+        // already uses `:name` style — strip the colons for the binding object.
+        const bindings = {}
+        Object
+            .entries( merged )
+            .forEach( ( [ key, value ] ) => {
+                bindings[ key ] = value
+            } )
+
+        const db = new Database( dbPath, { 'readonly': true } )
+        try {
+            const stmt = db.prepare( sqlTemplate )
+            const rows = stmt.all( bindings )
+
+            return rows
+        } finally {
+            try { db.close() } catch { /* ignore */ }
+        }
+    }
+
+
+    static async #maybeCallSqliteGtfsAutoTool( { toolName, jsonArgs, noCache, refresh } ) {
+        if( typeof toolName !== 'string' || !toolName.includes( '.' ) ) { return null }
+
+        const { entries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
+        if( entries.length === 0 ) { return null }
+
+        let matched = null
+        entries
+            .forEach( ( entry ) => {
+                if( matched ) { return }
+                const toolList = entry && entry[ 'tools' ] ? entry[ 'tools' ] : []
+                const hit = toolList
+                    .find( ( t ) => {
+                        const isAutoMatch = t && t.auto === true && t.name === toolName
+
+                        return isAutoMatch
+                    } )
+
+                if( hit ) {
+                    matched = { entry, 'tool': hit }
+                }
+            } )
+
+        if( !matched ) { return null }
+
+        const { entry, tool } = matched
+
+        let userParams = {}
+        if( jsonArgs ) {
+            try {
+                userParams = JSON.parse( jsonArgs )
+            } catch {
+                const result = FlowMcpCli.#error( {
+                    'error': 'Invalid JSON argument.',
+                    'fix': `Provide valid JSON: ${appConfig[ 'cliCommand' ]} call ${toolName} '{"param": "value"}'`
+                } )
+
+                return { result }
+            }
+        }
+
+        // Cache layer (PRD-20 — reuse standard cache helpers)
+        const isCacheable = !noCache
+        if( isCacheable && !refresh ) {
+            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+                'namespace': entry[ 'namespace' ],
+                'routeName': tool[ 'localName' ],
+                userParams
+            } )
+            const { data: cachedData, meta: cacheMeta, isExpired } = await FlowMcpCli.#readCache( { cacheKey } )
+            if( cachedData && !isExpired ) {
+                const result = {
+                    'status': true,
+                    'toolName': toolName,
+                    'content': cachedData,
+                    'cache': {
+                        'hit': true,
+                        'fetchedAt': cacheMeta[ 'fetchedAt' ],
+                        'expiresAt': cacheMeta[ 'expiresAt' ]
+                    }
+                }
+
+                return { result }
+            }
+        }
+
+        let addonLoaded
+        try {
+            addonLoaded = await AddonLoader.loadAddon( { 'sourceKey': entry[ 'sourceKey' ] } )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to load addon '${entry[ 'addonName' ]}': ${err.message}`,
+                'fix': `Ensure '${entry[ 'addonName' ]}' is installed as a package.json dependency.`
+            } )
+
+            return { result }
+        }
+
+        const FlowMcpAdapter = addonLoaded.addonModule.FlowMcpAdapter
+        if( !FlowMcpAdapter ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Addon ${entry[ 'addonName' ]} does not export FlowMcpAdapter.`,
+                'fix': `Update ${entry[ 'addonName' ]} to expose the FlowMcpAdapter consumer API.`
+            } )
+
+            return { result }
+        }
+
+        let methodsResult
+        try {
+            methodsResult = FlowMcpAdapter.getAvailableMethods( { 'dbPath': entry[ 'dbPath' ] } )
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Failed to read addon methods for ${entry[ 'addonName' ]}: ${err.message}`,
+                'fix': `Run '${appConfig[ 'cliCommand' ]} add ${entry[ 'schemaFile' ] || entry[ 'schemaName' ]}' to refresh the cache.`
+            } )
+
+            return { result }
+        }
+
+        const method = methodsResult.methods
+            .find( ( m ) => {
+                const isMatch = m && m.name === tool[ 'localName' ]
+
+                return isMatch
+            } )
+
+        if( !method ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Auto-tool '${toolName}' not provided by addon '${entry[ 'addonName' ]}'.`,
+                'fix': `Run '${appConfig[ 'cliCommand' ]} add ${entry[ 'schemaFile' ] || entry[ 'schemaName' ]}' to refresh the cache after a DB change.`
+            } )
+
+            return { result }
+        }
+
+        let handlerResult
+        try {
+            if( typeof method.handler === 'function' ) {
+                handlerResult = await method.handler( { 'dbPath': entry[ 'dbPath' ], 'params': userParams } )
+            } else if( typeof method.sqlTemplate === 'string' && method.sqlTemplate.length > 0 ) {
+                // Fallback execution path — toolkit declares sqlTemplate + params, CLI runs it
+                // against the sealed sqlite-gtfs DB (Memo 051 PRD-20).
+                handlerResult = FlowMcpCli.#executeSqliteGtfsSqlTemplate( {
+                    'dbPath': entry[ 'dbPath' ],
+                    'sqlTemplate': method.sqlTemplate,
+                    'paramDefs': method.params || {},
+                    'userParams': userParams
+                } )
+            } else {
+                const result = FlowMcpCli.#error( {
+                    'error': `Addon method '${method.name}' has neither a handler nor a sqlTemplate.`,
+                    'fix': `Update '${entry[ 'addonName' ]}' to expose a callable handler or sqlTemplate.`
+                } )
+
+                return { result }
+            }
+        } catch( err ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Auto-tool '${toolName}' handler failed: ${err.message}`,
+                'fix': `Verify input parameters and that the DB is readable at ${entry[ 'dbPath' ]}.`
+            } )
+
+            return { result }
+        }
+
+        if( isCacheable ) {
+            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+                'namespace': entry[ 'namespace' ],
+                'routeName': tool[ 'localName' ],
+                userParams
+            } )
+            const ttlSeconds = 60
+            const { meta: writeMeta } = await FlowMcpCli.#writeCache( {
+                cacheKey,
+                'data': handlerResult,
+                'ttl': ttlSeconds
+            } )
+
+            const result = {
+                'status': true,
+                'toolName': toolName,
+                'content': handlerResult,
+                'cache': {
+                    'hit': false,
+                    'stored': true,
+                    'expiresAt': writeMeta[ 'expiresAt' ]
+                }
+            }
+
+            return { result }
+        }
+
+        const result = {
+            'status': true,
+            'toolName': toolName,
+            'content': handlerResult,
+            'cache': {
+                'hit': false,
+                'stored': false
+            }
+        }
+
+        return { result }
     }
 
 
@@ -9083,6 +9801,8 @@ allowlist, migrate-config, etc.).
         const version = main && main[ 'version' ] ? String( main[ 'version' ] ) : ''
         const isV4 = version.startsWith( '4.' )
 
+        const sqliteGtfsErrors = FlowMcpCli.#runSqliteGtfsResourceChecks( { main } )
+
         try {
             if( isV4 ) {
                 if( !v4 || !v4[ 'MainValidator' ] ) {
@@ -9097,20 +9817,50 @@ allowlist, migrate-config, etc.).
                     ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
                     : main
                 const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
-                return { file, namespace, status, messages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+                const combinedMessages = [ ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+                const combinedStatus = status && sqliteGtfsErrors.length === 0
+                return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
             }
 
             const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
             const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
-            return { file, namespace, status, messages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+            const combinedMessages = [ ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+            const combinedStatus = status && sqliteGtfsErrors.length === 0
+            return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
         } catch( err ) {
+            const combinedMessages = [ err.message, ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
             return {
                 file, namespace,
                 'status': false,
-                'messages': [ err.message ],
+                'messages': combinedMessages,
                 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
             }
         }
+    }
+
+
+    static #runSqliteGtfsResourceChecks( { main } ) {
+        // RES030/RES031/RES035 — structural sqlite-gtfs checks (Memo 051 PRD-17).
+        // RES032, RES033, RES034 are pipeline-only — see `flowmcp add` (PRD-18).
+        const rawResources = main && main[ 'resources' ]
+        if( !rawResources ) { return [] }
+
+        const resourcesArray = Array.isArray( rawResources )
+            ? rawResources
+            : Object.values( rawResources )
+
+        const hasAnySqliteGtfs = resourcesArray
+            .some( ( r ) => {
+                const isMatch = r && r.source === 'sqlite-gtfs'
+
+                return isMatch
+            } )
+
+        if( !hasAnySqliteGtfs ) { return [] }
+
+        const { errors } = SqliteGtfsResourceValidator.validateResources( { 'resources': resourcesArray } )
+
+        return errors
     }
 
 
