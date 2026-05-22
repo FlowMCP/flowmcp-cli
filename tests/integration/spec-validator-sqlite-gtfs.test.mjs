@@ -14,7 +14,8 @@ const execFileAsync = promisify( execFile )
 
 const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) ) )
 const FIXTURE_DIR = join(
-    dirname( REPO_ROOT ),
+    REPO_ROOT,
+    'node_modules',
     'gtfs-sqlite-toolkit',
     'tests',
     'fixtures',
