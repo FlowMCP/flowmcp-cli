@@ -22,7 +22,7 @@
         "chalk": "^5.6.2",
         "figlet": "^1.10.0",
         "flowmcp": "github:FlowMCP/flowmcp-core#bca23b1fb8727fb4cd4877b1c0ea94f4ac14acb5",
-        "gtfs-sqlite-toolkit": "file:../gtfs-sqlite-toolkit",
+        "gtfs-sqlite-toolkit": "github:FlowMCP/gtfs-sqlite-toolkit#9a37238e3a5cc11fb53bce90e702b59cb3d24739",
         "inquirer": "^12.3.0"
     },
     "devDependencies": {
