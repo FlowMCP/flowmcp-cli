@@ -799,7 +799,8 @@ class FlowMcpCli {
 
                         if( routeName ) {
                             const { main } = await FlowMcpCli.#loadSchema( { filePath } )
-                            if( !main || !main[ 'routes' ] || !main[ 'routes' ][ routeName ] ) {
+                            const refRouteMap = main ? ( main[ 'routes' ] || main[ 'tools' ] ) : null
+                            if( !main || !refRouteMap || !refRouteMap[ routeName ] ) {
                                 invalidRefs.push( ref )
 
                                 return
@@ -3485,8 +3486,9 @@ class FlowMcpCli {
         const { main } = await FlowMcpCli.#loadSchema( { filePath: schemaFilePath, 'bustCache': force } )
 
         let extractedParameters = {}
-        if( main && main[ 'routes' ] && main[ 'routes' ][ routeName ] ) {
-            const routeConfig = main[ 'routes' ][ routeName ]
+        const extractRouteMap = main ? ( main[ 'routes' ] || main[ 'tools' ] ) : null
+        if( extractRouteMap && extractRouteMap[ routeName ] ) {
+            const routeConfig = extractRouteMap[ routeName ]
             const routeParameters = routeConfig[ 'parameters' ] || []
             const { sharedLists: resolvedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': schemaFilePath } )
             const { parameters: transformed } = FlowMcpCli.#extractParameters( { routeParameters, 'sharedLists': resolvedLists } )
@@ -3738,12 +3740,12 @@ class FlowMcpCli {
 
         schemas
             .forEach( ( { main, file } ) => {
-                if( !main || !main[ 'routes' ] ) {
+                if( !main || !( main[ 'routes' ] || main[ 'tools' ] ) ) {
                     return
                 }
 
                 const namespace = main[ 'namespace' ] || 'unknown'
-                const routes = main[ 'routes' ]
+                const routes = main[ 'routes' ] || main[ 'tools' ]
                 const schemaTags = main[ 'tags' ] || []
                 const sharedLists = sharedListsMap[ file ] || {}
 
