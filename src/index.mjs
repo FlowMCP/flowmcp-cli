@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * FlowMCP — MIT License
  *
@@ -9,7 +10,6 @@
  * For more information, see LICENSE.md and DISCLAIMER.md in the repo root.
  */
 
-#!/usr/bin/env node
 import { parseArgs } from 'node:util'
 
 import { FlowMcpCli } from './task/FlowMcpCli.mjs'

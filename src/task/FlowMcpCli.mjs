@@ -2721,7 +2721,7 @@ class FlowMcpCli {
         resolvedSchemas
             .forEach( ( { main } ) => {
                 const namespace = main[ 'namespace' ] || 'unknown'
-                const routes = main[ 'routes' ] || {}
+                const routes = main[ 'routes' ] || main[ 'tools' ] || {}
 
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
@@ -2886,7 +2886,7 @@ class FlowMcpCli {
                 }
 
                 const namespace = main[ 'namespace' ] || 'unknown'
-                const routes = main[ 'routes' ] || {}
+                const routes = main[ 'routes' ] || main[ 'tools' ] || {}
 
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
@@ -2925,7 +2925,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const matchedRouteConfig = matchedMain[ 'routes' ][ matchedRouteName ]
+        const matchedRouteConfig = ( matchedMain[ 'routes' ] || matchedMain[ 'tools' ] )[ matchedRouteName ]
         const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
         const matchedSchemaFilePath = matchedFile ? join( FlowMcpCli.#schemasDir(), matchedFile ) : null
         const { sharedLists: matchedSharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': matchedMain, 'filePath': matchedSchemaFilePath } )
@@ -6149,7 +6149,8 @@ class FlowMcpCli {
 
     static #filterMainRoutes( { main, routeNames } ) {
         const { namespace, name, description, version, docs, tags, root, requiredServerParams, headers, sharedLists, requiredLibraries } = main
-        const originalRoutes = main[ 'routes' ] || {}
+        const routesKey = main[ 'routes' ] ? 'routes' : ( main[ 'tools' ] ? 'tools' : 'routes' )
+        const originalRoutes = main[ routesKey ] || {}
         const filteredRoutes = {}
 
         routeNames
@@ -6169,7 +6170,7 @@ class FlowMcpCli {
             root,
             requiredServerParams,
             headers,
-            'routes': filteredRoutes
+            [ routesKey ]: filteredRoutes
         }
 
         if( sharedLists ) { filteredMain[ 'sharedLists' ] = sharedLists }
