@@ -17,13 +17,13 @@ const SCHEMA_CONTENT = `export const main = {
     namespace: 'healthTest',
     name: 'Health Test API',
     description: 'Schema for health check tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [ 'HEALTH_KEY' ],
     headers: {},
-    routes: {
+    tools: {
         check: { method: 'GET', description: 'Check', path: '/get', parameters: [] }
     }
 }
@@ -33,7 +33,7 @@ const TEST_REGISTRY = {
     'name': 'healthsrc',
     'version': '1.0.0',
     'description': 'Health test registry',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'healthTest',
@@ -81,7 +81,7 @@ describe( 'FlowMcpCli.status with full health checks', () => {
 
         const config = {
             'envPath': envPath,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': '2026-02-20T12:00:00.000Z',
             'sources': {
                 'healthsrc': { 'type': 'github', 'schemaCount': 1 }
@@ -125,7 +125,7 @@ describe( 'FlowMcpCli.status with full health checks', () => {
 
         const config = {
             'envPath': join( testCwd, 'nonexistent.env' ),
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': '2026-02-20T12:00:00.000Z'
         }
 
@@ -148,7 +148,7 @@ describe( 'FlowMcpCli.status with full health checks', () => {
 
         const config = {
             'envPath': envPath,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': '2026-02-20T12:00:00.000Z'
         }
 
@@ -171,7 +171,7 @@ describe( 'FlowMcpCli.help', () => {
 
         const config = {
             'envPath': '/tmp/test.env',
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': '2026-02-20T12:00:00.000Z'
         }
 

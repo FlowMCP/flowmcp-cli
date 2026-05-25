@@ -19,13 +19,13 @@ const VALID_SCHEMA = `export const main = {
     namespace: 'validateext',
     name: 'Validate Test API',
     description: 'Schema for validate tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [ 'https://docs.example.com' ],
     tags: [ 'test' ],
     root: 'https://api.example.com',
     requiredServerParams: [],
     headers: { 'Accept': 'application/json' },
-    routes: {
+    tools: {
         getItems: {
             method: 'GET',
             description: 'Get items list',
@@ -68,12 +68,12 @@ const MINIMAL_SCHEMA = `export const main = {
     namespace: 'minimal',
     name: 'Minimal',
     description: 'Minimal schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [],
     root: 'https://example.com',
     requiredServerParams: [],
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -96,7 +96,7 @@ beforeAll( async () => {
     await mkdir( GLOBAL_CONFIG_DIR, { recursive: true } )
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( {
         'envPath': '/tmp/test.env',
-        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
         'initialized': '2026-02-20T12:00:00.000Z'
     }, null, 4 ), 'utf-8' )
 

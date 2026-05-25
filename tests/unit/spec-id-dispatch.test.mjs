@@ -18,13 +18,13 @@ const PING_SCHEMA = `export const main = {
     namespace: 'demo',
     name: 'Demo Ping API',
     description: 'Demo schema for spec-id dispatch tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'demo', 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping endpoint',
@@ -40,13 +40,13 @@ const NFT_PART1_SCHEMA = `export const main = {
     namespace: 'moralis',
     name: 'NFT API Part 1',
     description: 'NFT schema part 1',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'nft', 'blockchain' ],
     root: 'https://deep-index.moralis.io/api/v2.2',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         getNft: {
             method: 'GET',
             description: 'Get NFT',
@@ -62,13 +62,13 @@ const NFT_PART2_SCHEMA = `export const main = {
     namespace: 'moralis',
     name: 'NFT API Part 2',
     description: 'NFT schema part 2',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'nft', 'blockchain' ],
     root: 'https://deep-index.moralis.io/api/v2.2',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         getNftMetadata: {
             method: 'GET',
             description: 'Get NFT metadata',
@@ -91,7 +91,7 @@ const TEST_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {

@@ -16,13 +16,13 @@ function schemaFile( { namespace, requiredKeys } ) {
     namespace: '${namespace}',
     name: '${namespace} API',
     description: 'Test schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://example.com',
     requiredServerParams: ${JSON.stringify( requiredKeys )},
     headers: {},
-    routes: {
+    tools: {
         ping: { method: 'GET', description: 'Ping', path: '/ping', parameters: [] }
     }
 }
@@ -55,7 +55,7 @@ describe( 'FlowMcpCli.devEnvAcquire (Memo 032 PRD-08)', () => {
         const registry = {
             'name': SOURCE_NAME,
             'version': '1.0.0',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'gov', 'file': 'gov.mjs', 'name': 'gov', 'requiredServerParams': [ 'NASA_API_KEY', 'CONGRESS_API_KEY' ] },
                 { 'namespace': 'sci', 'file': 'sci.mjs', 'name': 'sci', 'requiredServerParams': [ 'EBIRD_API_KEY' ] }
@@ -66,7 +66,7 @@ describe( 'FlowMcpCli.devEnvAcquire (Memo 032 PRD-08)', () => {
 
         const globalConfig = {
             'envPath': testHome.envPath(),
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'builtin', 'schemaCount': 2 } }
         }

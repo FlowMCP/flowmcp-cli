@@ -86,7 +86,7 @@ describe( 'PRD-006: #computeDeclared', () => {
 
     it( 'accepts legacy "routes" key for tools', () => {
         const { declared } = FlowMcpCli._testHook_computeDeclared( {
-            'main': { 'routes': {} }
+            'main': { 'tools': {} }
         } )
 
         expect( declared[ 'tool' ] ).toBe( true )

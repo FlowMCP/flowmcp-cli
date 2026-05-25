@@ -18,13 +18,13 @@ const HEALTH_SCHEMA_CONTENT = `export const main = {
     namespace: 'healthapi',
     name: 'Health Test API',
     description: 'Schema for callTool and health tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [ 'HEALTH_TEST_KEY' ],
     headers: {},
-    routes: {
+    tools: {
         getAnything: {
             method: 'GET',
             description: 'Get anything',
@@ -39,7 +39,7 @@ const HEALTH_REGISTRY = {
     'name': 'healthsrc',
     'version': '1.0.0',
     'description': 'Health test registry',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'healthapi',
@@ -54,13 +54,13 @@ const SIMPLE_SCHEMA_CONTENT = `export const main = {
     namespace: 'simpleapi',
     name: 'Simple Test API',
     description: 'Schema for callTool success test',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         getData: {
             method: 'GET',
             description: 'Get data',
@@ -75,7 +75,7 @@ const SIMPLE_REGISTRY = {
     'name': 'callsrc2',
     'version': '1.0.0',
     'description': 'Simple test registry',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'simpleapi',
@@ -91,7 +91,7 @@ const TEST_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123def',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {
@@ -283,7 +283,7 @@ describe( 'FlowMcpCli.status deep health check', () => {
             'flowmcpCore': {
                 'version': '2.0.0',
                 'commit': 'abc123def',
-                'schemaSpec': '2.0.0'
+                'schemaSpec': '4.0.0'
             },
             'initialized': '2026-02-20T12:00:00.000Z',
             'sources': {
@@ -350,7 +350,7 @@ describe( 'FlowMcpCli.status deep health check', () => {
             'flowmcpCore': {
                 'version': '2.0.0',
                 'commit': 'abc123def',
-                'schemaSpec': '2.0.0'
+                'schemaSpec': '4.0.0'
             },
             'initialized': '2026-02-20T12:00:00.000Z',
             'sources': {

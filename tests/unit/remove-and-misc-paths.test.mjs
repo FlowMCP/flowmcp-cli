@@ -21,13 +21,13 @@ const SIMPLE_SCHEMA = `export const main = {
     namespace: 'deepremove',
     name: 'DeepRemove Simple API',
     description: 'Simple schema for remove and misc path tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Simple ping endpoint',
@@ -42,13 +42,13 @@ const PARAMS_SCHEMA = `export const main = {
     namespace: 'deepremoveparams',
     name: 'DeepRemove Params API',
     description: 'Schema with various parameter types for extraction tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         noZParam: {
             method: 'GET',
             description: 'Route with parameter that has no z field',
@@ -100,13 +100,13 @@ const CACHED_SCHEMA = `export const main = {
     namespace: 'deepremovecached',
     name: 'DeepRemove Cached API',
     description: 'Schema with preload route and params for cache key test',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         cachedSearch: {
             method: 'GET',
             description: 'Cached search with user param',
@@ -127,7 +127,7 @@ const REGISTRY = {
     'name': 'deepremove',
     'version': '1.0.0',
     'description': 'Registry for remove and misc path tests',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'deepremove',
@@ -176,7 +176,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123deepremove',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

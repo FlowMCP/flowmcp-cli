@@ -25,13 +25,13 @@ beforeAll( async () => {
     namespace: 'forcesimple',
     name: 'Force Simple API',
     description: 'Simple schema for force add tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping endpoint',
@@ -46,13 +46,13 @@ beforeAll( async () => {
     namespace: 'forceparams',
     name: 'Force Params API',
     description: 'Schema with parameters for force tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         getData: {
             method: 'GET',
             description: 'Get data with required param',
@@ -72,7 +72,7 @@ beforeAll( async () => {
         'name': 'forcesrc',
         'version': '1.0.0',
         'description': 'Test source for force tests',
-        'schemaSpec': '2.0.0',
+        'schemaSpec': '4.0.0',
         'schemas': [
             { 'namespace': 'forcesimple', 'file': 'simple.mjs', 'name': 'Force Simple API', 'requiredServerParams': [] },
             { 'namespace': 'forceparams', 'file': 'params.mjs', 'name': 'Force Params API', 'requiredServerParams': [] }
@@ -89,7 +89,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

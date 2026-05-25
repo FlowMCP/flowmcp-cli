@@ -51,13 +51,13 @@ describe( 'FlowMcpCli.callTool — auth error without requiredServerParams (line
     namespace: 'autherrsrc',
     name: 'Auth Error API',
     description: 'Schema that triggers 401 without requiredServerParams',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         forbidden: {
             method: 'GET',
             description: 'Returns 401',
@@ -72,7 +72,7 @@ describe( 'FlowMcpCli.callTool — auth error without requiredServerParams (line
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Auth error test source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'autherrsrc', 'file': 'auth.mjs', 'name': 'Auth Error API', 'requiredServerParams': [] }
             ]
@@ -96,7 +96,7 @@ describe( 'FlowMcpCli.callTool — auth error without requiredServerParams (line
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }

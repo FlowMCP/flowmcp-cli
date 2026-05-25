@@ -25,13 +25,13 @@ const VALID_SCHEMA_CONTENT = `export const main = {
     namespace: 'valsrc',
     name: 'Val Source API',
     description: 'Schema for validate group tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -46,7 +46,7 @@ const VALID_REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Test source for validate group path',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': SOURCE_NAME,
@@ -62,7 +62,7 @@ const VALID_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {

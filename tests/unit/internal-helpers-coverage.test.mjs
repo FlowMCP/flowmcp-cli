@@ -50,13 +50,13 @@ describe( 'FlowMcpCli.schemas with source without registry — exercises listSch
     namespace: 'noregistry',
     name: 'No Registry API',
     description: 'Schema without registry',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -76,7 +76,7 @@ describe( 'FlowMcpCli.schemas with source without registry — exercises listSch
             'flowmcpCore': {
                 'version': '2.0.0',
                 'commit': 'abc123',
-                'schemaSpec': '2.0.0'
+                'schemaSpec': '4.0.0'
             },
             'initialized': new Date().toISOString(),
             'sources': {
@@ -210,13 +210,13 @@ describe( 'FlowMcpCli.list with toolRef without route — exercises parseToolRef
     namespace: 'toolrefsrc',
     name: 'ToolRef API',
     description: 'Schema for toolRef tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         routeA: {
             method: 'GET',
             description: 'Route A',
@@ -237,7 +237,7 @@ describe( 'FlowMcpCli.list with toolRef without route — exercises parseToolRef
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'ToolRef test source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 {
                     'namespace': 'toolrefsrc',
@@ -274,7 +274,7 @@ describe( 'FlowMcpCli.list with toolRef without route — exercises parseToolRef
             'flowmcpCore': {
                 'version': '2.0.0',
                 'commit': 'abc123',
-                'schemaSpec': '2.0.0'
+                'schemaSpec': '4.0.0'
             },
             'initialized': new Date().toISOString(),
             'sources': {

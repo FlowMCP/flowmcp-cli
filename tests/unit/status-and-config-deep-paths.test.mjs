@@ -17,13 +17,13 @@ const schema = `export const main = {
     namespace: 'deepcfgsrc',
     name: 'Deep Config API',
     description: 'Schema for config tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -38,7 +38,7 @@ const registry = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Deep config test',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         { 'namespace': 'deepcfgsrc', 'file': 'simple.mjs', 'name': 'Deep Config API', 'requiredServerParams': [] }
     ]
@@ -63,7 +63,7 @@ beforeAll( async () => {
 
     const globalConfig = {
         'envPath': ENV_PATH,
-        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
         'initialized': new Date().toISOString(),
         'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
     }

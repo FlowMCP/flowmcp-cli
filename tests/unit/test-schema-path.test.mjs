@@ -28,13 +28,13 @@ const VALID_SCHEMA_CONTENT = `export const main = {
     namespace: 'testpath',
     name: 'Test Path API',
     description: 'Schema for test path tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -50,13 +50,13 @@ const ENV_REQUIRED_SCHEMA_CONTENT = `export const main = {
     namespace: 'testpathenv',
     name: 'Test Path Env API',
     description: 'Schema requiring env vars',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [ 'TEST_API_KEY' ],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -73,7 +73,7 @@ const VALID_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {
@@ -88,7 +88,7 @@ const VALID_REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Test source for test schema path',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': SOURCE_NAME,
@@ -103,7 +103,7 @@ const ENV_REQUIRED_REGISTRY = {
     'name': 'testsrcenv',
     'version': '1.0.0',
     'description': 'Test source requiring env vars',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'testsrcenv',

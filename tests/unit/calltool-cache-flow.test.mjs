@@ -24,13 +24,13 @@ const PRELOAD_SCHEMA = `export const main = {
     namespace: 'cachesrc',
     name: 'Cache Test API',
     description: 'Schema for cache tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         cachedPing: {
             method: 'GET',
             description: 'Cached ping',
@@ -52,13 +52,13 @@ const NOTESTS_SCHEMA = `export const main = {
     namespace: 'notestsrc',
     name: 'NoTest API',
     description: 'Schema without test definitions',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -73,13 +73,13 @@ const ENVREQ_SCHEMA = `export const main = {
     namespace: 'envreqsrc',
     name: 'EnvReq API',
     description: 'Schema requiring env',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [ 'MISSING_API_KEY' ],
     headers: {},
-    routes: {
+    tools: {
         check: {
             method: 'GET',
             description: 'Check',
@@ -95,7 +95,7 @@ const REGISTRY = {
     'name': 'cachesrc',
     'version': '1.0.0',
     'description': 'Cache test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         { 'namespace': 'cachesrc', 'file': 'cached.mjs', 'name': 'Cache Test API', 'requiredServerParams': [] },
         { 'namespace': 'notestsrc', 'file': 'notest.mjs', 'name': 'NoTest API', 'requiredServerParams': [] },
@@ -139,7 +139,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

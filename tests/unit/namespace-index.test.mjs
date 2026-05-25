@@ -8,18 +8,18 @@ import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function makeSchema( { namespace, routes = {}, resources = {}, prompts = {}, skills = [] } ) {
+function makeSchema( { namespace, tools = {}, resources = {}, prompts = {}, skills = [] } ) {
     return {
         namespace,
         name: `${namespace} API`,
         description: 'Test schema',
-        version: '2.0.0',
+        version: '4.0.0',
         docs: [],
         tags: [ 'test' ],
         root: 'https://example.com',
         requiredServerParams: [],
         headers: {},
-        routes,
+        tools,
         resources,
         prompts,
         skills
@@ -27,9 +27,9 @@ function makeSchema( { namespace, routes = {}, resources = {}, prompts = {}, ski
 }
 
 
-function schemaEntry( { namespace, file, source = 'testsrc', routes = {}, resources = {}, prompts = {}, skills = [] } ) {
+function schemaEntry( { namespace, file, source = 'testsrc', tools = {}, resources = {}, prompts = {}, skills = [] } ) {
     return {
-        'main': makeSchema( { namespace, routes, resources, prompts, skills } ),
+        'main': makeSchema( { namespace, tools, resources, prompts, skills } ),
         file,
         source
     }
@@ -61,7 +61,7 @@ describe( 'parseSpecId logic — verified via index key structure', () => {
             schemaEntry( {
                 'namespace': 'moralis',
                 'file': 'nftApi.mjs',
-                'routes': { 'getBlock': {} }
+                'tools': { 'getBlock': {} }
             } )
         ]
 
@@ -123,12 +123,12 @@ describe( 'Collision detection', () => {
             schemaEntry( {
                 'namespace': 'moralis',
                 'file': 'schemaA.mjs',
-                'routes': { 'getBlock': {} }
+                'tools': { 'getBlock': {} }
             } ),
             schemaEntry( {
                 'namespace': 'moralis',
                 'file': 'schemaB.mjs',
-                'routes': { 'getBlock': {} }
+                'tools': { 'getBlock': {} }
             } )
         ]
 
@@ -142,9 +142,9 @@ describe( 'Collision detection', () => {
 
     it( 'three schemas with same namespace+tool merge into one collision entry', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'foo', 'file': 'a.mjs', 'routes': { 'ping': {} } } ),
-            schemaEntry( { 'namespace': 'foo', 'file': 'b.mjs', 'routes': { 'ping': {} } } ),
-            schemaEntry( { 'namespace': 'foo', 'file': 'c.mjs', 'routes': { 'ping': {} } } )
+            schemaEntry( { 'namespace': 'foo', 'file': 'a.mjs', 'tools': { 'ping': {} } } ),
+            schemaEntry( { 'namespace': 'foo', 'file': 'b.mjs', 'tools': { 'ping': {} } } ),
+            schemaEntry( { 'namespace': 'foo', 'file': 'c.mjs', 'tools': { 'ping': {} } } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -161,8 +161,8 @@ describe( 'Collision detection', () => {
 
     it( 'no collision when different namespaces use same route name', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'ns1', 'file': 'a.mjs', 'routes': { 'getData': {} } } ),
-            schemaEntry( { 'namespace': 'ns2', 'file': 'b.mjs', 'routes': { 'getData': {} } } )
+            schemaEntry( { 'namespace': 'ns1', 'file': 'a.mjs', 'tools': { 'getData': {} } } ),
+            schemaEntry( { 'namespace': 'ns2', 'file': 'b.mjs', 'tools': { 'getData': {} } } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -179,8 +179,8 @@ describe( 'Collision detection', () => {
 describe( 'Multi-part container grouping', () => {
     it( 'nftApi-part1.mjs and nftApi-part2.mjs group under moralis/nftApi', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part1.mjs', 'routes': { 'getNft': {} } } ),
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part2.mjs', 'routes': { 'getNftMetadata': {} } } )
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part1.mjs', 'tools': { 'getNft': {} } } ),
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part2.mjs', 'tools': { 'getNftMetadata': {} } } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -193,7 +193,7 @@ describe( 'Multi-part container grouping', () => {
 
     it( 'single-part walletApi.mjs becomes containers["moralis/walletApi"] with one file', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'moralis', 'file': 'walletApi.mjs', 'routes': { 'getWallet': {} } } )
+            schemaEntry( { 'namespace': 'moralis', 'file': 'walletApi.mjs', 'tools': { 'getWallet': {} } } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -204,9 +204,9 @@ describe( 'Multi-part container grouping', () => {
 
     it( 'three parts collapse to one container key', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part1.mjs', 'routes': {} } ),
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part2.mjs', 'routes': {} } ),
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part3.mjs', 'routes': {} } )
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part1.mjs', 'tools': {} } ),
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part2.mjs', 'tools': {} } ),
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part3.mjs', 'tools': {} } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -225,7 +225,7 @@ describe( 'Schema skipping — missing namespace', () => {
                 'main': {
                     'name': 'No NS',
                     'description': 'Missing namespace',
-                    'routes': { 'ping': {} }
+                    'tools': { 'ping': {} }
                 },
                 'file': 'no-ns.mjs',
                 'source': 'test'
@@ -247,7 +247,7 @@ describe( 'Schema skipping — missing namespace', () => {
 describe( 'Index metadata', () => {
     it( 'index contains builtAt ISO string and schemaCount', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'ns', 'file': 'api.mjs', 'routes': { 'get': {} } } )
+            schemaEntry( { 'namespace': 'ns', 'file': 'api.mjs', 'tools': { 'get': {} } } )
         ]
 
         const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -275,7 +275,7 @@ describe( 'Cache write and read roundtrip', () => {
 
     it( 'written index can be read back with identical content', async () => {
         const schemas = [
-            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi.mjs', 'routes': { 'getNft': {} } } )
+            schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi.mjs', 'tools': { 'getNft': {} } } )
         ]
 
         const { index: originalIndex } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
@@ -364,7 +364,7 @@ describe( 'parseSpecId — invalid inputs produce no index entry', () => {
             {
                 'main': {
                     'namespace': 'alias',
-                    'routes': { 'doThing': {} }
+                    'tools': { 'doThing': {} }
                 },
                 'file': 'alias.mjs',
                 'source': 'test'

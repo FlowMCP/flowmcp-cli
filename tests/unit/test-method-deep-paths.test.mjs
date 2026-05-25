@@ -42,13 +42,13 @@ const SCHEMA_WITH_TESTS = `export const main = {
     namespace: 'deeptest',
     name: 'Deep Test API',
     description: 'Schema for deep test paths',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -64,7 +64,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Registry for deep path tests',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'deeptest',
@@ -81,7 +81,7 @@ const GLOBAL_CONFIG_WITH_ENV = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123def',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {
@@ -98,7 +98,7 @@ const GLOBAL_CONFIG_MISSING_ENV = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123def',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {

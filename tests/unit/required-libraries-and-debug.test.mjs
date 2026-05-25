@@ -24,14 +24,14 @@ const REQLIBS_SCHEMA = `export const main = {
     namespace: 'reqlibs',
     name: 'Required Libs API',
     description: 'Schema with required libraries',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     requiredLibraries: [ 'zod' ],
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping with lib',
@@ -56,7 +56,7 @@ const REQLIBS_REGISTRY = {
     'name': REQLIBS_SOURCE_NAME,
     'version': '1.0.0',
     'description': 'RequiredLibraries test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'reqlibs',
@@ -71,14 +71,14 @@ const DEBUG_SCHEMA = `export const main = {
     namespace: 'debugsrc',
     name: 'Debug API',
     description: 'Schema for debug test',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     requiredLibraries: [ 'nonexistent-module-xyz-flowmcp-test' ],
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -103,7 +103,7 @@ const DEBUG_REGISTRY = {
     'name': DEBUG_SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Debug test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'debugsrc',
@@ -135,7 +135,7 @@ beforeAll( async () => {
 
     const globalConfig = {
         'envPath': ENV_PATH,
-        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
         'initialized': new Date().toISOString(),
         'sources': {
             [REQLIBS_SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 },

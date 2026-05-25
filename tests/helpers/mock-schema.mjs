@@ -10,7 +10,7 @@ const validSchema = {
     'headers': {
         'Accept': 'application/json'
     },
-    'routes': {
+    'tools': {
         'getData': {
             'method': 'GET',
             'description': 'Get test data',
@@ -48,7 +48,7 @@ const validSchemaWithServerParams = {
         'Authorization': 'Bearer {{API_KEY}}',
         'Content-Type': 'application/json'
     },
-    'routes': {
+    'tools': {
         'getUser': {
             'method': 'GET',
             'description': 'Get user data',

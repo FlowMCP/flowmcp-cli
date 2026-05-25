@@ -47,13 +47,13 @@ const SCHEMA_REFERENCING_ALIAS = `export const main = {
     namespace: 'devlistsrc',
     name: 'DevLists API',
     description: 'Test schema referencing alias in enum',
-    version: '3.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://example.com',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         getChainData: {
             method: 'GET',
             description: 'Get chain data',
@@ -73,13 +73,13 @@ const SCHEMA_NO_ALIAS = `export const main = {
     namespace: 'devlistsrc',
     name: 'Plain API',
     description: 'Test schema without alias reference',
-    version: '3.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://example.com',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -94,7 +94,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'DevLists test source',
-    'schemaSpec': '3.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'devlistsrc',
@@ -129,7 +129,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '4.0.0',
             'commit': 'abc123',
-            'schemaSpec': '3.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

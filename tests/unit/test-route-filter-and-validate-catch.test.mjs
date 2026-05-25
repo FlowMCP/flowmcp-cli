@@ -20,13 +20,13 @@ const SCHEMA_WITH_TESTS = `export const main = {
     namespace: 'routefilter',
     name: 'Route Filter API',
     description: 'Schema with tests for route filtering',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         pingRoute: {
             method: 'GET',
             description: 'Ping route with tests',
@@ -49,7 +49,7 @@ const SCHEMA_NO_ROUTES = `export const main = {
     namespace: 'routefilter_broken',
     name: 'Broken Schema',
     description: 'Schema that may trigger catch blocks',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
@@ -62,7 +62,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Route filter test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'routefilter',
@@ -99,7 +99,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

@@ -16,13 +16,13 @@ function schemaFile( { namespace, requiredKeys = [], routeName = 'ping' } ) {
     namespace: '${namespace}',
     name: '${namespace} API',
     description: 'Test schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://example.com',
     requiredServerParams: ${JSON.stringify( requiredKeys )},
     headers: {},
-    routes: {
+    tools: {
         ${routeName}: { method: 'GET', description: 'Test', path: '/', parameters: [] }
     }
 }
@@ -57,7 +57,7 @@ describe( 'add — activation guard (Memo 032 PRD-10)', () => {
         const registry = {
             'name': SOURCE_NAME,
             'version': '1.0.0',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'guarded', 'file': 'guarded.mjs', 'name': 'guarded', 'requiredServerParams': [ 'GUARD_KEY' ] },
                 { 'namespace': 'free', 'file': 'free.mjs', 'name': 'free', 'requiredServerParams': [] }
@@ -68,7 +68,7 @@ describe( 'add — activation guard (Memo 032 PRD-10)', () => {
 
         const globalConfig = {
             'envPath': testHome.envPath(),
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'builtin', 'schemaCount': 2 } }
         }

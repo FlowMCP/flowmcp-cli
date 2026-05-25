@@ -24,7 +24,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {}
@@ -85,13 +85,13 @@ describe( 'FlowMcpCli.validate — single valid schema file via schemaPath', () 
     namespace: 'vedgesingle',
     name: 'VEdge Single API',
     description: 'Valid single schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -159,13 +159,13 @@ describe( 'FlowMcpCli.validate — directory with valid and no-main schema', () 
     namespace: 'vedgemix',
     name: 'VEdge Mix API',
     description: 'Valid schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -285,13 +285,13 @@ describe( 'FlowMcpCli.remove — tool not in active list', () => {
     namespace: 'vedgerem',
     name: 'VEdge Remove API',
     description: 'Schema for remove test',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -306,7 +306,7 @@ describe( 'FlowMcpCli.remove — tool not in active list', () => {
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'VEdge Remove source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'vedgerem', 'file': 'rem.mjs', 'name': 'VEdge Remove API', 'requiredServerParams': [] }
             ]

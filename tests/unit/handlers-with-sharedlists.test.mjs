@@ -31,14 +31,14 @@ beforeAll( async () => {
     namespace: 'hslsrc',
     name: 'HSL API',
     description: 'Schema with handlers and shared lists',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     sharedLists: [ 'colors' ],
-    routes: {
+    tools: {
         pickColor: {
             method: 'GET',
             description: 'Pick a color',
@@ -68,7 +68,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
         'name': SOURCE_NAME,
         'version': '1.0.0',
         'description': 'HSL test source',
-        'schemaSpec': '2.0.0',
+        'schemaSpec': '4.0.0',
         'schemas': [
             { 'namespace': 'hslsrc', 'file': 'hsl.mjs', 'name': 'HSL API', 'requiredServerParams': [] }
         ]
@@ -79,7 +79,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
 
     const globalConfig = {
         'envPath': ENV_PATH,
-        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+        'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
         'initialized': new Date().toISOString(),
         'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
     }

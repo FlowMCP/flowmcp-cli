@@ -27,14 +27,14 @@ const SCHEMA_NO_LISTS = `export const main = {
     namespace: 'nolistssrc',
     name: 'No Lists API',
     description: 'Schema with sharedLists but no _lists dir',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     sharedLists: [ 'nonexistent' ],
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -60,14 +60,14 @@ const SCHEMA_BROKEN_LISTS = `export const main = {
     namespace: 'brokenlistsrc',
     name: 'Broken Lists API',
     description: 'Schema referencing a broken shared list file',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     sharedLists: [ 'broken' ],
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -91,7 +91,7 @@ const NOLISTS_REGISTRY = {
     'name': NOLISTS_SOURCE,
     'version': '1.0.0',
     'description': 'No lists test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'nolistssrc',
@@ -107,7 +107,7 @@ const BROKENLISTS_REGISTRY = {
     'name': BROKENLISTS_SOURCE,
     'version': '1.0.0',
     'description': 'Broken lists test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'brokenlistsrc',
@@ -153,7 +153,7 @@ beforeAll( async () => {
     } else {
         const globalConfig = {
             'envPath': NOLISTS_ENV,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': sourcesPayload
         }

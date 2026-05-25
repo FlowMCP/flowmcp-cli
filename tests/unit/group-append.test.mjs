@@ -17,13 +17,13 @@ const DEMO_SCHEMA = `export const main = {
     namespace: 'appendtest',
     name: 'Append Test API',
     description: 'Schema for group append tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         routeA: {
             method: 'GET',
             description: 'Route A',
@@ -45,7 +45,7 @@ const TEST_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {

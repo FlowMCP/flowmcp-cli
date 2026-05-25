@@ -31,13 +31,13 @@ beforeAll( async () => {
     namespace: 'helpsrc',
     name: 'Help Test API',
     description: 'Schema for help tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -52,7 +52,7 @@ beforeAll( async () => {
         'name': SOURCE_NAME,
         'version': '1.0.0',
         'description': 'Help test source',
-        'schemaSpec': '2.0.0',
+        'schemaSpec': '4.0.0',
         'schemas': [
             {
                 'namespace': 'helpsrc',
@@ -72,7 +72,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

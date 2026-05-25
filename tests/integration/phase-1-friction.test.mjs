@@ -16,13 +16,13 @@ function schemaFile( { namespace, requiredKeys = [], routeName = 'ping' } ) {
     namespace: '${namespace}',
     name: '${namespace} API',
     description: 'Test schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://example.com',
     requiredServerParams: ${JSON.stringify( requiredKeys )},
     headers: {},
-    routes: {
+    tools: {
         ${routeName}: { method: 'GET', description: 'Test', path: '/', parameters: [] }
     }
 }
@@ -51,7 +51,7 @@ describe( 'Phase 1 friction — empty env (Memo 032 PRD-12)', () => {
         const registry = {
             'name': SOURCE_NAME,
             'version': '1.0.0',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'testschema', 'file': 'testschema.mjs', 'name': 'testschema', 'requiredServerParams': [ 'TEST_KEY' ] }
             ]
@@ -61,7 +61,7 @@ describe( 'Phase 1 friction — empty env (Memo 032 PRD-12)', () => {
 
         const globalConfig = {
             'envPath': testHome.envPath(),
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'builtin', 'schemaCount': 1 } }
         }

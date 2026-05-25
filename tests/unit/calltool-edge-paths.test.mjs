@@ -20,13 +20,13 @@ const SCHEMA_CONTENT = `export const main = {
     namespace: 'calledgesrc',
     name: 'CallEdge API',
     description: 'Schema for callTool edge case tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Simple ping',
@@ -52,7 +52,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'CallEdge test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'calledgesrc',
@@ -82,7 +82,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

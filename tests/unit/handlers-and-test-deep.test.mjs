@@ -50,13 +50,13 @@ describe( 'FlowMcpCli.callTool with schema that exports handlers — exercises #
     namespace: 'handlersrc',
     name: 'Handler API',
     description: 'Schema with handlers function',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping with handler',
@@ -79,7 +79,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Handler test source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'handlersrc', 'file': 'with-handler.mjs', 'name': 'Handler API', 'requiredServerParams': [] }
             ]
@@ -103,7 +103,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }
@@ -164,13 +164,13 @@ describe( 'FlowMcpCli.callTool with schema that exports broken handlers — exer
     namespace: 'brokenhandler',
     name: 'Broken Handler API',
     description: 'Schema with broken handlers',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -189,7 +189,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Broken handler test',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'brokenhandler', 'file': 'broken.mjs', 'name': 'Broken Handler API', 'requiredServerParams': [] }
             ]
@@ -213,7 +213,7 @@ export const handlers = ( { sharedLists, libraries } ) => {
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }
@@ -264,13 +264,13 @@ describe( 'FlowMcpCli.test with schemaPath — exercises getAllTests and schemaP
     namespace: 'testpathsrc',
     name: 'Test Path API',
     description: 'Schema with tests for schemaPath test flow',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping route with test',
@@ -288,7 +288,7 @@ describe( 'FlowMcpCli.test with schemaPath — exercises getAllTests and schemaP
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Test path source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'testpathsrc', 'file': 'testable.mjs', 'name': 'Test Path API', 'requiredServerParams': [] }
             ]
@@ -299,7 +299,7 @@ describe( 'FlowMcpCli.test with schemaPath — exercises getAllTests and schemaP
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }
@@ -407,13 +407,13 @@ describe( 'FlowMcpCli.test with schema that has no tests array', () => {
     namespace: 'notests',
     name: 'No Tests API',
     description: 'Schema without tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -428,7 +428,7 @@ describe( 'FlowMcpCli.test with schema that has no tests array', () => {
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'No tests source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'notests', 'file': 'notests.mjs', 'name': 'No Tests API', 'requiredServerParams': [] }
             ]
@@ -455,7 +455,7 @@ describe( 'FlowMcpCli.test with schema that has no tests array', () => {
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }

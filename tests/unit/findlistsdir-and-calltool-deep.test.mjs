@@ -56,14 +56,14 @@ describe( 'FlowMcpCli.list — shared lists in parent dir exercises #findListsDi
     namespace: 'parentlistsrc',
     name: 'Parent List API',
     description: 'Schema in subdir with shared lists in parent',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     sharedLists: [ 'items' ],
-    routes: {
+    tools: {
         selectItem: {
             method: 'GET',
             description: 'Select item',
@@ -83,7 +83,7 @@ describe( 'FlowMcpCli.list — shared lists in parent dir exercises #findListsDi
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Parent list test',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 {
                     'namespace': 'parentlistsrc',
@@ -117,7 +117,7 @@ describe( 'FlowMcpCli.list — shared lists in parent dir exercises #findListsDi
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }
@@ -191,7 +191,7 @@ describe( 'FlowMcpCli.callTool — with group and nonexistent group schema', () 
         if( !globalConfigExisted ) {
             const globalConfig = {
                 'envPath': ENV_PATH,
-                'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+                'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
                 'initialized': new Date().toISOString(),
                 'sources': {}
             }
@@ -233,13 +233,13 @@ describe( 'FlowMcpCli.list — with schemasDir in local config exercises line 47
     namespace: 'schemadirtest',
     name: 'SchemasDir API',
     description: 'Test schemasDir config',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -254,7 +254,7 @@ describe( 'FlowMcpCli.list — with schemasDir in local config exercises line 47
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'SchemasDir test',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'schemadirtest', 'file': 'sdtest.mjs', 'name': 'SchemasDir API', 'requiredServerParams': [] }
             ]
@@ -279,7 +279,7 @@ describe( 'FlowMcpCli.list — with schemasDir in local config exercises line 47
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }
@@ -329,13 +329,13 @@ describe( 'FlowMcpCli.add — with force flag exercises bustCache', () => {
     namespace: 'forcesrc',
     name: 'Force API',
     description: 'Force test',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -350,7 +350,7 @@ describe( 'FlowMcpCli.add — with force flag exercises bustCache', () => {
             'name': SOURCE_NAME,
             'version': '1.0.0',
             'description': 'Force test source',
-            'schemaSpec': '2.0.0',
+            'schemaSpec': '4.0.0',
             'schemas': [
                 { 'namespace': 'forcesrc', 'file': 'force.mjs', 'name': 'Force API', 'requiredServerParams': [] }
             ]
@@ -361,7 +361,7 @@ describe( 'FlowMcpCli.add — with force flag exercises bustCache', () => {
 
         const globalConfig = {
             'envPath': ENV_PATH,
-            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '2.0.0' },
+            'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
             'initialized': new Date().toISOString(),
             'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
         }

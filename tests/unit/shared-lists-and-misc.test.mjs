@@ -22,14 +22,14 @@ const SCHEMA_WITH_SHARED_LISTS = `export const main = {
     namespace: 'slsrc',
     name: 'SharedList API',
     description: 'Schema with shared lists for coverage tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
     sharedLists: [ 'items' ],
-    routes: {
+    tools: {
         selectItem: {
             method: 'GET',
             description: 'Select item from shared list',
@@ -55,13 +55,13 @@ const SCHEMA_SIMPLE = `export const main = {
     namespace: 'slsimple',
     name: 'SL Simple API',
     description: 'Simple schema',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: {},
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Ping',
@@ -76,7 +76,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'SharedList test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'slsrc',
@@ -109,7 +109,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {

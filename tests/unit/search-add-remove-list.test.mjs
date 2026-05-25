@@ -18,13 +18,13 @@ const DEMO_SCHEMA_CONTENT = `export const main = {
     namespace: 'testdemo',
     name: 'Test Demo API',
     description: 'Simple demo schema for CLI testing',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [ 'https://example.com/docs' ],
     tags: [ 'demo', 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [],
     headers: { 'Accept': 'application/json' },
-    routes: {
+    tools: {
         ping: {
             method: 'GET',
             description: 'Simple ping endpoint for testing',
@@ -52,13 +52,13 @@ const SECOND_SCHEMA_CONTENT = `export const main = {
     namespace: 'cryptotest',
     name: 'Crypto Test API',
     description: 'Crypto price data for testing',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'crypto', 'price' ],
     root: 'https://api.example.com',
     requiredServerParams: [ 'CRYPTO_KEY' ],
     headers: { 'Authorization': 'Bearer {{CRYPTO_KEY}}' },
-    routes: {
+    tools: {
         getPrice: {
             method: 'GET',
             description: 'Get token price by symbol',
@@ -79,7 +79,7 @@ const TEST_REGISTRY = {
     'name': 'test-source',
     'version': '1.0.0',
     'description': 'Test registry',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'baseDir': 'schemas/v2.0.0',
     'schemas': [
         {
@@ -102,7 +102,7 @@ const TEST_GLOBAL_CONFIG = {
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
-        'schemaSpec': '2.0.0'
+        'schemaSpec': '4.0.0'
     },
     'initialized': '2026-02-20T12:00:00.000Z',
     'sources': {

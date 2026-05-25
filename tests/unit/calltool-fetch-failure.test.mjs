@@ -22,13 +22,13 @@ const AUTH_FAIL_SCHEMA = `export const main = {
     namespace: 'fetchfail',
     name: 'Fetch Fail API',
     description: 'Schema for fetch failure tests',
-    version: '2.0.0',
+    version: '4.0.0',
     docs: [],
     tags: [ 'test' ],
     root: 'https://httpbin.org',
     requiredServerParams: [ 'FAKE_API_KEY' ],
     headers: {},
-    routes: {
+    tools: {
         authFail: {
             method: 'GET',
             description: 'Returns 401',
@@ -74,7 +74,7 @@ const REGISTRY = {
     'name': SOURCE_NAME,
     'version': '1.0.0',
     'description': 'Fetch failure test source',
-    'schemaSpec': '2.0.0',
+    'schemaSpec': '4.0.0',
     'schemas': [
         {
             'namespace': 'fetchfail',
@@ -116,7 +116,7 @@ beforeAll( async () => {
         'flowmcpCore': {
             'version': '2.0.0',
             'commit': 'abc123',
-            'schemaSpec': '2.0.0'
+            'schemaSpec': '4.0.0'
         },
         'initialized': new Date().toISOString(),
         'sources': {
