@@ -5302,7 +5302,8 @@ class FlowMcpCli {
             data
         }
 
-        await writeFile( cachePath, JSON.stringify( cacheEntry, null, 2 ), 'utf-8' )
+        // Cache refresh is a deliberate, named overwrite (Memo 068 R2 verschärft) — never silent.
+        await FlowMcpCli.#writeGuarded( { 'path': cachePath, 'content': JSON.stringify( cacheEntry, null, 2 ), 'onExists': 'overwrite' } )
 
         return { cachePath, meta: cacheEntry[ 'meta' ] }
     }
@@ -5508,7 +5509,8 @@ class FlowMcpCli {
             'overridden': overridden || []
         }
 
-        await writeFile( filePath, JSON.stringify( entry, null, 2 ), 'utf-8' )
+        // Seal cache refresh is a deliberate, named overwrite (Memo 068 R2) — never silent.
+        await FlowMcpCli.#writeGuarded( { 'path': filePath, 'content': JSON.stringify( entry, null, 2 ), 'onExists': 'overwrite' } )
 
         return { filePath, entry }
     }
@@ -6120,7 +6122,8 @@ class FlowMcpCli {
 
     static async #writeGlobalConfig( { config } ) {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        await writeFile( globalConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+        // Global config is updated deliberately on init/add/remove — named overwrite.
+        await FlowMcpCli.#writeGuarded( { 'path': globalConfigPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
 
         return { status: true }
     }
@@ -10817,8 +10820,8 @@ allowlist, migrate-config, etc.).
     static async #writeNamespaceIndexCache( { cwd, index } ) {
         try {
             const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
-            await mkdir( dirname( cachePath ), { recursive: true } )
-            await writeFile( cachePath, JSON.stringify( index, null, 4 ), 'utf-8' )
+            // Namespace-index cache refresh is a deliberate, named overwrite (Memo 068 R2).
+            await FlowMcpCli.#writeGuarded( { 'path': cachePath, 'content': JSON.stringify( index, null, 4 ), 'onExists': 'overwrite' } )
 
             return { 'success': true, 'path': cachePath }
         } catch( err ) {
@@ -11633,6 +11636,11 @@ allowlist, migrate-config, etc.).
     }
 
 
+    static async __testWriteGuarded( { path, content, onExists } ) {
+        return FlowMcpCli.#writeGuarded( { path, content, onExists } )
+    }
+
+
     static #toSchemaIdSlug( { schemaId } ) {
         return schemaId.replace( /\//g, '_' )
     }
@@ -11650,6 +11658,36 @@ allowlist, migrate-config, etc.).
         await writeFile( tmp, content, 'utf-8' )
         await rename( tmp, absolutePath )
         return { 'skipped': false, absolutePath }
+    }
+
+
+    // Memo 068 R2 — the single guarded writer for persistent artifacts.
+    // There is NO silent overwrite path: every overwrite must be a deliberate,
+    // named choice by the caller via onExists. The safe default (onExists
+    // omitted or undefined) refuses to overwrite and reports an error object.
+    //   onExists: 'error'     -> existing file => { written:false, error }
+    //   onExists: 'skip'      -> existing file => { written:false, skipped:true }
+    //   onExists: 'overwrite' -> deliberate, named overwrite (atomic)
+    // Object-return, no throw, no silent default.
+    static async #writeGuarded( { path, content, onExists } ) {
+        const absolutePath = resolve( path )
+        const effective = onExists === undefined ? 'error' : onExists
+        const exists = existsSync( absolutePath )
+
+        if( exists === true && effective === 'error' ) {
+            return { 'written': false, 'skipped': false, 'error': `NO-OVERWRITE: refusing to overwrite existing file: ${absolutePath}` }
+        }
+
+        if( exists === true && effective === 'skip' ) {
+            return { 'written': false, 'skipped': true, 'error': null }
+        }
+
+        await mkdir( dirname( absolutePath ), { recursive: true } )
+        const tmp = `${absolutePath}.tmp`
+        await writeFile( tmp, content, 'utf-8' )
+        await rename( tmp, absolutePath )
+
+        return { 'written': true, 'skipped': false, 'error': null }
     }
 
 
