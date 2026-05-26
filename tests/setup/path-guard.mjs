@@ -1,12 +1,38 @@
 import { jest } from '@jest/globals'
-import { resolve, sep } from 'node:path'
+import { resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 
 // Second line of defense (Memo 068 R1). Even if a test escapes the home/tmp
 // mock, any write or delete whose target lies OUTSIDE the repo root throws a
 // loud test error instead of silently contaminating the system.
-// Reads are never guarded.
+//
+// Additionally — and this is what makes "no test ever READS outside the repo"
+// real — ANY access (read OR write) targeting the user's REAL ~/.flowmcp is
+// hard-blocked. This guarantees a test can never read the production .env or
+// the production config.json, even via an absolute path. The real home is
+// taken from process.env.HOME, which the os-mock does not touch.
+
+
+const REAL_HOME = process.env.HOME || process.env.USERPROFILE || ''
+const REAL_FLOWMCP = REAL_HOME === '' ? null : resolve( join( REAL_HOME, '.flowmcp' ) )
+
+
+function assertNotRealFlowmcp( { target, op } ) {
+    if( REAL_FLOWMCP === null ) {
+        return
+    }
+
+    const abs = toAbsolute( { target } )
+    if( abs === null ) {
+        return
+    }
+
+    const hit = abs === REAL_FLOWMCP || abs.startsWith( `${REAL_FLOWMCP}${sep}` )
+    if( hit === true ) {
+        throw new Error( `[path-guard] Test attempted to ${op} the REAL ~/.flowmcp (production config/.env).\n  target: ${abs}\n  This is forbidden — tests must never touch the user's real home.` )
+    }
+}
 
 
 function toAbsolute( { target } ) {
@@ -61,6 +87,40 @@ function guardMoveAsync( { fn, op } ) {
 }
 
 
+// Read wrappers only enforce the REAL ~/.flowmcp block (reading system files
+// elsewhere stays allowed — only the user's production config/.env is off-limits).
+function guardReadAsync( { fn, op } ) {
+    return async ( target, ...rest ) => {
+        assertNotRealFlowmcp( { target, op } )
+
+        return fn( target, ...rest )
+    }
+}
+
+
+// copyFile reads the source and writes the destination. The destination is a
+// write (must be inside the repo); the source is a read (only the real
+// ~/.flowmcp is off-limits — reading fixtures from sibling repos is allowed).
+function guardCopyAsync( { fn, op } ) {
+    return async ( source, destination, ...rest ) => {
+        assertNotRealFlowmcp( { 'target': source, op } )
+        assertInside( { 'target': destination, op } )
+
+        return fn( source, destination, ...rest )
+    }
+}
+
+
+function guardCopySync( { fn, op } ) {
+    return ( source, destination, ...rest ) => {
+        assertNotRealFlowmcp( { 'target': source, op } )
+        assertInside( { 'target': destination, op } )
+
+        return fn( source, destination, ...rest )
+    }
+}
+
+
 // Sync wrappers (node:fs) throw synchronously, matching real fs.
 function guardWriteSync( { fn, op } ) {
     return ( target, ...rest ) => {
@@ -81,6 +141,15 @@ function guardMoveSync( { fn, op } ) {
 }
 
 
+function guardReadSync( { fn, op } ) {
+    return ( target, ...rest ) => {
+        assertNotRealFlowmcp( { target, op } )
+
+        return fn( target, ...rest )
+    }
+}
+
+
 function buildGuarded( { actual } ) {
     return {
         ...actual,
@@ -91,7 +160,9 @@ function buildGuarded( { actual } ) {
         rmdir: guardWriteAsync( { 'fn': actual.rmdir, 'op': 'rmdir' } ),
         unlink: guardWriteAsync( { 'fn': actual.unlink, 'op': 'unlink' } ),
         rename: guardMoveAsync( { 'fn': actual.rename, 'op': 'rename' } ),
-        copyFile: guardMoveAsync( { 'fn': actual.copyFile, 'op': 'copyFile' } )
+        copyFile: guardCopyAsync( { 'fn': actual.copyFile, 'op': 'copyFile' } ),
+        readFile: guardReadAsync( { 'fn': actual.readFile, 'op': 'readFile' } ),
+        readdir: guardReadAsync( { 'fn': actual.readdir, 'op': 'readdir' } )
     }
 }
 
@@ -106,7 +177,9 @@ function buildGuardedSync( { actual } ) {
         rmdirSync: guardWriteSync( { 'fn': actual.rmdirSync, 'op': 'rmdirSync' } ),
         unlinkSync: guardWriteSync( { 'fn': actual.unlinkSync, 'op': 'unlinkSync' } ),
         renameSync: guardMoveSync( { 'fn': actual.renameSync, 'op': 'renameSync' } ),
-        copyFileSync: guardMoveSync( { 'fn': actual.copyFileSync, 'op': 'copyFileSync' } )
+        copyFileSync: guardCopySync( { 'fn': actual.copyFileSync, 'op': 'copyFileSync' } ),
+        readFileSync: guardReadSync( { 'fn': actual.readFileSync, 'op': 'readFileSync' } ),
+        readdirSync: guardReadSync( { 'fn': actual.readdirSync, 'op': 'readdirSync' } )
     }
 }
 

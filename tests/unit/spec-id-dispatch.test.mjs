@@ -86,8 +86,10 @@ const NFT_PART2_SCHEMA = `export const main = {
 `
 
 
+const TEST_ENV_PATH = join( GLOBAL_CONFIG_DIR, '.env' )
+
 const TEST_GLOBAL_CONFIG = {
-    'envPath': '/tmp/test-spec-id.env',
+    'envPath': TEST_ENV_PATH,
     'flowmcpCore': {
         'version': '2.0.0',
         'commit': 'abc123',
@@ -121,7 +123,7 @@ beforeAll( async () => {
     await writeFile( join( moralisDir, 'nftApi-part1.mjs' ), NFT_PART1_SCHEMA, 'utf-8' )
     await writeFile( join( moralisDir, 'nftApi-part2.mjs' ), NFT_PART2_SCHEMA, 'utf-8' )
 
-    await writeFile( '/tmp/test-spec-id.env', '', 'utf-8' )
+    await writeFile( TEST_ENV_PATH, '', 'utf-8' )
 } )
 
 

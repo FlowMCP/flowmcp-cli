@@ -32,16 +32,15 @@ afterAll( async () => {
 
 
 describe( 'FlowMcpCli.status', () => {
-    it( 'returns error when not initialized', async () => {
+    it( 'reports unhealthy when not initialized', async () => {
+        // Isolated home has no global config -> status() is a health report
+        // that flags healthy:false (it never gated on init / returned an error).
         const nonExistentCwd = join( tmpdir(), 'flowmcp-status-test-nonexistent' )
         await mkdir( nonExistentCwd, { recursive: true } )
 
-        if( !globalConfigExisted ) {
-            const { result } = await FlowMcpCli.status( { cwd: nonExistentCwd } )
+        const { result } = await FlowMcpCli.status( { cwd: nonExistentCwd } )
 
-            expect( result[ 'status' ] ).toBe( false )
-            expect( result[ 'error' ] ).toContain( 'Not initialized' )
-        }
+        expect( result[ 'healthy' ] ).toBe( false )
 
         await rm( nonExistentCwd, { recursive: true, force: true } )
     } )

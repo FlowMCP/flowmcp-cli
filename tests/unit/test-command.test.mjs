@@ -1,6 +1,12 @@
-import { describe, it, expect } from '@jest/globals'
+import { describe, it, expect, beforeAll } from '@jest/globals'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { seedInitializedGlobalConfig } from '../helpers/seed-home.mjs'
+
+
+beforeAll( async () => {
+    await seedInitializedGlobalConfig()
+} )
 
 
 describe( 'FlowMcpCli.test', () => {

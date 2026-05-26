@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import { validSchema, invalidSchema } from '../helpers/mock-schema.mjs'
+import { seedInitializedGlobalConfig } from '../helpers/seed-home.mjs'
 
 
 const TEST_DIR = join( tmpdir(), 'flowmcp-cli-validate-test' )
 const SCHEMAS_DIR = join( TEST_DIR, 'schemas' )
 
 beforeAll( async () => {
+    await seedInitializedGlobalConfig()
     await mkdir( SCHEMAS_DIR, { recursive: true } )
 
     const validSchemaContent = `export const main = ${JSON.stringify( validSchema, null, 4 )}\n`

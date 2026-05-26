@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { seedInitializedGlobalConfig } from '../helpers/seed-home.mjs'
 
 
 const TEST_DIR = join( tmpdir(), 'flowmcp-cli-migrate-test' )
@@ -178,6 +179,7 @@ const NON_SCHEMA_CONTENT = `export const helper = {
 
 
 beforeAll( async () => {
+    await seedInitializedGlobalConfig()
     await mkdir( NESTED_DIR, { recursive: true } )
 
     await writeFile( join( SCHEMAS_DIR, 'v2-schema.mjs' ), V2_SCHEMA_CONTENT, 'utf-8' )

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { seedInitializedGlobalConfig } from '../helpers/seed-home.mjs'
 
 
 const TEST_DIR = join( tmpdir(), `flowmcp-cli-resource-test-${Date.now()}` )
@@ -162,6 +163,7 @@ const SCHEMA_WITH_GET_SCHEMA_QUERY = `export const main = {
 
 
 beforeAll( async () => {
+    await seedInitializedGlobalConfig()
     await mkdir( SCHEMAS_DIR, { recursive: true } )
 
     await writeFile( join( SCHEMAS_DIR, 'file-based.mjs' ), SCHEMA_WITH_FILE_BASED_RESOURCE, 'utf-8' )
