@@ -1834,7 +1834,8 @@ class FlowMcpCli {
                             handlerMap,
                             'resourceHandlerMap': resourceHandlerMap || {},
                             serverParams,
-                            'sharedLists': {}
+                            'sharedLists': {},
+                            'fullOutput': useJson
                         } )
                     } catch( err ) {
                         console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
@@ -2036,7 +2037,8 @@ class FlowMcpCli {
                                 handlerMap,
                                 'resourceHandlerMap': resourceHandlerMap || {},
                                 serverParams,
-                                'sharedLists': {}
+                                'sharedLists': {},
+                                'fullOutput': useJson
                             } )
                         } catch( err ) {
                             allResults.push( {
@@ -2220,7 +2222,8 @@ class FlowMcpCli {
                         handlerMap,
                         'resourceHandlerMap': resourceHandlerMap || {},
                         serverParams,
-                        'sharedLists': {}
+                        'sharedLists': {},
+                        'fullOutput': useJson
                     } )
                 } catch( err ) {
                     allResults.push( {
@@ -8731,10 +8734,24 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Output capture: full string in JSON mode (fullOutput), 200-char preview otherwise.
+    // The human/terminal renderer never prints this field, so the preview cap only ever
+    // affected the JSON payload that machine analysis consumes — full output is required there.
+    static #limitOutput( { dataAsString, fullOutput } ) {
+        const previewLimit = 200
+
+        if( !dataAsString ) {
+            return null
+        }
+
+        return fullOutput === true ? dataAsString : dataAsString.slice( 0, previewLimit )
+    }
+
+
     // PRD-005: Primitive-aware test dispatcher (v4-ready)
     // Routes per typedTest.primitive: tool, resource, skill, prompt, selection-member
     // Always returns { status, error, output, durationMs, primitive } — never throws
-    static async #executeTest( { typedTest, schemaMain, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {} } ) {
+    static async #executeTest( { typedTest, schemaMain, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {}, fullOutput = false } ) {
         const startedAt = Date.now()
         const primitive = typedTest[ 'primitive' ]
 
@@ -8752,7 +8769,7 @@ allowlist, migrate-config, etc.).
                 } )
 
                 const { status, messages, dataAsString } = fetchResult
-                const output = dataAsString ? dataAsString.slice( 0, 200 ) : null
+                const output = FlowMcpCli.#limitOutput( { dataAsString, fullOutput } )
                 const error = status ? null : ( ( messages || [] )[ 0 ] || 'unknown error' )
 
                 return {
@@ -8792,9 +8809,10 @@ allowlist, migrate-config, etc.).
 
                 const struct = execResult && execResult[ 'struct' ] ? execResult[ 'struct' ] : execResult || {}
                 const ok = struct[ 'status' ] === true
-                const output = struct[ 'dataAsString' ]
-                    ? struct[ 'dataAsString' ].slice( 0, 200 )
-                    : ( struct[ 'data' ] ? JSON.stringify( struct[ 'data' ] ).slice( 0, 200 ) : null )
+                const dataString = struct[ 'dataAsString' ]
+                    ? struct[ 'dataAsString' ]
+                    : ( struct[ 'data' ] ? JSON.stringify( struct[ 'data' ] ) : null )
+                const output = FlowMcpCli.#limitOutput( { 'dataAsString': dataString, fullOutput } )
                 const error = ok ? null : ( ( struct[ 'messages' ] || [] )[ 0 ] || 'resource execution failed' )
 
                 return {
@@ -8861,7 +8879,7 @@ allowlist, migrate-config, etc.).
 
     // PRD-005: Iterate typed tests + dispatch + aggregate per-primitive summary
     // Returns { results, summary: { byPrimitive: {...}, overall: 'PASS' | 'FAIL' } }
-    static async #runTypedTests( { main, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {} } ) {
+    static async #runTypedTests( { main, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {}, fullOutput = false } ) {
         const typedTests = FlowMcpCli.#getAllTestsTyped( { main } )
 
         const results = await typedTests
@@ -8873,7 +8891,8 @@ allowlist, migrate-config, etc.).
                     handlerMap,
                     resourceHandlerMap,
                     serverParams,
-                    sharedLists
+                    sharedLists,
+                    fullOutput
                 } )
 
                 acc.push( {
@@ -9150,27 +9169,29 @@ allowlist, migrate-config, etc.).
 
 
     // internal: test access only — PRD-005
-    static async _testHook_executeTest( { typedTest, schemaMain, handlerMap, resourceHandlerMap, serverParams, sharedLists } ) {
+    static async _testHook_executeTest( { typedTest, schemaMain, handlerMap, resourceHandlerMap, serverParams, sharedLists, fullOutput = false } ) {
         return await FlowMcpCli.#executeTest( {
             typedTest,
             schemaMain,
             'handlerMap': handlerMap || {},
             'resourceHandlerMap': resourceHandlerMap || {},
             'serverParams': serverParams || {},
-            'sharedLists': sharedLists || {}
+            'sharedLists': sharedLists || {},
+            fullOutput
         } )
     }
 
 
     // internal: test access only — PRD-005
-    static async _testHook_runTypedTests( { main, schemaSource = null, handlerMap, resourceHandlerMap, serverParams, sharedLists } ) {
+    static async _testHook_runTypedTests( { main, schemaSource = null, handlerMap, resourceHandlerMap, serverParams, sharedLists, fullOutput = false } ) {
         return await FlowMcpCli.#runTypedTests( {
             main,
             schemaSource,
             'handlerMap': handlerMap || {},
             'resourceHandlerMap': resourceHandlerMap || {},
             'serverParams': serverParams || {},
-            'sharedLists': sharedLists || {}
+            'sharedLists': sharedLists || {},
+            fullOutput
         } )
     }
 

@@ -297,6 +297,41 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
     } )
 
 
+    describe( '#executeTest — output capture (preview vs full, JSON-mode fix)', () => {
+        const bigPayload = 'x'.repeat( 500 )
+        const typedTest = {
+            'primitive': 'tool',
+            'name': 'getThing',
+            'schemaRef': 'test/ns',
+            'test': { '_description': 'big', 'userParams': { 'big': bigPayload } },
+            'context': { 'routeName': 'getThing' }
+        }
+        const schemaMain = { 'namespace': 'test/ns', 'tools': { 'getThing': {} } }
+
+
+        it( 'truncates output to a 200-char preview by default (human/terminal mode)', async () => {
+            const result = await FlowMcpCli._testHook_executeTest( {
+                typedTest,
+                schemaMain
+            } )
+
+            expect( result[ 'output' ].length ).toBe( 200 )
+        } )
+
+
+        it( 'returns the full, untruncated output when fullOutput=true (JSON mode)', async () => {
+            const result = await FlowMcpCli._testHook_executeTest( {
+                typedTest,
+                schemaMain,
+                'fullOutput': true
+            } )
+
+            expect( result[ 'output' ].length ).toBeGreaterThan( 200 )
+            expect( result[ 'output' ] ).toContain( bigPayload )
+        } )
+    } )
+
+
     describe( '#runTypedTests — aggregation', () => {
         it( 'collects typed results + builds byPrimitive summary (all PASS)', async () => {
             const main = {
