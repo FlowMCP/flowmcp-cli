@@ -288,11 +288,11 @@ class FlowMcpCli {
             localHashes
         }
 
-        await writeFile(
-            join( sourceDir, '_registry.json' ),
-            JSON.stringify( registryCopy, null, 4 ),
-            'utf-8'
-        )
+        await FlowMcpCli.#writeGuarded( {
+            'path': join( sourceDir, '_registry.json' ),
+            'content': JSON.stringify( registryCopy, null, 4 ),
+            'onExists': 'overwrite'
+        } )
 
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -454,11 +454,11 @@ class FlowMcpCli {
             localHashes
         }
 
-        await writeFile(
-            join( sourceDir, '_registry.json' ),
-            JSON.stringify( registryCopy, null, 4 ),
-            'utf-8'
-        )
+        await FlowMcpCli.#writeGuarded( {
+            'path': join( sourceDir, '_registry.json' ),
+            'content': JSON.stringify( registryCopy, null, 4 ),
+            'onExists': 'overwrite'
+        } )
 
         const schemasImported = downloaded + skipped
 
@@ -859,7 +859,7 @@ class FlowMcpCli {
         }
 
         await mkdir( join( cwd, appConfig[ 'localConfigDirName' ] ), { recursive: true } )
-        await writeFile( localConfigPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -949,7 +949,7 @@ class FlowMcpCli {
             delete localConfig[ 'groups' ][ name ][ 'schemas' ]
         }
 
-        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -1048,7 +1048,7 @@ class FlowMcpCli {
         }
 
         localConfig[ 'defaultGroup' ] = name
-        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -1370,7 +1370,7 @@ class FlowMcpCli {
             'file': file
         }
 
-        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -1437,7 +1437,7 @@ class FlowMcpCli {
             delete groupData[ 'prompts' ]
         }
 
-        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -1691,7 +1691,7 @@ class FlowMcpCli {
                     warnings.push( 'main.skills removed — keep skill files in providers/<ns>/skills/*.mjs (Memo 022 REV-08)' )
                 }
 
-                await writeFile( filePath, updatedContent, 'utf-8' )
+                await FlowMcpCli.#writeGuarded( { 'path': filePath, 'content': updatedContent, 'onExists': 'overwrite' } )
                 migrated += 1
                 const targetVersion = ( hasV3Version || hasMainSkills ) ? 'v4' : 'v3'
                 const reasonParts = [ `Successfully migrated to ${targetVersion}` ]
@@ -3453,7 +3453,7 @@ class FlowMcpCli {
                     } )
             }
 
-            await writeFile( localConfigPath, JSON.stringify( updatedConfig, null, 4 ), 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( updatedConfig, null, 4 ), 'onExists': 'overwrite' } )
 
             const result = {
                 'status': true,
@@ -3554,7 +3554,7 @@ class FlowMcpCli {
             }
         }
 
-        await writeFile( localConfigPath, JSON.stringify( updatedConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( updatedConfig, null, 4 ), 'onExists': 'overwrite' } )
         await FlowMcpCli.#saveToolSchema( {
             toolName,
             'description': toolDescription,
@@ -3653,7 +3653,7 @@ class FlowMcpCli {
                 } )
         }
 
-        await writeFile( localConfigPath, JSON.stringify( localConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
         await FlowMcpCli.#removeToolSchema( { toolName, cwd } )
 
         const result = {
@@ -4085,7 +4085,7 @@ class FlowMcpCli {
         const exportVarName = 'list'
         const newContent = `export const ${exportVarName} = ${JSON.stringify( updatedList, null, 4 )}\n`
 
-        await writeFile( listFilePath, newContent, 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': listFilePath, 'content': newContent, 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -4340,7 +4340,7 @@ class FlowMcpCli {
         const outputPath = join( outputDir, 'flowmcp-catalog.md' )
 
         await mkdir( outputDir, { 'recursive': true } )
-        await writeFile( outputPath, markdown, 'utf8' )
+        await FlowMcpCli.#writeGuarded( { 'path': outputPath, 'content': markdown, 'onExists': 'overwrite' } )
 
         const tokenEstimate = Math.ceil( markdown.length / 4 )
 
@@ -6876,11 +6876,11 @@ class FlowMcpCli {
             localHashes
         }
 
-        await writeFile(
-            localRegistryPath,
-            JSON.stringify( registryCopy, null, 4 ),
-            'utf-8'
-        )
+        await FlowMcpCli.#writeGuarded( {
+            'path': localRegistryPath,
+            'content': JSON.stringify( registryCopy, null, 4 ),
+            'onExists': 'overwrite'
+        } )
 
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -7498,7 +7498,7 @@ class FlowMcpCli {
 
         const iso = new Date().toISOString().replace( /:/g, '-' )
         const backup = join( backupDir, `${iso}.env` )
-        await writeFile( backup, content, 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': backup, 'content': content, 'onExists': 'overwrite' } )
 
         const result = { 'status': true, source, backup }
 
@@ -7548,7 +7548,7 @@ class FlowMcpCli {
         }
 
         await mkdir( dirname( targetPath ), { recursive: true } )
-        await writeFile( targetPath, content, 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': targetPath, 'content': content, 'onExists': 'overwrite' } )
 
         const result = { 'status': true, 'restored': targetPath }
 
@@ -8148,7 +8148,7 @@ allowlist, migrate-config, etc.).
             const demoDir = join( schemasDir, 'demo' )
             await mkdir( demoDir, { recursive: true } )
             const { content: demoContent } = FlowMcpCli.#createDemoSchema()
-            await writeFile( join( demoDir, 'ping.mjs' ), demoContent, 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
             console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
         }
 
@@ -8163,7 +8163,7 @@ allowlist, migrate-config, etc.).
             'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
         } )
 
-        await writeFile( localConfigPath, JSON.stringify( mergedLocalConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
         console.log( `  ${chalk.green( '\u2713' )} Local config saved` )
 
         // Auto-import default registry
@@ -8206,7 +8206,7 @@ allowlist, migrate-config, etc.).
 
             updatedLocalConfig[ 'defaultGroup' ] = 'default'
 
-            await writeFile( localConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( updatedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
             console.log( `  ${chalk.green( '\u2713' )} Group "default" created with ${allToolRefs.length} tool(s)` )
         }
 
@@ -8271,7 +8271,7 @@ allowlist, migrate-config, etc.).
             const demoDir = join( schemasDir, 'demo' )
             await mkdir( demoDir, { recursive: true } )
             const { content: demoContent } = FlowMcpCli.#createDemoSchema()
-            await writeFile( join( demoDir, 'ping.mjs' ), demoContent, 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
             console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
         }
 
@@ -8285,7 +8285,7 @@ allowlist, migrate-config, etc.).
             'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
         } )
 
-        await writeFile( localConfigPath, JSON.stringify( mergedLocalConfig, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         console.log( '' )
         console.log( `  ${chalk.green( '\u2713' )} Global config saved to ${chalk.gray( FlowMcpCli.#globalConfigPath() )}` )
@@ -8430,7 +8430,7 @@ allowlist, migrate-config, etc.).
                         updatedLocalConfig[ 'defaultGroup' ] = trimmedGroupName
                     }
 
-                    await writeFile( localGroupConfigPath, JSON.stringify( updatedLocalConfig, null, 4 ), 'utf-8' )
+                    await FlowMcpCli.#writeGuarded( { 'path': localGroupConfigPath, 'content': JSON.stringify( updatedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
 
                     console.log( `  ${chalk.green( '\u2713' )} Group "${trimmedGroupName}" created with ${selectedTools.length} tool(s)` )
                     if( updatedLocalConfig[ 'defaultGroup' ] === trimmedGroupName ) {
@@ -9738,7 +9738,7 @@ allowlist, migrate-config, etc.).
 
         const toolSchema = { 'name': toolName, description, parameters }
         const filePath = join( toolsDir, `${toolName}.json` )
-        await writeFile( filePath, JSON.stringify( toolSchema, null, 4 ), 'utf-8' )
+        await FlowMcpCli.#writeGuarded( { 'path': filePath, 'content': JSON.stringify( toolSchema, null, 4 ), 'onExists': 'overwrite' } )
 
         return { filePath }
     }
@@ -11215,10 +11215,10 @@ allowlist, migrate-config, etc.).
 
         if( !dryRun && !nothingChanged ) {
             const backupPath = `${configPath}.bak`
-            await writeFile( backupPath, rawContent, 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': backupPath, 'content': rawContent, 'onExists': 'overwrite' } )
             backup = backupPath
 
-            await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
         }
 
         const result = {
@@ -11302,7 +11302,7 @@ allowlist, migrate-config, etc.).
             if( !alreadyPresent ) {
                 configAllowlist.push( library )
                 config[ 'allowlist' ] = configAllowlist
-                await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+                await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
             }
 
             const result = {
@@ -11327,7 +11327,7 @@ allowlist, migrate-config, etc.).
                 } )
 
             config[ 'allowlist' ] = updatedAllowlist
-            await writeFile( configPath, JSON.stringify( config, null, 4 ), 'utf-8' )
+            await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
 
             const result = {
                 'status': true,
