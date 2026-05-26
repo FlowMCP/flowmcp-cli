@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdir, rm } from 'node:fs/promises'
@@ -8,33 +7,12 @@ import { randomBytes } from 'node:crypto'
 const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) ) )
 
 
-// Initialize global state used by the mocked os.homedir
-if( globalThis.__FLOWMCP_TEST_HOME__ === undefined ) {
-    globalThis.__FLOWMCP_TEST_HOME__ = null
-}
-
-
-jest.unstable_mockModule( 'node:os', async () => {
-    const actual = await jest.requireActual( 'node:os' )
-
-    function mockedHomedir() {
-        if( globalThis.__FLOWMCP_TEST_HOME__ ) {
-            return globalThis.__FLOWMCP_TEST_HOME__
-        }
-
-        return actual.homedir()
-    }
-
-    const mocked = {
-        ...actual,
-        homedir: mockedHomedir
-    }
-
-    return {
-        ...mocked,
-        default: mocked
-    }
-} )
+// NOTE: The `node:os` mock now lives in the global Jest setup
+// (tests/setup/global-home-mock.mjs, wired via setupFiles). It mocks
+// homedir() AND tmpdir() repo-wide BEFORE any test module is imported, so a
+// module-level `join( homedir(), '.flowmcp' )` binding can no longer escape
+// to the real home. createTestHome only switches the active home directory
+// by writing globalThis.__FLOWMCP_TEST_HOME__; the global mock reads it.
 
 
 function createTestHome( { suite } ) {
@@ -48,13 +26,17 @@ function createTestHome( { suite } ) {
         globalConfigPath: join( globalConfigDir, 'config.json' ),
         schemasDir: join( globalConfigDir, 'schemas' ),
         cacheDir: join( globalConfigDir, 'cache' ),
+        tmpDir: join( root, 'tmp' ),
         envPath: ( suffix = '' ) => join( globalConfigDir, `.env${suffix}` ),
         async setup() {
             await mkdir( globalConfigDir, { recursive: true } )
+            await mkdir( join( root, 'tmp' ), { recursive: true } )
             globalThis.__FLOWMCP_TEST_HOME__ = root
         },
         async teardown() {
-            globalThis.__FLOWMCP_TEST_HOME__ = null
+            // Restore to the per-file default home (never null) so homedir()
+            // can never fall back to the real home after teardown.
+            globalThis.__FLOWMCP_TEST_HOME__ = globalThis.__FLOWMCP_DEFAULT_TEST_HOME__ ?? root
             const attempts = [ 1, 2, 3 ]
             const result = await attempts
                 .reduce( async ( prev, attempt ) => {
