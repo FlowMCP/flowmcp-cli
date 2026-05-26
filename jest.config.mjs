@@ -4,6 +4,7 @@ export default {
         '<rootDir>/tests/setup/global-home-mock.mjs',
         '<rootDir>/tests/setup/path-guard.mjs'
     ],
+    globalTeardown: '<rootDir>/tests/setup/global-teardown.mjs',
     testMatch: [
         '**/tests/**/*.test.mjs'
     ],
