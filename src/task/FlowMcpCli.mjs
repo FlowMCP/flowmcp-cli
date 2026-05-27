@@ -9223,18 +9223,33 @@ allowlist, migrate-config, etc.).
 
             const requiredLibraries = main[ 'requiredLibraries' ] || []
             if( requiredLibraries.length > 0 ) {
+                // Befund C / flowmcp-cli#44: resolve required libraries from a DETERMINISTIC
+                // base (the CLI install dir, whose node_modules ships the allowed libs such
+                // as ethers) instead of the schema file location. The schema may live under
+                // ~/.flowmcp/schemas/<source>/ whose node_modules does NOT carry ethers — that
+                // was the root cause of the "ethers nicht auffindbar" workaround. We try the
+                // deterministic base first, then fall back to the schema-anchored require for
+                // local dev where a schema ships its own deps. A genuinely unresolvable lib is
+                // surfaced explicitly (No Silent Defaults) rather than swallowed.
+                const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+                const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
                 const schemaRequire = createRequire( resolve( filePath ) )
+                const unresolved = []
 
                 await requiredLibraries
                     .reduce( ( promise, lib ) => promise.then( async () => {
-                        try {
-                            const mod = await import( schemaRequire.resolve( lib ) )
-                            libraries[ lib ] = mod.default || mod
-                        } catch {
-                            const mod = schemaRequire( lib )
-                            libraries[ lib ] = mod
+                        const loaded = await FlowMcpCli.#loadOneLibrary( { lib, baseRequire, schemaRequire } )
+
+                        if( loaded[ 'status' ] === true ) {
+                            libraries[ lib ] = loaded[ 'module' ]
+                        } else {
+                            unresolved.push( lib )
                         }
                     } ), Promise.resolve() )
+
+                if( unresolved.length > 0 ) {
+                    throw new Error( `LIB-RESOLVE: required librar${unresolved.length === 1 ? 'y' : 'ies'} not resolvable from CLI base (${resolveBase}) nor schema dir: ${unresolved.join( ', ' )}. Install the librar${unresolved.length === 1 ? 'y' : 'ies'} into the CLI (npm install <lib>) so handlers can load deterministically.` )
+                }
             }
 
             const tempHandlers = handlersFn( { sharedLists, libraries } )
@@ -9244,14 +9259,58 @@ allowlist, migrate-config, etc.).
             handlerMap = created[ 'handlerMap' ] || {}
             resourceHandlerMap = created[ 'resourceHandlerMap' ] || {}
         } catch( resolveErr ) {
-            if( process.env[ 'FLOWMCP_DEBUG' ] ) {
-                console.error( `[resolveHandlers] ${resolveErr.message}` )
-            }
+            // No Silent Defaults: a handler-resolution failure (e.g. an unresolvable required
+            // library or shared-list ref) must be visible, not swallowed into empty handlers
+            // that later surface as a confusing "No response received from server". The empty
+            // maps are still returned so callers can degrade, but the cause is always reported.
+            console.error( `[resolveHandlers] handler resolution failed: ${resolveErr.message}` )
             handlerMap = {}
             resourceHandlerMap = {}
         }
 
         return { handlerMap, resourceHandlerMap }
+    }
+
+
+    static async #loadOneLibrary( { lib, baseRequire, schemaRequire } ) {
+        // Deterministic base first (CLI install node_modules), then schema-dir fallback.
+        const requires = [ baseRequire, schemaRequire ]
+
+        const attempt = await requires
+            .reduce( async ( accPromise, req ) => {
+                const acc = await accPromise
+
+                if( acc[ 'status' ] === true ) {
+                    return acc
+                }
+
+                try {
+                    const resolvedPath = req.resolve( lib )
+
+                    try {
+                        const mod = await import( pathToFileURL( resolvedPath ).href )
+                        return { 'status': true, 'module': mod.default || mod }
+                    } catch( importErr ) {
+                        const mod = req( lib )
+                        return { 'status': true, 'module': mod.default || mod }
+                    }
+                } catch( resolveErr ) {
+                    return acc
+                }
+            }, Promise.resolve( { 'status': false, 'module': null } ) )
+
+        return attempt
+    }
+
+
+    static #resolveLibraryBase() {
+        // The CLI package root: src/task/FlowMcpCli.mjs -> ../../ . Its node_modules ships the
+        // allowlisted runtime libs (ethers, better-sqlite3). createRequire wants a referencing
+        // filename, so callers anchor on an index.js inside this base (need not exist).
+        const here = dirname( fileURLToPath( import.meta.url ) )
+        const resolveBase = join( here, '..', '..' )
+
+        return { resolveBase }
     }
 
 

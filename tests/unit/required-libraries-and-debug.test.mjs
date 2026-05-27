@@ -207,7 +207,7 @@ describe( 'FlowMcpCli.callTool with requiredLibraries — exercises #resolveHand
 } )
 
 
-describe( 'FlowMcpCli.callTool with FLOWMCP_DEBUG — exercises #resolveHandlers catch block with debug logging', () => {
+describe( 'FlowMcpCli.callTool — #resolveHandlers surfaces resolution failures (No Silent Defaults)', () => {
     const CWD = join( tmpdir(), `flowmcp-debug-call-${Date.now()}` )
     let originalDebugEnv
 
@@ -243,7 +243,7 @@ describe( 'FlowMcpCli.callTool with FLOWMCP_DEBUG — exercises #resolveHandlers
     } )
 
 
-    it( 'triggers debug logging when FLOWMCP_DEBUG is set and handler resolution fails', async () => {
+    it( 'surfaces the resolution cause when FLOWMCP_DEBUG is set and handler resolution fails', async () => {
         process.env[ 'FLOWMCP_DEBUG' ] = 'true'
 
         const errorSpy = jest.spyOn( console, 'error' ).mockImplementation( () => {} )
@@ -271,7 +271,10 @@ describe( 'FlowMcpCli.callTool with FLOWMCP_DEBUG — exercises #resolveHandlers
     }, 15000 )
 
 
-    it( 'does not log debug output when FLOWMCP_DEBUG is not set', async () => {
+    it( 'still surfaces the resolution cause when FLOWMCP_DEBUG is not set (No Silent Defaults)', async () => {
+        // PRD-015 / Befund B: an unresolvable required library or ref must NOT be silently
+        // swallowed into empty handlers (which later surface as a confusing "No response
+        // received from server"). The cause is reported regardless of FLOWMCP_DEBUG.
         delete process.env[ 'FLOWMCP_DEBUG' ]
 
         const errorSpy = jest.spyOn( console, 'error' ).mockImplementation( () => {} )
@@ -293,7 +296,7 @@ describe( 'FlowMcpCli.callTool with FLOWMCP_DEBUG — exercises #resolveHandlers
                 return isResolveHandler
             } )
 
-        expect( debugMessages.length ).toBe( 0 )
+        expect( debugMessages.length ).toBeGreaterThanOrEqual( 1 )
 
         errorSpy.mockRestore()
     }, 15000 )
