@@ -235,6 +235,7 @@ class FlowMcpCli {
                     process.stdout.write( `  Shared ${index + 1}/${registryShared.length}: ${file}\r` )
 
                     await FlowMcpCli.#downloadSchema( { url: fileUrl, targetPath } )
+                    await FlowMcpCli.#mirrorSharedToLists( { targetPath } )
                 } ), Promise.resolve() )
 
             process.stdout.write( ' '.repeat( 80 ) + '\r' )
@@ -9258,6 +9259,7 @@ allowlist, migrate-config, etc.).
         const resolved = resolve( filePath )
         const startDir = dirname( resolved )
         const maxLevels = 10
+        const listDirNames = [ '_lists', '_shared' ]
 
         const result = Array.from( { 'length': maxLevels } )
             .reduce( ( acc, _, idx ) => {
@@ -9265,10 +9267,12 @@ allowlist, migrate-config, etc.).
                     return acc
                 }
 
-                const candidate = join( acc['current'], '_lists' )
+                const hit = listDirNames
+                    .map( ( name ) => join( acc['current'], name ) )
+                    .find( ( candidate ) => existsSync( candidate ) )
 
-                if( existsSync( candidate ) ) {
-                    return { 'found': true, 'listsDir': candidate, 'current': acc['current'] }
+                if( hit ) {
+                    return { 'found': true, 'listsDir': hit, 'current': acc['current'] }
                 }
 
                 const parent = dirname( acc['current'] )
@@ -9281,6 +9285,27 @@ allowlist, migrate-config, etc.).
             }, { 'found': false, 'listsDir': null, 'current': startDir } )
 
         return { 'listsDir': result['listsDir'] }
+    }
+
+
+    static async #mirrorSharedToLists( { targetPath } ) {
+        const resolved = resolve( targetPath )
+        const parent = dirname( resolved )
+
+        if( basename( parent ) !== '_shared' ) {
+            return { 'mirrored': false, 'reason': 'not-shared-segment' }
+        }
+
+        const listsDir = join( dirname( parent ), '_lists' )
+        const listsPath = join( listsDir, basename( resolved ) )
+        const content = await readFile( resolved, 'utf-8' )
+        const { written, skipped } = await FlowMcpCli.#writeGuarded( {
+            'path': listsPath,
+            content,
+            'onExists': 'skip'
+        } )
+
+        return { 'mirrored': written, skipped }
     }
 
 
