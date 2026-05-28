@@ -284,10 +284,34 @@ const runCommand = async () => {
             return true
         }
 
+        if( subCommand === 'link' ) {
+            const name = positionals[ 2 ]
+            const path = positionals[ 3 ]
+            const { result } = await FlowMcpCli.catalogLink( { name, path } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'unlink' ) {
+            const name = positionals[ 2 ]
+            const { result } = await FlowMcpCli.catalogUnlink( { name } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'sources' ) {
+            const { result } = await FlowMcpCli.catalogSources()
+            output( { result } )
+
+            return true
+        }
+
         const result = {
             'status': false,
             'error': `Unknown catalog command "${subCommand}".`,
-            'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate`
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate | link <name> <path> | unlink <name> | sources`
         }
         output( { result } )
 

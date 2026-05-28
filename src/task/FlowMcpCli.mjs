@@ -2932,7 +2932,9 @@ class FlowMcpCli {
 
         const matchedRouteConfig = ( matchedMain[ 'routes' ] || matchedMain[ 'tools' ] )[ matchedRouteName ]
         const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
-        const matchedSchemaFilePath = matchedFile ? join( FlowMcpCli.#schemasDir(), matchedFile ) : null
+        const { filePath: matchedSchemaFilePath } = matchedFile
+            ? await FlowMcpCli.#resolveSchemaPath( { schemaRef: matchedFile } )
+            : { filePath: null }
         const { sharedLists: matchedSharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': matchedMain, 'filePath': matchedSchemaFilePath } )
         const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters, 'sharedLists': matchedSharedLists } )
 
@@ -3160,13 +3162,12 @@ class FlowMcpCli {
         const matchCount = scoredTools.length
         const showing = Math.min( matchCount, maxResults )
         const limitedTools = scoredTools.slice( 0, maxResults )
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
         const isDetailView = matchCount === 1
 
         const enrichedTools = await limitedTools
             .reduce( ( promise, tool ) => promise.then( async ( acc ) => {
                 const { schemaRef, routeName, name: toolName } = tool
-                const filePath = join( schemasBaseDir, schemaRef )
+                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
 
                 try {
                     const { main } = await FlowMcpCli.#loadSchema( { filePath } )
@@ -3322,12 +3323,11 @@ class FlowMcpCli {
                     } )
 
                 const source = containerSource ? containerSource[ 1 ][ 'source' ] : null
-                const schemasBaseDir = FlowMcpCli.#schemasDir()
 
                 await container[ 'files' ]
                     .reduce( ( fp, file ) => fp.then( async () => {
                         const schemaRef = source ? `${source}/${file}` : file
-                        const filePath = join( schemasBaseDir, schemaRef )
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
                         const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
                         if( main ) {
@@ -3485,8 +3485,7 @@ class FlowMcpCli {
 
         const { toolRef, schemaRef, routeName, description: toolDescription } = matched
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
-        const schemaFilePath = join( schemasBaseDir, schemaRef )
+        const { filePath: schemaFilePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
         const { main } = await FlowMcpCli.#loadSchema( { filePath: schemaFilePath, 'bustCache': force } )
 
         let extractedParameters = {}
@@ -3731,12 +3730,11 @@ class FlowMcpCli {
 
         const tools = []
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
         const sharedListsMap = {}
         await schemas
             .reduce( ( promise, { main, file } ) => promise.then( async () => {
                 if( main && main[ 'sharedLists' ] && main[ 'sharedLists' ].length > 0 && file ) {
-                    const filePath = join( schemasBaseDir, file )
+                    const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef: file } )
                     const { sharedLists: resolved } = await FlowMcpCli.#resolveSharedListsForSchema( { main, filePath } )
                     sharedListsMap[ file ] = resolved
                 }
@@ -5230,6 +5228,62 @@ class FlowMcpCli {
     }
 
 
+    static async #readLocalSources() {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const raw = globalConfig && globalConfig[ 'localSources' ]
+
+        if( raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray( raw ) ) {
+            return { localSources: {} }
+        }
+
+        const localSources = Object.entries( raw )
+            .reduce( ( acc, [ name, entry ] ) => {
+                const path = entry && typeof entry === 'object' ? entry[ 'path' ] : null
+                if( typeof path === 'string' && path.length > 0 ) {
+                    acc[ name ] = { path }
+                }
+
+                return acc
+            }, {} )
+
+        return { localSources }
+    }
+
+
+    static async #resolveSourceDir( { sourceName } ) {
+        const { localSources } = await FlowMcpCli.#readLocalSources()
+        const local = localSources[ sourceName ]
+
+        if( local !== undefined ) {
+            return { sourceDir: local[ 'path' ], isLocal: true }
+        }
+
+        const sourceDir = join( FlowMcpCli.#schemasDir(), sourceName )
+
+        return { sourceDir, isLocal: false }
+    }
+
+
+    static async #resolveSchemaPath( { schemaRef } ) {
+        if( typeof schemaRef !== 'string' || schemaRef.length === 0 ) {
+            return { filePath: join( FlowMcpCli.#schemasDir(), String( schemaRef ) ), isLocal: false }
+        }
+
+        const slashIndex = schemaRef.indexOf( '/' )
+        if( slashIndex === -1 ) {
+            return { filePath: join( FlowMcpCli.#schemasDir(), schemaRef ), isLocal: false }
+        }
+
+        const sourceName = schemaRef.slice( 0, slashIndex )
+        const rest = schemaRef.slice( slashIndex + 1 )
+        const { sourceDir, isLocal } = await FlowMcpCli.#resolveSourceDir( { sourceName } )
+        const filePath = join( sourceDir, rest )
+
+        return { filePath, isLocal }
+    }
+
+
     static #cacheDir() {
         const dir = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'cacheDirName' ] )
 
@@ -6191,7 +6245,6 @@ class FlowMcpCli {
 
     static async #listAvailableTools() {
         const { sources } = await FlowMcpCli.#listSources()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
         const tools = []
 
         await sources
@@ -6202,8 +6255,10 @@ class FlowMcpCli {
                     .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
                         const { file, namespace } = schemaEntry
                         const schemaRef = `${sourceName}/${file}`
-                        const filePath = join( schemasBaseDir, schemaRef )
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
                         const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        const effectiveNamespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : namespace
 
                         const toolEntries = main ? ( main[ 'tools' ] || main[ 'routes' ] ) : null
                         if( main && toolEntries ) {
@@ -6213,7 +6268,7 @@ class FlowMcpCli {
                                     const toolRef = `${schemaRef}::${routeName}`
                                     const { toolName } = FlowMcpCli.#buildToolName( {
                                         routeName,
-                                        'namespace': main[ 'namespace' ] || namespace
+                                        'namespace': effectiveNamespace
                                     } )
 
                                     tools.push( {
@@ -6221,7 +6276,7 @@ class FlowMcpCli {
                                         toolName,
                                         schemaRef,
                                         routeName,
-                                        namespace,
+                                        'namespace': effectiveNamespace,
                                         'description': routeDescription,
                                         'tags': main[ 'tags' ] || [],
                                         'schemaName': main[ 'name' ] || '',
@@ -6235,14 +6290,14 @@ class FlowMcpCli {
                                 .forEach( ( [ resourceName, resourceConfig ] ) => {
                                     const resourceDescription = resourceConfig[ 'description' ] || ''
                                     const toolRef = `${schemaRef}::resource::${resourceName}`
-                                    const toolName = `${resourceName}_${main[ 'namespace' ] || namespace}`
+                                    const toolName = `${resourceName}_${effectiveNamespace}`
 
                                     tools.push( {
                                         toolRef,
                                         toolName,
                                         schemaRef,
                                         'routeName': resourceName,
-                                        namespace,
+                                        'namespace': effectiveNamespace,
                                         'description': resourceDescription,
                                         'tags': main[ 'tags' ] || [],
                                         'schemaName': main[ 'name' ] || '',
@@ -6257,14 +6312,14 @@ class FlowMcpCli {
                                     const skillName = skillDef[ 'name' ] || 'unknown'
                                     const skillDescription = skillDef[ 'description' ] || ''
                                     const toolRef = `${schemaRef}::skill::${skillName}`
-                                    const toolName = `${skillName}_${main[ 'namespace' ] || namespace}`
+                                    const toolName = `${skillName}_${effectiveNamespace}`
 
                                     tools.push( {
                                         toolRef,
                                         toolName,
                                         schemaRef,
                                         'routeName': skillName,
-                                        namespace,
+                                        'namespace': effectiveNamespace,
                                         'description': skillDescription,
                                         'tags': main[ 'tags' ] || [],
                                         'schemaName': main[ 'name' ] || '',
@@ -6923,11 +6978,145 @@ class FlowMcpCli {
     }
 
 
+    static async catalogLink( { name, path } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        if( typeof name !== 'string' || name.trim().length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing source name.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
+            } )
+
+            return { result }
+        }
+
+        if( typeof path !== 'string' || path.trim().length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing source path.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
+            } )
+
+            return { result }
+        }
+
+        const absolutePath = resolve( path )
+        const dirExists = await access( absolutePath )
+            .then( () => true )
+            .catch( () => false )
+
+        if( dirExists === false ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Source path does not exist: ${absolutePath}`,
+                'fix': 'Provide an existing directory that contains FlowMCP schema files.'
+            } )
+
+            return { result }
+        }
+
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfig = existingConfig || {}
+
+        if( !globalConfig[ 'localSources' ] || typeof globalConfig[ 'localSources' ] !== 'object' || Array.isArray( globalConfig[ 'localSources' ] ) ) {
+            globalConfig[ 'localSources' ] = {}
+        }
+
+        globalConfig[ 'localSources' ][ name ] = {
+            'path': absolutePath,
+            'linkedAt': new Date().toISOString()
+        }
+
+        await FlowMcpCli.#writeGlobalConfig( { config: globalConfig } )
+
+        const { sources } = await FlowMcpCli.#listSources()
+        const linked = sources
+            .find( ( source ) => source[ 'name' ] === name )
+
+        const result = {
+            'status': true,
+            'linked': name,
+            'path': absolutePath,
+            'schemaCount': linked ? linked[ 'schemaCount' ] : 0
+        }
+
+        return { result }
+    }
+
+
+    static async catalogUnlink( { name } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+
+            return { result }
+        }
+
+        if( typeof name !== 'string' || name.trim().length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': 'Missing source name.',
+                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog unlink <name>`
+            } )
+
+            return { result }
+        }
+
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfig = existingConfig || {}
+        const localSources = globalConfig[ 'localSources' ]
+
+        if( !localSources || typeof localSources !== 'object' || localSources[ name ] === undefined ) {
+            const result = FlowMcpCli.#error( {
+                'error': `Local source "${name}" is not linked.`,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} catalog sources to see linked sources.`
+            } )
+
+            return { result }
+        }
+
+        delete localSources[ name ]
+        await FlowMcpCli.#writeGlobalConfig( { config: globalConfig } )
+
+        const result = {
+            'status': true,
+            'unlinked': name
+        }
+
+        return { result }
+    }
+
+
+    static async catalogSources() {
+        const { localSources } = await FlowMcpCli.#readLocalSources()
+
+        const linked = Object.entries( localSources )
+            .map( ( [ name, entry ] ) => {
+                const sourceInfo = { name, 'path': entry[ 'path' ] }
+
+                return sourceInfo
+            } )
+
+        const result = {
+            'status': true,
+            'count': linked.length,
+            'sources': linked
+        }
+
+        return { result }
+    }
+
+
     static async #listSources() {
         const schemasBaseDir = FlowMcpCli.#schemasDir()
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
         const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
+        const { localSources } = await FlowMcpCli.#readLocalSources()
 
         let sourceDirs = []
         try {
@@ -6948,11 +7137,15 @@ class FlowMcpCli {
             sourceDirs = []
         }
 
+        const localSourceNames = Object.keys( localSources )
+            .filter( ( name ) => sourceDirs.includes( name ) === false )
+        const allSourceNames = [ ...sourceDirs, ...localSourceNames ]
+
         const sources = []
 
-        await sourceDirs
+        await allSourceNames
             .reduce( ( promise, sourceDir ) => promise.then( async () => {
-                const sourcePath = join( schemasBaseDir, sourceDir )
+                const { sourceDir: sourcePath, isLocal } = await FlowMcpCli.#resolveSourceDir( { sourceName: sourceDir } )
                 const sourceConfig = configSources[ sourceDir ] || {}
                 const { type, repository } = sourceConfig
 
@@ -6972,7 +7165,14 @@ class FlowMcpCli {
                         } )
                 } else {
                     const files = await FlowMcpCli.#listSchemaFiles( { dirPath: sourcePath } )
-                    schemas = files
+                    const schemaCandidates = files
+                        .filter( ( file ) => {
+                            const isSkillDoc = file.includes( '/skills/' ) || file.startsWith( 'skills/' )
+
+                            return isSkillDoc === false
+                        } )
+
+                    schemas = schemaCandidates
                         .map( ( file ) => {
                             const ref = `${sourceDir}/${file}`
                             const schemaInfo = {
@@ -6987,9 +7187,11 @@ class FlowMcpCli {
                         } )
                 }
 
+                const resolvedType = isLocal === true ? 'local' : ( type || 'builtin' )
+
                 const sourceEntry = {
                     'name': sourceDir,
-                    'type': type || 'builtin',
+                    'type': resolvedType,
                     'repository': repository || null,
                     'schemaCount': schemas.length,
                     schemas
@@ -7103,7 +7305,6 @@ class FlowMcpCli {
 
 
     static async #resolveToolRefs( { toolRefs } ) {
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
         const schemaRouteMap = {}
 
         toolRefs
@@ -7122,7 +7323,7 @@ class FlowMcpCli {
 
         await Object.entries( schemaRouteMap )
             .reduce( ( promise, [ schemaRef, routeNames ] ) => promise.then( async () => {
-                const filePath = join( schemasBaseDir, schemaRef )
+                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
                 const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
                 if( main ) {
@@ -9684,7 +9885,6 @@ allowlist, migrate-config, etc.).
 
     static async #loadAllSchemas() {
         const { sources } = await FlowMcpCli.#listSources()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
         const allSchemas = []
 
         await sources
@@ -9692,7 +9892,7 @@ allowlist, migrate-config, etc.).
                 await source[ 'schemas' ]
                     .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
                         const { file } = schemaInfo
-                        const filePath = join( schemasBaseDir, source[ 'name' ], file )
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef: `${source[ 'name' ]}/${file}` } )
                         const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
                         if( main ) {
