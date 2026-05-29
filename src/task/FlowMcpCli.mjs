@@ -5736,7 +5736,7 @@ class FlowMcpCli {
 
         if( !dbExists ) {
             const result = FlowMcpCli.#error( {
-                'error': `RES033: DB unter ${resolvedPath} kann nicht geoeffnet werden (Datei nicht gefunden / korrupt).`,
+                'error': `RES033: DB at ${resolvedPath} cannot be opened (file not found or corrupt).`,
                 'fix': `Place the converted GTFS SQLite at ${resolvedPath} (see gtfs-sqlite-toolkit docs).`
             } )
 
@@ -5775,7 +5775,7 @@ class FlowMcpCli {
             sealResult = FlowMcpAdapter.verifySeal( { 'dbPath': resolvedPath } )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `RES033: DB unter ${resolvedPath} kann nicht geoeffnet werden: ${err.message}`,
+                'error': `RES033: DB at ${resolvedPath} cannot be opened: ${err.message}`,
                 'fix': `Verify the DB file is readable and not corrupt.`
             } )
 
@@ -5785,7 +5785,7 @@ class FlowMcpCli {
         if( !sealResult || sealResult.sealed !== true ) {
             const reason = sealResult ? sealResult.reason : 'UNKNOWN'
             const result = FlowMcpCli.#error( {
-                'error': `RES032: DB unter ${resolvedPath} enthaelt nicht meta.qualitySeal === 'sqlite-gtfs'. Schema abgelehnt. (reason=${reason})`,
+                'error': `RES032: DB at ${resolvedPath} does not contain meta.qualitySeal === 'sqlite-gtfs'. Schema rejected. (reason=${reason})`,
                 'fix': `Convert the GTFS source via gtfs-sqlite-toolkit to obtain a sealed DB.`
             } )
 

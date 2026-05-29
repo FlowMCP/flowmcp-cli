@@ -47,7 +47,7 @@ class PathVariableResolver {
 
         if( unknownFlowMcpVars.length > 0 ) {
             const first = unknownFlowMcpVars[ 0 ]
-            throw new Error( `RES035: ${first} kann nicht aufgeloest werden — unbekannte FlowMCP-Pfad-Variable.` )
+            throw new Error( `RES035: ${first} cannot be resolved — unknown FlowMCP path variable.` )
         }
 
         if( hasFlowMcpResources ) {
