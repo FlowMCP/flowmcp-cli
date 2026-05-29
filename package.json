@@ -3,6 +3,16 @@
     "version": "0.1.0",
     "description": "CLI for developing and validating FlowMCP schemas",
     "type": "module",
+    "license": "MIT",
+    "author": "FlowMCP",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/FlowMCP/flowmcp-cli.git"
+    },
+    "bugs": {
+        "url": "https://github.com/FlowMCP/flowmcp-cli/issues"
+    },
+    "homepage": "https://github.com/FlowMCP/flowmcp-cli#readme",
     "bin": {
         "flowmcp": "./src/index.mjs"
     },
