@@ -49,7 +49,8 @@ const args = parseArgs( {
         'key': { type: 'string' },
         'mode': { type: 'string' },
         'schema': { type: 'string' },
-        'only': { type: 'string' }
+        'only': { type: 'string' },
+        'phase': { type: 'string' }
     }
 } )
 
@@ -507,6 +508,59 @@ const runCommand = async () => {
             outputDir
         } )
         output( { result } )
+
+        return true
+    }
+
+    if( command === 'grading' ) {
+        const subCommand = positionals[ 1 ]
+        const validSubCommands = [ 'import', 'export', 'run', 'state' ]
+
+        if( !subCommand || !validSubCommands.includes( subCommand ) ) {
+            const result = {
+                'status': false,
+                'error': 'Missing or unknown grading sub-command.',
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection>`
+            }
+            output( { result } )
+
+            return true
+        }
+
+        const target = positionals[ 2 ]
+        const phase = values[ 'phase' ] || null
+        const emitPrompts = values[ 'emit-prompts' ] || false
+        const consumeScores = values[ 'consume-scores' ] || null
+        const onConflict = values[ 'on-conflict' ] || null
+        const json = values[ 'json' ] || false
+
+        if( subCommand === 'import' ) {
+            const { result } = await FlowMcpCli.gradingImport( { cwd, 'path': target, onConflict, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'export' ) {
+            const { result } = await FlowMcpCli.gradingExport( { cwd, target, onConflict, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'run' ) {
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'state' ) {
+            const { result } = await FlowMcpCli.gradingState( { cwd, target, json } )
+            output( { result } )
+
+            return true
+        }
 
         return true
     }

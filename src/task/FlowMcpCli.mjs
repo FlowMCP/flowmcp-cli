@@ -10088,6 +10088,22 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Lazy-import for the grading module's public surface (flowmcp-grading/src/index.mjs).
+    // PRODUCTION PIN at push-time (package.json) MUST be:
+    //   "flowmcp-grading": "github:FlowMCP/flowmcp-grading#85c2f621bf0135cddc8e473dc71ebea4bd2fe95f"
+    // Currently pinned to "file:../flowmcp-grading" because the P3 grading work is committed
+    // LOCALLY but NOT yet pushed to GitHub — a github:#<sha> pin would fail to install.
+    static async #loadGradingModule() {
+        if( FlowMcpCli.#gradingOverride ) { return FlowMcpCli.#gradingOverride }
+        try {
+            const grading = await import( 'flowmcp-grading' )
+            return grading
+        } catch {
+            return null
+        }
+    }
+
+
     static #enrichV4WithRuntimeMeta( { main, MetaGenerator } ) {
         const tools = main && main[ 'tools' ] ? main[ 'tools' ] : null
         if( !tools || typeof tools !== 'object' ) { return main }
@@ -11917,6 +11933,69 @@ allowlist, migrate-config, etc.).
 
     static __testInjectV4( { v4 } ) {
         FlowMcpCli.#v4Override = v4
+    }
+
+
+    static #gradingOverride = null
+
+
+    static __testInjectGrading( { grading } ) {
+        FlowMcpCli.#gradingOverride = grading
+    }
+
+
+    // Stub methods — the actual logic (stages, harness handoff) is PRD-011.
+    // Dispatch (PRD-010) routes here; until PRD-011 fills these in, they return
+    // a clear "not implemented yet" result (no silent skip, no throw).
+    static async gradingImport( { cwd, path, onConflict, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        const result = {
+            'status': false,
+            'error': 'grading import is not implemented yet (PRD-011).',
+            'fix': 'Pending PRD-011.',
+            'moduleLoaded': grading !== null
+        }
+
+        return { result }
+    }
+
+
+    static async gradingExport( { cwd, target, onConflict, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        const result = {
+            'status': false,
+            'error': 'grading export is not implemented yet (PRD-011).',
+            'fix': 'Pending PRD-011.',
+            'moduleLoaded': grading !== null
+        }
+
+        return { result }
+    }
+
+
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        const result = {
+            'status': false,
+            'error': 'grading run is not implemented yet (PRD-011).',
+            'fix': 'Pending PRD-011.',
+            'moduleLoaded': grading !== null
+        }
+
+        return { result }
+    }
+
+
+    static async gradingState( { cwd, target, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        const result = {
+            'status': false,
+            'error': 'grading state is not implemented yet (PRD-011).',
+            'fix': 'Pending PRD-011.',
+            'moduleLoaded': grading !== null
+        }
+
+        return { result }
     }
 
 
