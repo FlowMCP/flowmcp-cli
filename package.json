@@ -1,6 +1,6 @@
 {
     "name": "flowmcp-cli",
-    "version": "0.1.0",
+    "version": "4.2.0",
     "description": "CLI for developing and validating FlowMCP schemas",
     "type": "module",
     "license": "MIT",
@@ -33,7 +33,7 @@
         "ethers": "^6.16.0",
         "figlet": "^1.10.0",
         "flowmcp": "github:FlowMCP/flowmcp-core#bca23b1fb8727fb4cd4877b1c0ea94f4ac14acb5",
-        "flowmcp-grading": "github:FlowMCP/flowmcp-grading#e911958e91b75799b6efd78c99ebdbe5da103288",
+        "flowmcp-grading": "github:FlowMCP/flowmcp-grading#v2.0.0",
         "gtfs-sqlite-toolkit": "github:FlowMCP/gtfs-sqlite-toolkit#9a37238e3a5cc11fb53bce90e702b59cb3d24739",
         "inquirer": "^12.3.0"
     },
