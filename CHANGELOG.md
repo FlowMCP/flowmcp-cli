@@ -2,6 +2,14 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.2.0 — 2026-05-31 (Memo 086)
+
+### Changed
+
+- Version aligned to the Schemas-Spec line (`4.2.0`) for traceability — resolves the prior package.json/tag drift (`0.1.0` vs tag `v4.0.0`).
+- `flowmcp-grading` dependency pin moved from a bare commit hash to the `v2.0.0` tag.
+- `grading` command area marked **experimental** in the CLI help (surface may change).
+
 ## Unreleased — 2026-05-18 (Memo 036)
 
 ### Breaking Changes

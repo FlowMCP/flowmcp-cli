@@ -35,3 +35,6 @@ temp/
 .env
 .env.local
 .env.*.local
+
+# Memo strategy docs (project-level, never in repo)
+.memo/

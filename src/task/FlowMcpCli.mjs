@@ -8211,6 +8211,20 @@ Selection Management (v4):
   dev selection show <name>                  Show selection details
   dev selection validate <path>              Validate a selection file
 
+Grading (v2 — experimental; CLI surface may change):
+  grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
+  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit grading prompts (handoff)
+  grading run <ns|selection> --consume-scores <path>
+                                             Stage 3: consume harness scores, rebuild index, finalize
+    --phase <area>                           Restrict grading to a single area / skill
+    --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
+    --grading-data <path>                    Override the island location for this call
+  grading export <ns|selection>              Export graded state (index.json) back to the source
+  grading state <ns|selection>               Show current rollup status (read-only)
+  (also available as "${cmd} grading ..." — the "dev" prefix is optional)
+  Island default: ~/.flowmcp/grading (override via --grading-data,
+    FLOWMCP_GRADING_DATA, or "gradingDataDir" in ~/.flowmcp/config.json)
+
 Shared Lists (v4):
   dev lists list                             List all shared lists
   dev lists show <name>                      Show shared list details
@@ -10088,6 +10102,21 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Lazy-import for the grading module's public surface (flowmcp-grading/src/index.mjs).
+    // Pinned in package.json to a published commit:
+    //   "flowmcp-grading": "github:FlowMCP/flowmcp-grading#e911958e91b75799b6efd78c99ebdbe5da103288"
+    // (For local cross-repo development, swap to "file:../flowmcp-grading".)
+    static async #loadGradingModule() {
+        if( FlowMcpCli.#gradingOverride ) { return FlowMcpCli.#gradingOverride }
+        try {
+            const grading = await import( 'flowmcp-grading' )
+            return grading
+        } catch {
+            return null
+        }
+    }
+
+
     static #enrichV4WithRuntimeMeta( { main, MetaGenerator } ) {
         const tools = main && main[ 'tools' ] ? main[ 'tools' ] : null
         if( !tools || typeof tools !== 'object' ) { return main }
@@ -11917,6 +11946,682 @@ allowlist, migrate-config, etc.).
 
     static __testInjectV4( { v4 } ) {
         FlowMcpCli.#v4Override = v4
+    }
+
+
+    static #gradingOverride = null
+
+
+    static __testInjectGrading( { grading } ) {
+        FlowMcpCli.#gradingOverride = grading
+    }
+
+
+    // PRD-011 — the four grading methods realizing Stages 0/1/2/3.
+    // The CLI is the ONLY component with .env access (REV-14 Kap. 17): it
+    // resolves env + builds serverParams + loads the schema, then hands a flat
+    // { KEY:value } serverParams object to the grading module. The module reads
+    // no .env (G8). Stage 2 (non-deterministic grading) lives in the harness,
+    // NOT here — the CLI only emits the /goal handoff and later consumes scores.
+
+    // Resolve the grading-data island root. Precedence (all explicit, no silent
+    // default):
+    //   1. --grading-data flag (per-call override, cwd-relative)
+    //   2. FLOWMCP_GRADING_DATA env var (cwd-relative / absolute)
+    //   3. "gradingDataDir" in the GLOBAL ~/.flowmcp/config.json (home-relative / absolute)
+    //   4. built-in default ~/.flowmcp/grading
+    // The global config + default live in the user home (single source of truth,
+    // same location as ~/.flowmcp/.env). In tests os.homedir() is mocked into the
+    // repo sandbox, so this never touches the real ~/.flowmcp.
+    static async #gradingDataRoot( { cwd, gradingDataDir } ) {
+        if( typeof gradingDataDir === 'string' && gradingDataDir.length > 0 ) {
+            return resolve( cwd, gradingDataDir )
+        }
+        const envDir = process.env[ 'FLOWMCP_GRADING_DATA' ]
+        if( typeof envDir === 'string' && envDir.length > 0 ) {
+            return resolve( cwd, envDir )
+        }
+        const home = homedir()
+        const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        if( globalConfig !== null && typeof globalConfig[ 'gradingDataDir' ] === 'string' && globalConfig[ 'gradingDataDir' ].length > 0 ) {
+            return resolve( globalConfigDir, globalConfig[ 'gradingDataDir' ] )
+        }
+        return join( globalConfigDir, 'grading' )
+    }
+
+
+    // Build the live validate gate the grading module calls per schema during
+    // import. Reuses the CLI's structural validator (v4-aware). Signature:
+    //   ( { schema, sourcePath } ) -> { valid, errors }
+    // If the v4 module is unavailable we return null so the caller passes
+    // `undefined` to GradingImport.run — the module then falls back to its own
+    // in-module structural gate (no silent skip, an explicit fallback).
+    static async #buildGradingValidateGate() {
+        const v4 = await FlowMcpCli.#loadV4Module()
+        if( !v4 || !v4[ 'MainValidator' ] ) { return { gate: null } }
+
+        const gate = ( { schema, sourcePath } ) => {
+            const file = sourcePath === undefined ? 'unknown' : basename( sourcePath )
+            const checked = FlowMcpCli.#validateSingleSchema( { 'main': schema, file, v4 } )
+
+            return { 'valid': checked.status === true, 'errors': checked.messages === undefined ? [] : checked.messages }
+        }
+
+        return { gate }
+    }
+
+
+    // F29 flow detection — provider vs selection by which island tree holds the
+    // target. Ambiguity (in both / in neither) is a hard error with a copyable
+    // fix (an explicit path). No silent default.
+    static async #detectGradingFlow( { gradingDataRoot, target } ) {
+        const providerDir = join( gradingDataRoot, 'providers', target )
+        const selectionDir = join( gradingDataRoot, 'selections', target )
+        const inProvider = existsSync( providerDir )
+        const inSelection = existsSync( selectionDir )
+
+        if( inProvider === true && inSelection === true ) {
+            return {
+                'status': false,
+                'error': `Ambiguous target "${target}": exists in both providers/ and selections/.`,
+                'fix': `Pass an explicit path, e.g. ${join( 'providers', target )} or ${join( 'selections', target )}.`
+            }
+        }
+
+        if( inProvider === false && inSelection === false ) {
+            return {
+                'status': false,
+                'error': `Target "${target}" found in neither providers/ nor selections/.`,
+                'fix': `Run "grading import <provider-path>" first, or pass an explicit path under ${gradingDataRoot}.`
+            }
+        }
+
+        if( inProvider === true ) {
+            return { 'status': true, 'flow': 'provider', 'tier': 'autonomous', 'maxGrade': 'B', 'targetDir': providerDir }
+        }
+
+        return { 'status': true, 'flow': 'selection', 'tier': 'group-bound', 'maxGrade': 'A', 'targetDir': selectionDir }
+    }
+
+
+    // F16 Dependency-Resolver decision tree (implementation-plan N1, owned by
+    // the CLI). Branches:
+    //   (a) data missing + source exists  -> auto-chain Bereich 1 (import), then back
+    //   (b) quality < stable              -> report only (no silent downgrade)
+    //   (c) source missing                -> hard abort
+    // Downgrade only happens on explicit opt-in (not implemented as silent path).
+    // Returns { status, chain[], ... } — the chain is always logged into the result.
+    static async #resolveGradingDependencies( { gradingDataRoot, flow, target, targetDir, providerPath } ) {
+        const chain = []
+        const indexPath = join( targetDir, 'index.json' )
+        const hasIndex = existsSync( indexPath )
+
+        // (c) source missing — for a provider the source is the providerPath the
+        // user wants imported; for a selection the source is the selection folder
+        // itself. A missing targetDir is a hard abort (caught by F29 already), so
+        // here we only need the missing-source-for-auto-chain branch.
+        if( hasIndex === false ) {
+            if( flow === 'provider' && providerPath !== null && existsSync( providerPath ) === true ) {
+                // (a) data missing + source exists -> auto-chain Bereich 1 (import).
+                chain.push( { 'step': 'auto-chain-import', 'reason': 'index.json missing, provider source present', providerPath } )
+                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': providerPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
+                if( imported.result.status !== true ) {
+                    return {
+                        'status': false,
+                        chain,
+                        'error': `Auto-chain import failed for ${providerPath}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}`,
+                        'fix': 'Fix the provider schemas, then re-run grading.'
+                    }
+                }
+                chain.push( { 'step': 'auto-chain-import', 'status': 'done' } )
+                return { 'status': true, chain }
+            }
+
+            if( flow === 'selection' && existsSync( targetDir ) === true ) {
+                // A selection is authored in-island: its source IS the selection
+                // folder. Build the derived index.json (rebuildSelectionIndex) on
+                // first run instead of aborting.
+                chain.push( { 'step': 'auto-build-selection-index', 'reason': 'index.json missing, selection folder present', targetDir } )
+                const grading = await FlowMcpCli.#loadGradingModule()
+                if( grading === null || grading[ 'RebuildIndex' ] === undefined ) {
+                    return { 'status': false, chain, 'error': 'grading module unavailable for selection index build', 'fix': 'npm install / update the flowmcp-grading dependency' }
+                }
+                const built = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+                if( built.status !== true ) {
+                    return {
+                        'status': false,
+                        chain,
+                        'error': `Selection index build failed: ${( built.errors || [] ).join( '; ' )}`,
+                        'fix': 'Resolve the selection-index errors above and re-run grading.'
+                    }
+                }
+                chain.push( { 'step': 'auto-build-selection-index', 'status': 'done' } )
+                return { 'status': true, chain }
+            }
+
+            // (c) source missing — hard abort.
+            return {
+                'status': false,
+                chain,
+                'error': `No index.json at ${indexPath} and no importable source available.`,
+                'fix': 'Run "grading import <provider-path>" to build the island before grading.'
+            }
+        }
+
+        // (b) quality < stable — report only. Read the rollup status; if it is
+        // below `stable` we surface it but do NOT block emit-prompts (the run is
+        // exactly how a target moves toward stable). The report is in the chain.
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const rollup = index && index[ 'status' ] ? index[ 'status' ] : 'pending'
+        if( rollup !== 'stable' ) {
+            chain.push( { 'step': 'quality-report', 'rollupStatus': rollup, 'note': 'below stable — report only, no downgrade' } )
+        }
+
+        return { 'status': true, chain }
+    }
+
+
+    // F16 case (a) for selection members: a member referenced by the selection but
+    // not yet imported into the island is auto-chained — its namespace is imported
+    // from the explicit `memberSource` providers root, then the selection index is
+    // rebuilt so the member resolves. No hidden default: without `memberSource` the
+    // missing members are only reported (the Pre-Condition gate then blocks).
+    static async #resolveMissingSelectionMembers( { cwd, grading, gradingDataRoot, targetDir, target, memberSource, chain } ) {
+        const indexPath = join( targetDir, 'index.json' )
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        if( index === null || index[ 'members' ] === undefined ) { return { 'status': true } }
+
+        const missing = Object.entries( index[ 'members' ] )
+            .filter( ( entry ) => entry[ 1 ] !== null && entry[ 1 ][ 'reason' ] === 'selection member, not imported' )
+            .map( ( entry ) => entry[ 0 ] )
+        if( missing.length === 0 ) { return { 'status': true } }
+
+        if( typeof memberSource !== 'string' || memberSource.length === 0 ) {
+            chain.push( { 'step': 'member-report', 'missingMembers': missing, 'note': 'members not imported; pass --member-source <providers-root> to auto-chain (no silent import)' } )
+            return { 'status': true }
+        }
+
+        const sourceRoot = resolve( cwd, memberSource )
+        const namespaces = [ ...new Set( missing.map( ( schemaId ) => schemaId.split( '.' )[ 0 ] ) ) ]
+
+        const importErrors = []
+        await namespaces
+            .reduce( ( promise, namespace ) => promise.then( async () => {
+                const nsPath = join( sourceRoot, namespace )
+                if( existsSync( nsPath ) === false ) {
+                    importErrors.push( `F16 case (c): source for namespace '${namespace}' not found under ${sourceRoot}` )
+                    return
+                }
+                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'reason': 'referenced selection member not imported, source present' } )
+                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': nsPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
+                if( imported.result.status !== true ) {
+                    importErrors.push( `member auto-chain import failed for ${namespace}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}` )
+                    return
+                }
+                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'status': 'done' } )
+            } ), Promise.resolve() )
+
+        if( importErrors.length > 0 ) {
+            return { 'status': false, 'error': importErrors.join( '; ' ), 'fix': 'Provide a --member-source root containing the missing member namespaces, or import them manually.' }
+        }
+
+        // Rebuild the selection index so the freshly-imported members resolve.
+        const rebuilt = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+        if( rebuilt.status !== true ) {
+            return { 'status': false, 'error': `Selection index rebuild after member auto-chain failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Inspect the imported members and re-run.' }
+        }
+        return { 'status': true }
+    }
+
+
+    static async gradingImport( { cwd, path, onConflict, gradingDataDir, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null || grading[ 'GradingImport' ] === undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof path !== 'string' || path.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing provider path.', 'fix': 'Usage: flowmcp grading import <provider-path>' } ) }
+        }
+
+        const providerPath = resolve( cwd, path )
+        if( existsSync( providerPath ) === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Provider path not found: ${providerPath}`, 'fix': 'Pass an existing provider folder containing schema .mjs files.' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const { gate } = await FlowMcpCli.#buildGradingValidateGate()
+
+        const run = await grading[ 'GradingImport' ].run( {
+            providerPath,
+            gradingDataRoot,
+            'validateGate': gate === null ? undefined : gate
+        } )
+
+        if( run.status !== true ) {
+            return {
+                'result': {
+                    'status': false,
+                    'error': `Import failed: ${( run.errors || [] ).join( '; ' )}`,
+                    'fix': 'Fix the schema(s) reported above and re-run grading import.',
+                    'namespace': run.namespace,
+                    'errors': run.errors || []
+                }
+            }
+        }
+
+        return {
+            'result': {
+                'status': true,
+                'stage': 0,
+                'namespace': run.namespace,
+                'imported': run.imported,
+                'skipped': run.skipped,
+                'normalizedSkills': run.normalizedSkills,
+                'indexPath': run.indexPath,
+                'gateUsed': gate === null ? 'structural' : 'live-validate'
+            }
+        }
+    }
+
+
+    static async gradingExport( { cwd, target, onConflict, gradingDataDir, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null || grading[ 'GradingExport' ] === undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing export target.', 'fix': 'Usage: flowmcp grading export <namespace|selection>' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        const stamp = new Date().toISOString().replace( /[:.]/g, '-' )
+        const exportDir = join( gradingDataRoot, '_exports', `${target.replace( /\//g, '_' )}--${stamp}` )
+
+        const run = await grading[ 'GradingExport' ].run( {
+            'target': detected.targetDir,
+            exportDir,
+            'includeSchemas': true
+        } )
+
+        if( run.status !== true ) {
+            return {
+                'result': {
+                    'status': false,
+                    'error': `Export failed: ${( run.errors || [] ).join( '; ' )}`,
+                    'fix': 'Resolve the export error above (a pre-existing export folder is never overwritten).',
+                    'errors': run.errors || []
+                }
+            }
+        }
+
+        return {
+            'result': {
+                'status': true,
+                'flow': run.flow,
+                'indexExportPath': run.indexExportPath,
+                'schemaExports': run.schemaExports,
+                exportDir
+            }
+        }
+    }
+
+
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading run <namespace|selection> --emit-prompts | --consume-scores <path>' } ) }
+        }
+
+        // NO SILENT DEFAULT for the mode — exactly one of emit/consume.
+        if( emitPrompts !== true && ( consumeScores === null || consumeScores === undefined ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Mode required: --emit-prompts or --consume-scores <path>.', 'fix': 'Pick exactly one mode (2-phase grading, no default mode).' } ) }
+        }
+        if( emitPrompts === true && consumeScores !== null && consumeScores !== undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Modes are mutually exclusive: pass either --emit-prompts or --consume-scores, not both.', 'fix': 'Run emit-prompts first, then consume-scores in a separate call.' } ) }
+        }
+
+        // NO SILENT DEFAULT for the conflict policy — explicit allowlist.
+        const conflict = onConflict === null || onConflict === undefined ? 'skip' : onConflict
+        const validConflicts = [ 'abort', 'skip', 'overwrite' ]
+        if( validConflicts.includes( conflict ) === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Invalid --on-conflict value: ${conflict}`, 'fix': `Use one of: ${validConflicts.join( ', ' )}.` } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+
+        // F29 flow detection.
+        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        // F16 dependency resolver (auto-chain / report / abort). The chain is
+        // always returned in the result so the orchestration is auditable.
+        const deps = await FlowMcpCli.#resolveGradingDependencies( {
+            gradingDataRoot,
+            'flow': detected.flow,
+            target,
+            'targetDir': detected.targetDir,
+            'providerPath': null
+        } )
+        if( deps.status !== true ) {
+            return { 'result': { 'status': false, 'error': deps.error, 'fix': deps.fix, 'dependencyChain': deps.chain } }
+        }
+
+        // Selection flow: F16 case (a) member auto-chain, then PreConditionCheck.
+        if( detected.flow === 'selection' ) {
+            const resolvedMembers = await FlowMcpCli.#resolveMissingSelectionMembers( {
+                cwd, grading, gradingDataRoot, 'targetDir': detected.targetDir, target, memberSource, 'chain': deps.chain
+            } )
+            if( resolvedMembers.status !== true ) {
+                return { 'result': { 'status': false, 'error': resolvedMembers.error, 'fix': resolvedMembers.fix, 'dependencyChain': deps.chain } }
+            }
+        }
+
+        // Selection flow: PreConditionCheck gate (PRE-004) before Stage 1.
+        if( detected.flow === 'selection' && grading[ 'PreConditionCheck' ] !== undefined ) {
+            const pre = await grading[ 'PreConditionCheck' ].check( { gradingDataRoot, 'selectionId': target } )
+            if( pre.passed !== true ) {
+                return {
+                    'result': {
+                        'status': false,
+                        'error': `Pre-condition not met: ${( pre.errors || [] ).join( '; ' )}`,
+                        'fix': 'Grade every member to `stable` first (no silent skip), then re-run the selection grading.',
+                        'blockedMembers': pre.blockedMembers,
+                        'dependencyChain': deps.chain
+                    }
+                }
+            }
+        }
+
+        if( emitPrompts === true ) {
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'dependencyChain': deps.chain } )
+        }
+
+        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, 'dependencyChain': deps.chain } )
+    }
+
+
+    // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
+    // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
+    // Agent() — Stage 2 lives in the harness.
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, dependencyChain } ) {
+        const namespace = basename( targetDir )
+        const promptsPath = join( targetDir, 'prompts.json' )
+        const statePath = join( targetDir, 'state.json' )
+
+        if( existsSync( promptsPath ) === true && conflict === 'abort' ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
+        }
+        if( existsSync( promptsPath ) === true && conflict === 'skip' ) {
+            return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, dependencyChain } }
+        }
+
+        // Phase-0/1 wiring (REV-14 Kap. 15): resolveEnv -> buildServerParams ->
+        // loadSchema -> resolveSharedLists -> DataPretest.run directly. The CLI is
+        // the only component with .env access; serverParams are flat { KEY:value }.
+        const pretests = []
+        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { targetDir } )
+
+        await schemaDirs
+            .reduce( ( promise, schemaName ) => promise.then( async () => {
+                if( phase !== null && phase !== undefined && phase !== schemaName ) { return }
+
+                const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, targetDir, schemaName } )
+                if( snapshot === null ) {
+                    pretests.push( { schemaName, 'ok': false, 'errors': [ `no resolvable schema snapshot for ${schemaName}` ] } )
+                    return
+                }
+
+                const { main, handlersFn } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
+                if( !main ) {
+                    pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema snapshot: ${snapshot.path}` ] } )
+                    return
+                }
+
+                const { envObject } = await FlowMcpCli.#resolveEnv( { cwd } )
+                const requiredServerParams = Array.isArray( main[ 'requiredServerParams' ] ) ? main[ 'requiredServerParams' ] : []
+                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+                const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': snapshot.path } )
+
+                const pretest = await grading[ 'DataPretest' ].run( {
+                    namespace,
+                    'toolName': schemaName,
+                    main,
+                    handlersFn,
+                    'schemaSnapshotPath': snapshot.path,
+                    serverParams,
+                    sharedLists,
+                    'gradingDataDir': gradingDataRoot
+                } )
+
+                // F26: never persist serverParams or request payloads — only the
+                // schema name, ok-flag and summary path go into the handoff. Missing
+                // keys surface by NAME only (DPT-005), never as a value.
+                pretests.push( {
+                    schemaName,
+                    'ok': pretest.ok,
+                    'passedDownloadable': pretest.passedDownloadable,
+                    'required': pretest.required,
+                    'summaryPath': pretest.summaryPath,
+                    'errors': pretest.errors
+                } )
+            } ), Promise.resolve() )
+
+        // Goal-Block (PromptBuilder) — the completion condition + surfacing
+        // convention that drives the harness /goal loop (Stage 2).
+        const { goalBlock, condition, maxTurns } = grading[ 'PromptBuilder' ].buildGoalBlock( {
+            'condition': `Grade the ${flow} "${target}" (tier ${tier}, max grade ${maxGrade}) across all required areas until every area reaches a stable grade`,
+            'maxTurns': 25
+        } )
+
+        const now = new Date().toISOString()
+        const promptsDoc = {
+            target,
+            flow,
+            tier,
+            maxGrade,
+            namespace,
+            'scoringProtocol': 'v1',
+            'goal': { condition, maxTurns, goalBlock },
+            'pretests': pretests
+        }
+
+        const stateDoc = {
+            target,
+            flow,
+            tier,
+            'status': 'prompts-emitted',
+            'createdAt': now,
+            'lastUpdatedAt': now,
+            'phases': {
+                'promptsEmitted': now,
+                'scoresReceived': null,
+                'gradeComputed': null,
+                'indexRebuilt': null
+            },
+            dependencyChain
+        }
+
+        // Write-safety: atomic + No-Overwrite. prompts respects the explicit
+        // conflict policy; state is a one-time baton (skip if present).
+        const promptsWrite = await FlowMcpCli.#writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), 'onConflict': conflict } )
+        await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': 'skip' } )
+
+        return {
+            'result': {
+                'status': true,
+                'stage': 1,
+                'mode': 'emit-prompts',
+                'skipped': promptsWrite.skipped === true,
+                flow,
+                tier,
+                maxGrade,
+                target,
+                promptsPath,
+                statePath,
+                'pretestCount': pretests.length,
+                dependencyChain
+            }
+        }
+    }
+
+
+    // Stage 3 — consume the harness scores -> grade -> rebuild*Index (5-status)
+    // -> finalize the state baton.
+    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, dependencyChain } ) {
+        const scoresPath = resolve( cwd, consumeScores )
+        if( existsSync( scoresPath ) === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
+        }
+
+        const { data: scoresDoc } = await FlowMcpCli.#readJson( { 'filePath': scoresPath } )
+        if( scoresDoc === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Invalid JSON in scores file: ${scoresPath}`, 'fix': 'The harness must write valid JSON scores.' } ) }
+        }
+        if( Array.isArray( scoresDoc[ 'scores' ] ) === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'See the grading scores schema.' } ) }
+        }
+
+        // Rebuild the 5-status index from the resolved grade snapshots on disk.
+        let rebuilt = null
+        if( flow === 'provider' ) {
+            rebuilt = await grading[ 'RebuildIndex' ].rebuildNamespaceIndex( { 'namespaceDir': targetDir } )
+        } else {
+            rebuilt = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+        }
+
+        if( rebuilt.status !== true ) {
+            return {
+                'result': {
+                    'status': false,
+                    'error': `Index rebuild failed: ${( rebuilt.errors || [] ).join( '; ' )}`,
+                    'fix': 'Resolve the index errors above and re-run consume-scores.',
+                    'errors': rebuilt.errors || [],
+                    dependencyChain
+                }
+            }
+        }
+
+        // Finalize the state baton (overwrite is the deliberate, named end-state).
+        const statePath = join( targetDir, 'state.json' )
+        const now = new Date().toISOString()
+        const { data: prevState } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
+        const stateDoc = prevState === null
+            ? { target, flow, 'createdAt': now, 'phases': {} }
+            : prevState
+        stateDoc[ 'status' ] = 'graded'
+        stateDoc[ 'lastUpdatedAt' ] = now
+        stateDoc[ 'rollupStatus' ] = rebuilt.index[ 'status' ]
+        stateDoc[ 'rollupGrade' ] = rebuilt.index[ 'grade' ]
+        if( stateDoc[ 'phases' ] === undefined ) { stateDoc[ 'phases' ] = {} }
+        stateDoc[ 'phases' ][ 'scoresReceived' ] = now
+        stateDoc[ 'phases' ][ 'gradeComputed' ] = now
+        stateDoc[ 'phases' ][ 'indexRebuilt' ] = now
+        stateDoc[ 'dependencyChain' ] = dependencyChain
+
+        await FlowMcpCli.#writeGuarded( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onExists': 'overwrite' } )
+
+        return {
+            'result': {
+                'status': true,
+                'stage': 3,
+                'mode': 'consume-scores',
+                flow,
+                target,
+                'rollupStatus': rebuilt.index[ 'status' ],
+                'rollupGrade': rebuilt.index[ 'grade' ],
+                'indexPath': rebuilt.indexPath,
+                'scoreCount': scoresDoc[ 'scores' ].length,
+                dependencyChain
+            }
+        }
+    }
+
+
+    // List the schema sub-folders of a provider/selection island (skip _gradings,
+    // _exports, resources, skills, selection and JSON files at the root).
+    static async #listGradingSchemaDirs( { targetDir } ) {
+        const reserved = [ '_gradings', '_exports', 'resources', 'skills', 'selection', 'tools' ]
+        let entries = []
+        try {
+            entries = await readdir( targetDir, { 'withFileTypes': true } )
+        } catch {
+            return []
+        }
+
+        const dirs = entries
+            .filter( ( entry ) => entry.isDirectory() === true )
+            .map( ( entry ) => entry.name )
+            .filter( ( name ) => name.startsWith( '_' ) === false )
+            .filter( ( name ) => reserved.includes( name ) === false )
+            .sort()
+
+        return dirs
+    }
+
+
+    // Resolve the newest schema snapshot for one island schema folder. The B2
+    // grammar puts the snapshot under <schemaName>/schema/<name>--<ts>--<hash>.mjs.
+    static async #resolveLatestSchemaSnapshot( { grading, targetDir, schemaName } ) {
+        const snapshotDir = join( targetDir, schemaName, 'schema' )
+        const resolved = await grading[ 'RebuildIndex' ].resolveLatest( { 'dir': snapshotDir, 'logicalName': schemaName } )
+        if( resolved.status !== true ) { return null }
+
+        return { 'path': resolved.path, 'file': resolved.file }
+    }
+
+
+    static async gradingState( { cwd, target, gradingDataDir, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing state target.', 'fix': 'Usage: flowmcp grading state <namespace|selection>' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        const indexPath = join( detected.targetDir, 'index.json' )
+        const statePath = join( detected.targetDir, 'state.json' )
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const { data: state } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
+
+        return {
+            'result': {
+                'status': true,
+                'flow': detected.flow,
+                'tier': detected.tier,
+                target,
+                'rollupStatus': index === null ? null : index[ 'status' ],
+                'rollupGrade': index === null ? null : index[ 'grade' ],
+                'summary': index === null ? null : index[ 'summary' ],
+                'batonStatus': state === null ? null : state[ 'status' ],
+                'lastUpdatedAt': state === null ? null : state[ 'lastUpdatedAt' ],
+                indexPath,
+                statePath,
+                'indexPresent': index !== null,
+                'statePresent': state !== null
+            }
+        }
     }
 
 

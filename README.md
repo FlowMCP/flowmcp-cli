@@ -92,7 +92,7 @@ npx flowmcp init
 | `flowmcp test user [--route name]` | Test all user schemas with live API calls |
 | `flowmcp test single <path> [--route name]` | Test a single schema file |
 
-### Grading (Memo 036)
+### Schema Grade Report
 
 `flowmcp dev grade` follows a 2-phase file-mode workflow (no API key required — harness produces scores).
 
@@ -111,6 +111,102 @@ For end-to-end grading (wraps both phases + Subagent scoring), use the workbench
 ```
 
 Spec: `flowmcp-spec/spec/v4.0.0/22-scoring-protocol.md`.
+
+### Grading
+
+The `grading` commands run the production grading system (v2) against a
+workbench island. They are reachable both as `flowmcp grading ...` and
+`flowmcp dev grading ...` (the `dev` prefix is optional).
+
+| Command | Description |
+|---------|-------------|
+| `flowmcp grading import <provider-path>` | Import a provider folder into the island (Stage 0) |
+| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff) |
+| `flowmcp grading run <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
+| `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
+| `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
+
+Flags: `--phase <area>` restricts grading to a single area/skill;
+`--on-conflict <abort\|skip\|overwrite>` sets the write-conflict policy
+(default: no overwrite); `--grading-data <path>` overrides the island location
+for a single call.
+
+#### Island location
+
+The grading island defaults to `~/.flowmcp/grading` (alongside the global
+`~/.flowmcp/.env` and `config.json` — the single source of truth). Resolution
+order (all explicit, no silent fallback):
+
+1. `--grading-data <path>` flag (resolved against the current directory)
+2. `FLOWMCP_GRADING_DATA` env var (resolved against the current directory)
+3. `"gradingDataDir"` in `~/.flowmcp/config.json` (resolved against `~/.flowmcp`)
+4. default `~/.flowmcp/grading`
+
+To set a persistent custom location, add to `~/.flowmcp/config.json`:
+
+```json
+{ "gradingDataDir": "grading" }
+```
+
+A relative value is resolved against `~/.flowmcp`; an absolute value is used as-is.
+
+#### Stage model
+
+Grading runs in four stages. The CLI owns Stages 0, 1 and 3; the **harness**
+(your Claude Code agent loop) owns Stage 2.
+
+| Stage | Owner | What happens |
+|-------|-------|--------------|
+| 0 — Intake | CLI | `grading import` validates the provider schemas, snapshots them into the island and normalizes resources/skills |
+| 1 — Deterministic | CLI | `grading run --emit-prompts` runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
+| 2 — Non-deterministic | Harness | The agent loop reads `prompts.json`/`state.json` and grades each area (`start-grade → evaluate → apply-improvement`) — this is the only stage outside the CLI |
+| 3 — Finalize | CLI | `grading run --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
+
+#### Flow auto-detection
+
+The target's path decides the test flow, the tier, and the maximum reachable grade:
+
+- `providers/<target>/` → **provider test** — tier `autonomous`, max **grade B**.
+- `selections/<target>/` → **selection test** — tier `group-bound`, **grade A** reachable.
+- A target that exists under both `providers/` and `selections/` is rejected with
+  an error and a fix hint; pass an explicit path to disambiguate.
+
+#### Handoff to the harness
+
+`grading run --emit-prompts` does not grade non-deterministically itself. It
+writes:
+
+- `prompts.json` — one grading prompt per area, each carrying a Goal-Block.
+- `state.json` — the run baton (which areas are pending/done), updated atomically
+  and never overwritten.
+
+The harness then drives the non-deterministic loop: an `Agent()` runs each
+area's grading prompt against the goal. A small fast evaluator (Haiku) reads
+**only the transcript** — it calls no tools — to decide when the goal is met.
+For this to work, the loop surfaces its progress into the transcript with
+`[GRADING]` lines, for example:
+
+```
+[GRADING] area=single-test/getFirstPrice schema-valid=ok status=graded written=ok
+[GRADING] PROGRESS 7/12
+[GRADING] DONE
+```
+
+When the goal is reached, hand the scores back to the CLI:
+
+```bash
+# Stage 1 — deterministic pretest + emit prompts (provider test)
+flowmcp grading run providers/defillama --emit-prompts
+
+# Stage 2 — harness grades each area (outside the CLI), writing scores
+
+# Stage 3 — consume the harness scores, rebuild the index, finalize
+flowmcp grading run providers/defillama --consume-scores scores.json
+
+# Inspect the rollup, then export the graded state back to the source
+flowmcp grading state providers/defillama
+flowmcp grading export providers/defillama
+```
 
 ### Agent Management
 
@@ -160,17 +256,17 @@ source/file.mjs::routeName   # Single tool from a schema
 
 ## Add-ons
 
-### Konzept
+### Concept
 
-Add-ons sind formatspezifische Adapter, die FlowMCP-CLI bei Bedarf laedt, wenn ein Schema eine Resource mit einem nicht-trivialen Datenformat deklariert. Sie kapseln Wissen, das nicht in die Schema-Definition gehoert — etwa wie eine bestimmte SQLite-DB aufgebaut sein muss, welche Auto-Tools daraus ableitbar sind, oder wie eine Qualitaets-Garantie (Seal) zu pruefen ist.
+Add-ons are format-specific adapters that the FlowMCP CLI loads on demand when a schema declares a resource with a non-trivial data format. They encapsulate knowledge that does not belong in the schema definition — such as how a particular SQLite database must be structured, which auto-tools can be derived from it, or how a quality guarantee (seal) is verified.
 
-Add-ons leben als eigenstaendige GitHub-Repos, nicht als Teil der CLI. Das trennt Schema-Logik (Was wird abgefragt?) von Format-Logik (Wie ist das Format aufgebaut?) und erlaubt parallele Weiterentwicklung. Die CLI laedt Add-ons via `github:`-Shorthand on-demand, sobald ein Schema sie referenziert.
+Add-ons live as standalone GitHub repositories, not as part of the CLI. This separates schema logic (what is being queried?) from format logic (how is the format structured?) and allows both to evolve independently. The CLI loads add-ons via the `github:` shorthand on demand, as soon as a schema references them.
 
-Das Versprechen: ein Schema, das auf ein Add-on zeigt, bekommt automatisch generierte Tools auf einer Datenquelle, die der Add-on als spec-konform und qualitaetsgesichert verifiziert hat. Der Schema-Autor schreibt keinen SQL-Code, der Add-on-Autor keinen Schema-Boilerplate.
+The promise: a schema that points to an add-on automatically gets generated tools on a data source that the add-on has verified as spec-compliant and quality-assured. The schema author writes no SQL code, and the add-on author writes no schema boilerplate.
 
-### Beispiel: sqlite-gtfs
+### Example: sqlite-gtfs
 
-Der erste Add-on ist [`gtfs-sqlite-toolkit`](https://github.com/FlowMCP/gtfs-sqlite-toolkit). Er konvertiert GTFS-Schedule-Feeds (CSV in ZIP) in spec-konforme SQLite-Datenbanken und liefert dazu eine Capability-basierte Auto-Tool-Generierung. Ein Schema referenziert ihn so:
+The first add-on is [`gtfs-sqlite-toolkit`](https://github.com/FlowMCP/gtfs-sqlite-toolkit). It converts GTFS Schedule feeds (CSV in ZIP) into spec-compliant SQLite databases and provides capability-based auto-tool generation. A schema references it like this:
 
 ```javascript
 export const schema = {
@@ -191,11 +287,11 @@ export const schema = {
 }
 ```
 
-`source: 'sqlite-gtfs'` signalisiert der CLI, dass ein Add-on noetig ist. `addon` benennt das Repo, `addonSource` zeigt auf den Bezugsort (immer `github:<org>/<repo>` — keine npm-Registry). `${FLOWMCP_RESOURCES}` ist eine Pfad-Variable (siehe naechsten Abschnitt) und entspricht dem Default `~/.flowmcp/resources/`.
+`source: 'sqlite-gtfs'` signals to the CLI that an add-on is required. `addon` names the repository, `addonSource` points to its location (always `github:<org>/<repo>` — no npm registry). `${FLOWMCP_RESOURCES}` is a path variable (see the next section) and resolves to the default `~/.flowmcp/resources/`.
 
 ### Discovery: ADDON_REGISTRY
 
-Die CLI haelt einen kleinen, in `src/data/addons.mjs` **hardcoded** in V1 gepflegten Registry-Eintrag pro bekanntem `source`-Typ. Ein Eintrag besteht aus drei Feldern:
+The CLI keeps one registry entry per known `source` type, **hardcoded** in `src/data/addons.mjs` in V1. Each entry has three fields:
 
 ```javascript
 export const ADDON_REGISTRY = {
@@ -207,117 +303,117 @@ export const ADDON_REGISTRY = {
 }
 ```
 
-`name` ist der Add-on-Bezeichner (muss mit `addon` im Schema uebereinstimmen), `source` ist der `github:`-Bezugsort, `defaultVersion` ist der Git-Ref, der genutzt wird, wenn das Schema keinen `addonVersion` setzt. In V1 ist die Registry hardcoded; spaetere Versionen koennen sie ueber externe Quellen erweitern.
+`name` is the add-on identifier (must match `addon` in the schema), `source` is the `github:` location, and `defaultVersion` is the Git ref used when the schema does not set an `addonVersion`. In V1 the registry is hardcoded; later versions may extend it from external sources.
 
-Spec-Referenz: [`flowmcp-spec/spec/v4.0.0/13-resources.md`](../flowmcp-spec/spec/v4.0.0/13-resources.md) Abschnitt "SQLite-GTFS Resources".
+Spec reference: [`flowmcp-spec/spec/v4.0.0/13-resources.md`](../flowmcp-spec/spec/v4.0.0/13-resources.md), section "SQLite-GTFS Resources".
 
-Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (`${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Ort `~/.flowmcp/resources/`), [Datenquellen — User-Verantwortung](#datenquellen--user-verantwortung) (DBs werden vom User selbst angelegt).
+Related sections: [Path Variables](#path-variables) (`${FLOWMCP_RESOURCES}`), [FlowMCP Directory Structure](#flowmcp-directory-structure) (default location `~/.flowmcp/resources/`), [Data Sources — User Responsibility](#data-sources--user-responsibility) (databases are created by the user).
 
-## Pfad-Variablen
+## Path Variables
 
-Pfad-Variablen erlauben User-Konfigurierbarkeit, ohne dass ein Schema fuer jeden Setup neu geschrieben werden muss. Sie tauchen typischerweise im `path`-Feld einer Schema-Resource auf — etwa um auf eine lokal abgelegte SQLite-DB zu zeigen, deren Ort der User selbst bestimmt.
+Path variables allow user configurability without rewriting a schema for every setup. They typically appear in the `path` field of a schema resource — for example, to point at a locally stored SQLite database whose location the user decides.
 
-Die CLI loest folgende Variablen auf:
+The CLI resolves the following variables:
 
-| Variable | Aufloesung | Default | Spec-Bezug |
+| Variable | Resolution | Default | Spec Reference |
 |----------|------------|---------|------------|
-| `${FLOWMCP_RESOURCES}` | Env-Var `FLOWMCP_RESOURCES` | `~/.flowmcp/resources/` | Spec-Primitive `main.resources` |
-| `${HOME}` | Env-Var `HOME` | obligatorisch (OS) | — |
-| `~` | Tilde-Expansion auf `$HOME` | obligatorisch (OS) | — |
+| `${FLOWMCP_RESOURCES}` | env var `FLOWMCP_RESOURCES` | `~/.flowmcp/resources/` | spec primitive `main.resources` |
+| `${HOME}` | env var `HOME` | required (OS) | — |
+| `~` | tilde expansion to `$HOME` | required (OS) | — |
 
-Die Aufloesung erfolgt in zwei Stufen: zuerst pruefen, ob die Env-Var gesetzt ist; wenn nicht, den dokumentierten Default einsetzen. Variablen ohne Default (wie `${HOME}`) muessen vom Betriebssystem bereitgestellt sein, sonst greift der Fehlerfall.
+Resolution happens in two steps: first check whether the env var is set; if not, fall back to the documented default. Variables without a default (such as `${HOME}`) must be provided by the operating system, otherwise the error case applies.
 
-### Fehler `RES035`
+### Error `RES035`
 
-Wenn die CLI eine Variable nicht aufloesen kann — etwa weil eine unbekannte Variable im `path` steht oder eine Env-Var ohne Default leer ist — bricht `flowmcp add` mit `RES035` ab. User beheben das, indem sie die Env-Var explizit setzen (`export FLOWMCP_RESOURCES=/path/to/dir`) oder die DB an den Default-Ort verschieben.
+When the CLI cannot resolve a variable — for example because an unknown variable appears in the `path`, or an env var without a default is empty — `flowmcp add` aborts with `RES035`. Users fix this by setting the env var explicitly (`export FLOWMCP_RESOURCES=/path/to/dir`) or by moving the database to the default location.
 
-### Namens-Familie `FLOWMCP_*`
+### The `FLOWMCP_*` Name Family
 
-Pfad-Variablen folgen dem Pattern Spec-Primitive-Name → Variablen-Name. `${FLOWMCP_RESOURCES}` bindet direkt an das Spec-Primitive `main.resources` und etabliert die `FLOWMCP_*`-Namensfamilie. Zukuenftige Erweiterungen sind absehbar — etwa `${FLOWMCP_LOGS}` fuer Log-Verzeichnisse oder `${FLOWMCP_CACHE}` als expliziter Cache-Hook. In V1 ist nur `${FLOWMCP_RESOURCES}` implementiert.
+Path variables follow the pattern spec-primitive name → variable name. `${FLOWMCP_RESOURCES}` binds directly to the spec primitive `main.resources` and establishes the `FLOWMCP_*` name family. Future extensions are foreseeable — such as `${FLOWMCP_LOGS}` for log directories or `${FLOWMCP_CACHE}` as an explicit cache hook. In V1 only `${FLOWMCP_RESOURCES}` is implemented.
 
-Beispiel fuer einen alternativen Ort:
+Example for an alternative location:
 
 ```bash
 export FLOWMCP_RESOURCES=/Volumes/MyData/flowmcp
 flowmcp add gtfsde-transit-v2
 ```
 
-Verwandte Abschnitte: [Add-ons](#add-ons) (Schema-Beispiele mit `${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Aufloesung).
+Related sections: [Add-ons](#add-ons) (schema examples with `${FLOWMCP_RESOURCES}`), [FlowMCP Directory Structure](#flowmcp-directory-structure) (default resolution).
 
-## Datenquellen — User-Verantwortung
+## Data Sources — User Responsibility
 
-FlowMCP verteilt **keine** Provider-Daten in seinen oeffentlichen Repos. Das hat drei Gruende, die alle gleichzeitig gelten.
+FlowMCP distributes **no** provider data in its public repositories. There are three reasons, all of which apply at once.
 
-**Lizenz.** GTFS-Feeds und vergleichbare Provider-Datensaetze unterliegen jeweils eigenen Lizenz-Bedingungen — von CC BY 4.0 ueber custom EULAs bis zu Provider-spezifischen Klauseln. Wer die Daten in ein Public-Repo legt, verschiebt diese Konformitaets-Pflicht ungewollt auf das Repo und alle Forks. FlowMCP vermeidet das, indem die Daten beim User bleiben.
+**License.** GTFS feeds and comparable provider datasets are each subject to their own license terms — from CC BY 4.0 through custom EULAs to provider-specific clauses. Putting the data into a public repository unintentionally shifts this compliance obligation onto the repository and all its forks. FlowMCP avoids this by keeping the data with the user.
 
-**Skalierung.** Reale Provider-Feeds erreichen 40 MB und mehr (DB Bahn FV-Schedule liegt bei ~50 MB, regionale VBB-Feeds darueber). Solche Datenmengen im Git-History blaehen jedes Clone-Setup auf und machen den Repo schwerfaellig. Code und Daten gehoeren in unterschiedliche Lebenszyklen.
+**Scale.** Real provider feeds reach 40 MB and more (the DB Bahn FV schedule is around 50 MB, regional VBB feeds larger still). Such data volumes in the Git history bloat every clone and make the repository unwieldy. Code and data belong in different lifecycles.
 
-**Aktualitaet.** Feeds werden taeglich oder woechentlich aktualisiert. Ein Repo-State waere immer veraltet — der User muesste regelmaessig pruefen, ob die im Repo enthaltene Version noch der Realitaet entspricht. Sauberer ist es, wenn der User direkt vom Provider zieht und konvertiert.
+**Freshness.** Feeds are updated daily or weekly. A repository state would always be outdated — the user would have to check regularly whether the version bundled in the repository still matches reality. It is cleaner for the user to pull and convert directly from the provider.
 
-### User-Workflow
+### User Workflow
 
-Der Weg von einem Provider-Feed zu einer von FlowMCP nutzbaren DB hat vier Schritte:
+The path from a provider feed to a database usable by FlowMCP has four steps:
 
-1. **Download** des GTFS-Feeds vom Provider (Beispiele: `gtfs.de/de/feeds/`, regionale Open-Data-Portale, Provider-eigene Download-Seiten)
-2. **Konvertierung** via Add-on `gtfs-sqlite-toolkit` (siehe Add-on-README fuer den genauen Aufruf)
-3. **Ablage** der DB unter `${FLOWMCP_RESOURCES}/<name>.db` (Default `~/.flowmcp/resources/<name>.db`)
-4. **Aktivierung** via `flowmcp add <schema>`
+1. **Download** the GTFS feed from the provider (examples: `gtfs.de/de/feeds/`, regional open-data portals, provider-owned download pages)
+2. **Convert** via the `gtfs-sqlite-toolkit` add-on (see the add-on README for the exact invocation)
+3. **Store** the database at `${FLOWMCP_RESOURCES}/<name>.db` (default `~/.flowmcp/resources/<name>.db`)
+4. **Activate** via `flowmcp add <schema>`
 
-Konkrete Befehlsbeispiele:
+Concrete command examples:
 
 ```bash
-# 1. GTFS-Feed laden (Beispiel)
+# 1. Download the GTFS feed (example)
 curl -O https://download.gtfs.de/germany/free/latest.zip
 
-# 2. Konvertieren via Add-on (siehe gtfs-sqlite-toolkit README)
+# 2. Convert via the add-on (see gtfs-sqlite-toolkit README)
 cd ~/code/gtfs-sqlite-toolkit
 node convert.mjs --input=~/Downloads/latest.zip --output=~/.flowmcp/resources/gtfs-de.db
 
-# 3. Optional: DB an anderen Ort verschieben
-#    (wenn ${FLOWMCP_RESOURCES} nicht auf den Default zeigt)
+# 3. Optional: move the database to a different location
+#    (when ${FLOWMCP_RESOURCES} does not point at the default)
 
-# 4. Schema aktivieren
+# 4. Activate the schema
 flowmcp add gtfsde-transit-v2
 ```
 
-### Pre-Push-Schutz
+### Pre-Push Protection
 
-Das Add-on-Repo (`gtfs-sqlite-toolkit`) liefert ein Verifikations-Skript `scripts/check-no-provider-data.sh`, das vor jedem Commit bzw. Push grosse oder provider-spezifische Dateien erkennt und den Push abbricht. Diese Policy gilt auch fuer User-Forks — wer mitarbeitet, sollte das Skript in eigene Pre-Push-Hooks einbinden.
+The add-on repository (`gtfs-sqlite-toolkit`) ships a verification script `scripts/check-no-provider-data.sh` that detects large or provider-specific files before each commit or push and aborts the push. This policy also applies to user forks — contributors should wire the script into their own pre-push hooks.
 
-Wer ein Schema fuer einen neuen Provider beitragen moechte, liefert **nur das Schema und die Pfad-Variable** — niemals den Feed selbst.
+Anyone contributing a schema for a new provider supplies **only the schema and the path variable** — never the feed itself.
 
-Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (Schritt 3 nutzt `${FLOWMCP_RESOURCES}`), [FlowMCP-Verzeichnis-Struktur](#flowmcp-verzeichnis-struktur) (Default-Ablage-Ort), [Add-ons](#add-ons) (Schritt 2 erfordert ein Add-on).
+Related sections: [Path Variables](#path-variables) (step 3 uses `${FLOWMCP_RESOURCES}`), [FlowMCP Directory Structure](#flowmcp-directory-structure) (default storage location), [Add-ons](#add-ons) (step 2 requires an add-on).
 
-## FlowMCP-Verzeichnis-Struktur
+## FlowMCP Directory Structure
 
-FlowMCP nutzt ein zentrales User-Verzeichnis `~/.flowmcp/`, das ueber alle Projekte hinweg konsistent ist. Es haelt API-Keys, Cache und User-Resources an einem Ort — projekt-lokal koennen einzelne Werte ueberschrieben werden, der Default-Lookup bleibt zentral.
+FlowMCP uses a central user directory `~/.flowmcp/` that stays consistent across all projects. It holds API keys, cache, and user resources in one place — individual values can be overridden per project, while the default lookup stays central.
 
 ```
 ~/.flowmcp/
 ├── .env             ← API Keys (Single Source of Truth)
 ├── cache/           ← Schema cache (CLI-managed)
-└── resources/       ← User DBs (NEW — Default fuer ${FLOWMCP_RESOURCES}, ab Memo 051)
+└── resources/       ← User DBs (default for ${FLOWMCP_RESOURCES})
 ```
 
-| Pfad | Zweck | Verwaltung | Quer-Verweis |
+| Path | Purpose | Managed By | Cross-Reference |
 |------|-------|------------|--------------|
-| `~/.flowmcp/.env` | API Keys, Provider-Credentials | User (manuell) | Memo 032 Credentials Management |
-| `~/.flowmcp/cache/` | Schema-Cache, Add-on-Cache | CLI (automatisch) | — |
-| `~/.flowmcp/resources/` | User-DBs (z.B. konvertierte GTFS) | User (manuell oder via Add-on) | `${FLOWMCP_RESOURCES}` Default |
+| `~/.flowmcp/.env` | API keys, provider credentials | user (manual) | see the `.env` section below |
+| `~/.flowmcp/cache/` | schema cache, add-on cache | CLI (automatic) | — |
+| `~/.flowmcp/resources/` | user databases (e.g. converted GTFS) | user (manual or via add-on) | `${FLOWMCP_RESOURCES}` default |
 
 ### `.env` — Single Source of Truth
 
-Die globale `~/.flowmcp/.env` ist die Single Source of Truth fuer API-Keys aller FlowMCP-Tools. Sie wird vom User manuell gepflegt; die CLI legt sie nie automatisch an und ueberschreibt nie. Projekt-lokal kann ein Override unter `projects/<name>/.flowmcp/.env` abgelegt werden — der Lookup-Pfad ist erst projekt-lokal, dann global (siehe Memo 032 fuer das Credential-Modell).
+The global `~/.flowmcp/.env` is the single source of truth for the API keys of all FlowMCP tools. It is maintained manually by the user; the CLI never creates it automatically and never overwrites it. A project-local override can be placed at `projects/<name>/.flowmcp/.env` — the lookup path is project-local first, then global.
 
-### `resources/` — Default fuer `${FLOWMCP_RESOURCES}`
+### `resources/` — Default for `${FLOWMCP_RESOURCES}`
 
-Das Verzeichnis `~/.flowmcp/resources/` ist mit Memo 051 hinzugekommen und dient als Default-Aufloesung fuer die Pfad-Variable `${FLOWMCP_RESOURCES}`. User koennen die Env-Var auf einen anderen Ort setzen — etwa eine externe Festplatte oder ein zentrales Datenlaufwerk — die CLI loest dann dynamisch dorthin auf.
+The directory `~/.flowmcp/resources/` is the default resolution for the path variable `${FLOWMCP_RESOURCES}`. Users can set the env var to a different location — such as an external drive or a central data volume — and the CLI then resolves dynamically to that location.
 
 ```bash
 export FLOWMCP_RESOURCES=/Volumes/MyData/flowmcp
 ```
 
-Verwandte Abschnitte: [Pfad-Variablen](#pfad-variablen) (Aufloesungs-Logik), [Datenquellen — User-Verantwortung](#datenquellen--user-verantwortung) (warum die DBs hier landen, nicht im Repo).
+Related sections: [Path Variables](#path-variables) (resolution logic), [Data Sources — User Responsibility](#data-sources--user-responsibility) (why the databases live here, not in the repository).
 
 ## Global Flags
 
