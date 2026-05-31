@@ -12054,6 +12054,28 @@ allowlist, migrate-config, etc.).
                 return { 'status': true, chain }
             }
 
+            if( flow === 'selection' && existsSync( targetDir ) === true ) {
+                // A selection is authored in-island: its source IS the selection
+                // folder. Build the derived index.json (rebuildSelectionIndex) on
+                // first run instead of aborting.
+                chain.push( { 'step': 'auto-build-selection-index', 'reason': 'index.json missing, selection folder present', targetDir } )
+                const grading = await FlowMcpCli.#loadGradingModule()
+                if( grading === null || grading[ 'RebuildIndex' ] === undefined ) {
+                    return { 'status': false, chain, 'error': 'grading module unavailable for selection index build', 'fix': 'npm install / update the flowmcp-grading dependency' }
+                }
+                const built = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+                if( built.status !== true ) {
+                    return {
+                        'status': false,
+                        chain,
+                        'error': `Selection index build failed: ${( built.errors || [] ).join( '; ' )}`,
+                        'fix': 'Resolve the selection-index errors above and re-run grading.'
+                    }
+                }
+                chain.push( { 'step': 'auto-build-selection-index', 'status': 'done' } )
+                return { 'status': true, chain }
+            }
+
             // (c) source missing — hard abort.
             return {
                 'status': false,
@@ -12073,6 +12095,59 @@ allowlist, migrate-config, etc.).
         }
 
         return { 'status': true, chain }
+    }
+
+
+    // F16 case (a) for selection members: a member referenced by the selection but
+    // not yet imported into the island is auto-chained — its namespace is imported
+    // from the explicit `memberSource` providers root, then the selection index is
+    // rebuilt so the member resolves. No hidden default: without `memberSource` the
+    // missing members are only reported (the Pre-Condition gate then blocks).
+    static async #resolveMissingSelectionMembers( { cwd, grading, gradingDataRoot, targetDir, target, memberSource, chain } ) {
+        const indexPath = join( targetDir, 'index.json' )
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        if( index === null || index[ 'members' ] === undefined ) { return { 'status': true } }
+
+        const missing = Object.entries( index[ 'members' ] )
+            .filter( ( entry ) => entry[ 1 ] !== null && entry[ 1 ][ 'reason' ] === 'selection member, not imported' )
+            .map( ( entry ) => entry[ 0 ] )
+        if( missing.length === 0 ) { return { 'status': true } }
+
+        if( typeof memberSource !== 'string' || memberSource.length === 0 ) {
+            chain.push( { 'step': 'member-report', 'missingMembers': missing, 'note': 'members not imported; pass --member-source <providers-root> to auto-chain (no silent import)' } )
+            return { 'status': true }
+        }
+
+        const sourceRoot = resolve( cwd, memberSource )
+        const namespaces = [ ...new Set( missing.map( ( schemaId ) => schemaId.split( '.' )[ 0 ] ) ) ]
+
+        const importErrors = []
+        await namespaces
+            .reduce( ( promise, namespace ) => promise.then( async () => {
+                const nsPath = join( sourceRoot, namespace )
+                if( existsSync( nsPath ) === false ) {
+                    importErrors.push( `F16 case (c): source for namespace '${namespace}' not found under ${sourceRoot}` )
+                    return
+                }
+                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'reason': 'referenced selection member not imported, source present' } )
+                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': nsPath, 'onConflict': null, 'json': true } )
+                if( imported.result.status !== true ) {
+                    importErrors.push( `member auto-chain import failed for ${namespace}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}` )
+                    return
+                }
+                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'status': 'done' } )
+            } ), Promise.resolve() )
+
+        if( importErrors.length > 0 ) {
+            return { 'status': false, 'error': importErrors.join( '; ' ), 'fix': 'Provide a --member-source root containing the missing member namespaces, or import them manually.' }
+        }
+
+        // Rebuild the selection index so the freshly-imported members resolve.
+        const rebuilt = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+        if( rebuilt.status !== true ) {
+            return { 'status': false, 'error': `Selection index rebuild after member auto-chain failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Inspect the imported members and re-run.' }
+        }
+        return { 'status': true }
     }
 
 
@@ -12175,7 +12250,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12219,6 +12294,16 @@ allowlist, migrate-config, etc.).
         } )
         if( deps.status !== true ) {
             return { 'result': { 'status': false, 'error': deps.error, 'fix': deps.fix, 'dependencyChain': deps.chain } }
+        }
+
+        // Selection flow: F16 case (a) member auto-chain, then PreConditionCheck.
+        if( detected.flow === 'selection' ) {
+            const resolvedMembers = await FlowMcpCli.#resolveMissingSelectionMembers( {
+                cwd, grading, gradingDataRoot, 'targetDir': detected.targetDir, target, memberSource, 'chain': deps.chain
+            } )
+            if( resolvedMembers.status !== true ) {
+                return { 'result': { 'status': false, 'error': resolvedMembers.error, 'fix': resolvedMembers.fix, 'dependencyChain': deps.chain } }
+            }
         }
 
         // Selection flow: PreConditionCheck gate (PRE-004) before Stage 1.

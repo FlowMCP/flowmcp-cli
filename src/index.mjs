@@ -50,7 +50,8 @@ const args = parseArgs( {
         'mode': { type: 'string' },
         'schema': { type: 'string' },
         'only': { type: 'string' },
-        'phase': { type: 'string' }
+        'phase': { type: 'string' },
+        'member-source': { type: 'string' }
     }
 } )
 
@@ -528,11 +529,12 @@ const runCommand = async () => {
         }
 
         const target = positionals[ 2 ]
-        const phase = values[ 'phase' ] || null
-        const emitPrompts = values[ 'emit-prompts' ] || false
-        const consumeScores = values[ 'consume-scores' ] || null
-        const onConflict = values[ 'on-conflict' ] || null
-        const json = values[ 'json' ] || false
+        const phase = values[ 'phase' ] === undefined ? null : values[ 'phase' ]
+        const emitPrompts = values[ 'emit-prompts' ] === true
+        const consumeScores = values[ 'consume-scores' ] === undefined ? null : values[ 'consume-scores' ]
+        const onConflict = values[ 'on-conflict' ] === undefined ? null : values[ 'on-conflict' ]
+        const memberSource = values[ 'member-source' ] === undefined ? null : values[ 'member-source' ]
+        const json = values[ 'json' ] === true
 
         if( subCommand === 'import' ) {
             const { result } = await FlowMcpCli.gradingImport( { cwd, 'path': target, onConflict, json } )
@@ -549,7 +551,7 @@ const runCommand = async () => {
         }
 
         if( subCommand === 'run' ) {
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, json } )
             output( { result } )
 
             return true
