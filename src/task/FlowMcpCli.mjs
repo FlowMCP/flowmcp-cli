@@ -10103,10 +10103,9 @@ allowlist, migrate-config, etc.).
 
 
     // Lazy-import for the grading module's public surface (flowmcp-grading/src/index.mjs).
-    // PRODUCTION PIN at push-time (package.json) MUST be:
-    //   "flowmcp-grading": "github:FlowMCP/flowmcp-grading#85c2f621bf0135cddc8e473dc71ebea4bd2fe95f"
-    // Currently pinned to "file:../flowmcp-grading" because the P3 grading work is committed
-    // LOCALLY but NOT yet pushed to GitHub — a github:#<sha> pin would fail to install.
+    // Pinned in package.json to a published commit:
+    //   "flowmcp-grading": "github:FlowMCP/flowmcp-grading#e911958e91b75799b6efd78c99ebdbe5da103288"
+    // (For local cross-repo development, swap to "file:../flowmcp-grading".)
     static async #loadGradingModule() {
         if( FlowMcpCli.#gradingOverride ) { return FlowMcpCli.#gradingOverride }
         try {
