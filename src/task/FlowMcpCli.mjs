@@ -8211,7 +8211,7 @@ Selection Management (v4):
   dev selection show <name>                  Show selection details
   dev selection validate <path>              Validate a selection file
 
-Grading (v2):
+Grading (v2 — experimental; CLI surface may change):
   grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
   grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit grading prompts (handoff)
   grading run <ns|selection> --consume-scores <path>
