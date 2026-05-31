@@ -114,9 +114,9 @@ Spec: `flowmcp-spec/spec/v4.0.0/22-scoring-protocol.md`.
 
 ### Grading
 
-The `grading` commands run the production grading system (v2) against a local
-workbench island under `grading-data/`. They are reachable both as
-`flowmcp grading ...` and `flowmcp dev grading ...` (the `dev` prefix is optional).
+The `grading` commands run the production grading system (v2) against a
+workbench island. They are reachable both as `flowmcp grading ...` and
+`flowmcp dev grading ...` (the `dev` prefix is optional).
 
 | Command | Description |
 |---------|-------------|
@@ -126,9 +126,29 @@ workbench island under `grading-data/`. They are reachable both as
 | `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
 | `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
 
-Flags for `run`: `--phase <area>` restricts grading to a single area/skill;
+Flags: `--phase <area>` restricts grading to a single area/skill;
 `--on-conflict <abort\|skip\|overwrite>` sets the write-conflict policy
-(default: no overwrite).
+(default: no overwrite); `--grading-data <path>` overrides the island location
+for a single call.
+
+#### Island location
+
+The grading island defaults to `~/.flowmcp/grading` (alongside the global
+`~/.flowmcp/.env` and `config.json` — the single source of truth). Resolution
+order (all explicit, no silent fallback):
+
+1. `--grading-data <path>` flag (resolved against the current directory)
+2. `FLOWMCP_GRADING_DATA` env var (resolved against the current directory)
+3. `"gradingDataDir"` in `~/.flowmcp/config.json` (resolved against `~/.flowmcp`)
+4. default `~/.flowmcp/grading`
+
+To set a persistent custom location, add to `~/.flowmcp/config.json`:
+
+```json
+{ "gradingDataDir": "grading" }
+```
+
+A relative value is resolved against `~/.flowmcp`; an absolute value is used as-is.
 
 #### Stage model
 

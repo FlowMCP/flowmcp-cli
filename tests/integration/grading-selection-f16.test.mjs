@@ -35,7 +35,7 @@ beforeEach( async () => {
     root = await mkdtemp( join( tmpdir(), 'sel-f16-' ) )
     cwd = root
     // Island with a selection that references an un-imported member demo.thing.
-    const selDef = join( root, 'grading-data', 'selections', 'cryptotest', 'selection' )
+    const selDef = join( root, '.flowmcp', 'grading','selections', 'cryptotest', 'selection' )
     await mkdir( selDef, { recursive: true } )
     await writeFile(
         join( selDef, 'cryptotest--2026-01-01T00-00-00Z--abcd1234.json' ),
@@ -56,7 +56,7 @@ afterEach( async () => {
 describe( 'grading run <selection> — F16 case (a) member auto-chain', () => {
     it( 'auto-builds the selection index and auto-chains the missing member when --member-source is given', async () => {
         const { result } = await FlowMcpCli.gradingRun( {
-            cwd, target: 'cryptotest', phase: null, emitPrompts: true,
+            cwd, gradingDataDir: '.flowmcp/grading', target: 'cryptotest', phase: null, emitPrompts: true,
             consumeScores: null, onConflict: null, memberSource: memberSourceRoot, json: true
         } )
 
@@ -67,7 +67,7 @@ describe( 'grading run <selection> — F16 case (a) member auto-chain', () => {
         const done = chain.some( ( s ) => s.step === 'member-auto-chain' && s.status === 'done' )
         expect( done ).toBe( true )
         // The missing member's namespace was imported into the island.
-        expect( existsSync( join( root, 'grading-data', 'providers', 'demo', 'thing' ) ) ).toBe( true )
+        expect( existsSync( join( root, '.flowmcp', 'grading','providers', 'demo', 'thing' ) ) ).toBe( true )
         // Pre-Condition still blocks (member imported but not stable) — no silent pass.
         expect( result.status ).toBe( false )
         expect( result.error ).toContain( 'PRE-004' )
@@ -75,7 +75,7 @@ describe( 'grading run <selection> — F16 case (a) member auto-chain', () => {
 
     it( 'reports the missing member (no silent import) when --member-source is absent', async () => {
         const { result } = await FlowMcpCli.gradingRun( {
-            cwd, target: 'cryptotest', phase: null, emitPrompts: true,
+            cwd, gradingDataDir: '.flowmcp/grading', target: 'cryptotest', phase: null, emitPrompts: true,
             consumeScores: null, onConflict: null, memberSource: null, json: true
         } )
 
@@ -84,7 +84,7 @@ describe( 'grading run <selection> — F16 case (a) member auto-chain', () => {
         expect( report ).toBeDefined()
         expect( report.missingMembers ).toContain( 'demo.thing' )
         // No source -> the member was NOT imported.
-        expect( existsSync( join( root, 'grading-data', 'providers', 'demo' ) ) ).toBe( false )
+        expect( existsSync( join( root, '.flowmcp', 'grading','providers', 'demo' ) ) ).toBe( false )
         expect( result.status ).toBe( false )
     } )
 } )

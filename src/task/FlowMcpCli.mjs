@@ -8218,9 +8218,12 @@ Grading (v2):
                                              Stage 3: consume harness scores, rebuild index, finalize
     --phase <area>                           Restrict grading to a single area / skill
     --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
+    --grading-data <path>                    Override the island location for this call
   grading export <ns|selection>              Export graded state (index.json) back to the source
   grading state <ns|selection>               Show current rollup status (read-only)
   (also available as "${cmd} grading ..." — the "dev" prefix is optional)
+  Island default: ~/.flowmcp/grading (override via --grading-data,
+    FLOWMCP_GRADING_DATA, or "gradingDataDir" in ~/.flowmcp/config.json)
 
 Shared Lists (v4):
   dev lists list                             List all shared lists
@@ -11962,8 +11965,30 @@ allowlist, migrate-config, etc.).
     // no .env (G8). Stage 2 (non-deterministic grading) lives in the harness,
     // NOT here — the CLI only emits the /goal handoff and later consumes scores.
 
-    static #gradingDataRoot( { cwd } ) {
-        return resolve( cwd, 'grading-data' )
+    // Resolve the grading-data island root. Precedence (all explicit, no silent
+    // default):
+    //   1. --grading-data flag (per-call override, cwd-relative)
+    //   2. FLOWMCP_GRADING_DATA env var (cwd-relative / absolute)
+    //   3. "gradingDataDir" in the GLOBAL ~/.flowmcp/config.json (home-relative / absolute)
+    //   4. built-in default ~/.flowmcp/grading
+    // The global config + default live in the user home (single source of truth,
+    // same location as ~/.flowmcp/.env). In tests os.homedir() is mocked into the
+    // repo sandbox, so this never touches the real ~/.flowmcp.
+    static async #gradingDataRoot( { cwd, gradingDataDir } ) {
+        if( typeof gradingDataDir === 'string' && gradingDataDir.length > 0 ) {
+            return resolve( cwd, gradingDataDir )
+        }
+        const envDir = process.env[ 'FLOWMCP_GRADING_DATA' ]
+        if( typeof envDir === 'string' && envDir.length > 0 ) {
+            return resolve( cwd, envDir )
+        }
+        const home = homedir()
+        const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        if( globalConfig !== null && typeof globalConfig[ 'gradingDataDir' ] === 'string' && globalConfig[ 'gradingDataDir' ].length > 0 ) {
+            return resolve( globalConfigDir, globalConfig[ 'gradingDataDir' ] )
+        }
+        return join( globalConfigDir, 'grading' )
     }
 
 
@@ -12041,7 +12066,7 @@ allowlist, migrate-config, etc.).
             if( flow === 'provider' && providerPath !== null && existsSync( providerPath ) === true ) {
                 // (a) data missing + source exists -> auto-chain Bereich 1 (import).
                 chain.push( { 'step': 'auto-chain-import', 'reason': 'index.json missing, provider source present', providerPath } )
-                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': providerPath, 'onConflict': null, 'json': true } )
+                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': providerPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
                 if( imported.result.status !== true ) {
                     return {
                         'status': false,
@@ -12130,7 +12155,7 @@ allowlist, migrate-config, etc.).
                     return
                 }
                 chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'reason': 'referenced selection member not imported, source present' } )
-                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': nsPath, 'onConflict': null, 'json': true } )
+                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': nsPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
                 if( imported.result.status !== true ) {
                     importErrors.push( `member auto-chain import failed for ${namespace}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}` )
                     return
@@ -12151,7 +12176,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingImport( { cwd, path, onConflict, json } ) {
+    static async gradingImport( { cwd, path, onConflict, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'GradingImport' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12166,7 +12191,7 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': `Provider path not found: ${providerPath}`, 'fix': 'Pass an existing provider folder containing schema .mjs files.' } ) }
         }
 
-        const gradingDataRoot = FlowMcpCli.#gradingDataRoot( { cwd } )
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const { gate } = await FlowMcpCli.#buildGradingValidateGate()
 
         const run = await grading[ 'GradingImport' ].run( {
@@ -12202,7 +12227,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingExport( { cwd, target, onConflict, json } ) {
+    static async gradingExport( { cwd, target, onConflict, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'GradingExport' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12212,7 +12237,7 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': 'Missing export target.', 'fix': 'Usage: flowmcp grading export <namespace|selection>' } ) }
         }
 
-        const gradingDataRoot = FlowMcpCli.#gradingDataRoot( { cwd } )
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
@@ -12250,7 +12275,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12275,7 +12300,7 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': `Invalid --on-conflict value: ${conflict}`, 'fix': `Use one of: ${validConflicts.join( ', ' )}.` } ) }
         }
 
-        const gradingDataRoot = FlowMcpCli.#gradingDataRoot( { cwd } )
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
 
         // F29 flow detection.
         const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
@@ -12560,7 +12585,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingState( { cwd, target, json } ) {
+    static async gradingState( { cwd, target, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12570,7 +12595,7 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': 'Missing state target.', 'fix': 'Usage: flowmcp grading state <namespace|selection>' } ) }
         }
 
-        const gradingDataRoot = FlowMcpCli.#gradingDataRoot( { cwd } )
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
