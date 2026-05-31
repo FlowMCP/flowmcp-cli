@@ -57,52 +57,69 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
     } )
 
     it( 'routes a valid sub-command to its method (run)', async () => {
+        // PRD-011: the method now requires a mode flag. Without --emit-prompts /
+        // --consume-scores it returns the no-default-mode error (not a stub).
         const { stdout } = await runCli( { 'args': [ 'grading', 'run', 'demo/ns', '--phase', 'P1' ] } )
         const parsed = JSON.parse( stdout )
 
         expect( parsed[ 'status' ] ).toBe( false )
-        expect( parsed[ 'error' ] ).toContain( 'grading run is not implemented yet' )
+        expect( parsed[ 'error' ] ).toContain( 'Mode required' )
     } )
 } )
 
 
-describe( 'grading methods — module injection + argument pass-through', () => {
+describe( 'grading methods — module guard + input validation', () => {
     afterEach( () => {
         FlowMcpCli.__testInjectGrading( { 'grading': null } )
     } )
 
-    it( 'loads the injected grading module for gradingImport', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingImport': {} } } )
+    it( 'gradingImport aborts when the grading module is unavailable', async () => {
+        FlowMcpCli.__testInjectGrading( { 'grading': { 'NotGradingImport': {} } } )
         const { result } = await FlowMcpCli.gradingImport( { 'cwd': '/tmp', 'path': 'x', 'onConflict': null, 'json': false } )
 
-        expect( result[ 'moduleLoaded' ] ).toBe( true )
         expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toBe( 'grading module unavailable' )
     } )
 
-    it( 'loads the injected grading module for gradingExport', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingExport': {} } } )
-        const { result } = await FlowMcpCli.gradingExport( { 'cwd': '/tmp', 'target': 'ns', 'onConflict': null, 'json': false } )
+    it( 'gradingImport reports a missing provider path', async () => {
+        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingImport': { 'run': async () => ( {} ) } } } )
+        const { result } = await FlowMcpCli.gradingImport( { 'cwd': '/tmp', 'path': '', 'onConflict': null, 'json': false } )
 
-        expect( result[ 'moduleLoaded' ] ).toBe( true )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'Missing provider path' )
     } )
 
-    it( 'loads the injected grading module for gradingRun', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'gradeSelection': () => {} } } )
-        const { result } = await FlowMcpCli.gradingRun( { 'cwd': '/tmp', 'target': 'ns', 'phase': 'P1', 'emitPrompts': false, 'consumeScores': null, 'onConflict': null, 'json': false } )
+    it( 'gradingExport reports a missing target', async () => {
+        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingExport': { 'run': async () => ( {} ) } } } )
+        const { result } = await FlowMcpCli.gradingExport( { 'cwd': '/tmp', 'target': '', 'onConflict': null, 'json': false } )
 
-        expect( result[ 'moduleLoaded' ] ).toBe( true )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'Missing export target' )
     } )
 
-    it( 'loads the injected grading module for gradingState', async () => {
+    it( 'gradingRun requires a mode flag (no silent default)', async () => {
+        FlowMcpCli.__testInjectGrading( { 'grading': { 'RebuildIndex': {} } } )
+        const { result } = await FlowMcpCli.gradingRun( { 'cwd': '/tmp', 'target': 'ns', 'phase': null, 'emitPrompts': false, 'consumeScores': null, 'onConflict': null, 'json': false } )
+
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'Mode required' )
+    } )
+
+    it( 'gradingState reports a missing target', async () => {
         FlowMcpCli.__testInjectGrading( { 'grading': { 'ModuleApi': {} } } )
-        const { result } = await FlowMcpCli.gradingState( { 'cwd': '/tmp', 'target': 'ns', 'json': false } )
+        const { result } = await FlowMcpCli.gradingState( { 'cwd': '/tmp', 'target': '', 'json': false } )
 
-        expect( result[ 'moduleLoaded' ] ).toBe( true )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'Missing state target' )
     } )
 
     it( 'resolves the real flowmcp-grading module via lazy import (no injection)', async () => {
-        const { result } = await FlowMcpCli.gradingState( { 'cwd': '/tmp', 'target': 'ns', 'json': false } )
+        // No injection -> the lazy import resolves the real module. With a
+        // nonexistent target the flow-detection error proves the module loaded
+        // and the method ran past the module guard.
+        const { result } = await FlowMcpCli.gradingState( { 'cwd': '/tmp', 'target': 'does-not-exist', 'json': false } )
 
-        expect( result[ 'moduleLoaded' ] ).toBe( true )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'found in neither' )
     } )
 } )
