@@ -8211,6 +8211,17 @@ Selection Management (v4):
   dev selection show <name>                  Show selection details
   dev selection validate <path>              Validate a selection file
 
+Grading (v2):
+  grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
+  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit grading prompts (handoff)
+  grading run <ns|selection> --consume-scores <path>
+                                             Stage 3: consume harness scores, rebuild index, finalize
+    --phase <area>                           Restrict grading to a single area / skill
+    --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
+  grading export <ns|selection>              Export graded state (index.json) back to the source
+  grading state <ns|selection>               Show current rollup status (read-only)
+  (also available as "${cmd} grading ..." — the "dev" prefix is optional)
+
 Shared Lists (v4):
   dev lists list                             List all shared lists
   dev lists show <name>                      Show shared list details

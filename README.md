@@ -92,7 +92,7 @@ npx flowmcp init
 | `flowmcp test user [--route name]` | Test all user schemas with live API calls |
 | `flowmcp test single <path> [--route name]` | Test a single schema file |
 
-### Grading (Memo 036)
+### Schema Grade Report
 
 `flowmcp dev grade` follows a 2-phase file-mode workflow (no API key required — harness produces scores).
 
@@ -111,6 +111,82 @@ For end-to-end grading (wraps both phases + Subagent scoring), use the workbench
 ```
 
 Spec: `flowmcp-spec/spec/v4.0.0/22-scoring-protocol.md`.
+
+### Grading
+
+The `grading` commands run the production grading system (v2) against a local
+workbench island under `grading-data/`. They are reachable both as
+`flowmcp grading ...` and `flowmcp dev grading ...` (the `dev` prefix is optional).
+
+| Command | Description |
+|---------|-------------|
+| `flowmcp grading import <provider-path>` | Import a provider folder into the island (Stage 0) |
+| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff) |
+| `flowmcp grading run <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
+| `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
+| `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
+
+Flags for `run`: `--phase <area>` restricts grading to a single area/skill;
+`--on-conflict <abort\|skip\|overwrite>` sets the write-conflict policy
+(default: no overwrite).
+
+#### Stage model
+
+Grading runs in four stages. The CLI owns Stages 0, 1 and 3; the **harness**
+(your Claude Code agent loop) owns Stage 2.
+
+| Stage | Owner | What happens |
+|-------|-------|--------------|
+| 0 — Intake | CLI | `grading import` validates the provider schemas, snapshots them into the island and normalizes resources/skills |
+| 1 — Deterministic | CLI | `grading run --emit-prompts` runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
+| 2 — Non-deterministic | Harness | The agent loop reads `prompts.json`/`state.json` and grades each area (`start-grade → evaluate → apply-improvement`) — this is the only stage outside the CLI |
+| 3 — Finalize | CLI | `grading run --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
+
+#### Flow auto-detection
+
+The target's path decides the test flow, the tier, and the maximum reachable grade:
+
+- `providers/<target>/` → **provider test** — tier `autonomous`, max **grade B**.
+- `selections/<target>/` → **selection test** — tier `group-bound`, **grade A** reachable.
+- A target that exists under both `providers/` and `selections/` is rejected with
+  an error and a fix hint; pass an explicit path to disambiguate.
+
+#### Handoff to the harness
+
+`grading run --emit-prompts` does not grade non-deterministically itself. It
+writes:
+
+- `prompts.json` — one grading prompt per area, each carrying a Goal-Block.
+- `state.json` — the run baton (which areas are pending/done), updated atomically
+  and never overwritten.
+
+The harness then drives the non-deterministic loop: an `Agent()` runs each
+area's grading prompt against the goal. A small fast evaluator (Haiku) reads
+**only the transcript** — it calls no tools — to decide when the goal is met.
+For this to work, the loop surfaces its progress into the transcript with
+`[GRADING]` lines, for example:
+
+```
+[GRADING] area=single-test/getFirstPrice schema-valid=ok status=graded written=ok
+[GRADING] PROGRESS 7/12
+[GRADING] DONE
+```
+
+When the goal is reached, hand the scores back to the CLI:
+
+```bash
+# Stage 1 — deterministic pretest + emit prompts (provider test)
+flowmcp grading run providers/defillama --emit-prompts
+
+# Stage 2 — harness grades each area (outside the CLI), writing scores
+
+# Stage 3 — consume the harness scores, rebuild the index, finalize
+flowmcp grading run providers/defillama --consume-scores scores.json
+
+# Inspect the rollup, then export the graded state back to the source
+flowmcp grading state providers/defillama
+flowmcp grading export providers/defillama
+```
 
 ### Agent Management
 
