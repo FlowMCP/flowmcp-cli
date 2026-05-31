@@ -491,29 +491,6 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'grade' ) {
-        const gradePath = positionals[ 1 ]
-        const emitPrompts = values[ 'emit-prompts' ] || false
-        const consumeScores = values[ 'consume-scores' ] || null
-        const workdir = values[ 'workdir' ] || null
-        const reportsDir = values[ 'reports-dir' ] || null
-        const onConflict = values[ 'on-conflict' ] || 'skip'
-        const outputDir = values[ 'output' ] || null
-        const { result } = await FlowMcpCli.grade( {
-            cwd,
-            'path': gradePath,
-            emitPrompts,
-            consumeScores,
-            workdir,
-            reportsDir,
-            onConflict,
-            outputDir
-        } )
-        output( { result } )
-
-        return true
-    }
-
     if( command === 'grading' ) {
         const subCommand = positionals[ 1 ]
         const validSubCommands = [ 'import', 'export', 'run', 'state' ]
