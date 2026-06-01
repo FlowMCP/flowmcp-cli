@@ -8131,7 +8131,7 @@ Execution:
 
 Development & Schema Maintenance:
   ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
-                                      (validate, test, grade, allowlist, migrate-config,
+                                      (validate, test, allowlist, migrate-config,
                                        selection, lists, schemas, import, update, status,
                                        group, prompt, resource, etc.)
 
@@ -8281,7 +8281,7 @@ ${cmd} list
 
 ## Development Commands
 
-Run \`${cmd} dev --help\` for development commands (validate, test, grade,
+Run \`${cmd} dev --help\` for development commands (validate, test,
 allowlist, migrate-config, etc.).
 `
 

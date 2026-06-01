@@ -92,26 +92,6 @@ npx flowmcp init
 | `flowmcp test user [--route name]` | Test all user schemas with live API calls |
 | `flowmcp test single <path> [--route name]` | Test a single schema file |
 
-### Schema Grade Report
-
-`flowmcp dev grade` follows a 2-phase file-mode workflow (no API key required — harness produces scores).
-
-| Command | Description |
-|---------|-------------|
-| `flowmcp dev grade <path> --emit-prompts [--workdir D]` | **Phase 1**: write `prompts.json` + `state.json` |
-| `flowmcp dev grade <path> --consume-scores <scores.json>` | **Phase 2**: compute grade, write report |
-| `--reports-dir <path>` | Override reports directory (default: `proofs/grade-reports/`) |
-| `--on-conflict <skip\|abort>` | NO-OVERWRITE strategy (default: `skip`) |
-
-For end-to-end grading (wraps both phases + Subagent scoring), use the workbench skills:
-
-```bash
-/grade-score-single --schema schemas/mudab/marine-data.mjs
-/grade-score-batch --schemas grade-list.txt
-```
-
-Spec: `flowmcp-spec/spec/v4.0.0/22-scoring-protocol.md`.
-
 ### Grading
 
 The `grading` commands run the production grading system (v2) against a

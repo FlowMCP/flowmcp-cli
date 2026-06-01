@@ -37,8 +37,6 @@ const args = parseArgs( {
         'output': { type: 'string' },
         'emit-prompts': { type: 'boolean' },
         'consume-scores': { type: 'string' },
-        'workdir': { type: 'string' },
-        'reports-dir': { type: 'string' },
         'on-conflict': { type: 'string' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
