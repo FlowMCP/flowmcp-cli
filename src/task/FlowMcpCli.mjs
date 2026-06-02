@@ -10,7 +10,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir, stat, access, unlink, rename } from 'node:fs/promises'
-import { join, resolve, basename, extname, dirname } from 'node:path'
+import { join, resolve, basename, extname, dirname, relative, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
@@ -8218,11 +8218,14 @@ Grading (v2 — experimental; CLI surface may change):
     --phase <area>                           Restrict grading to a single area / skill
     --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
     --grading-data <path>                    Override the island location for this call
+    --export-dir <path>                      Override the export destination root for this call
   grading export <ns|selection>              Export graded state (index.json) back to the source
   grading state <ns|selection>               Show current rollup status (read-only)
   (also available as "${cmd} grading ..." — the "dev" prefix is optional)
   Island default: ~/.flowmcp/grading (override via --grading-data,
     FLOWMCP_GRADING_DATA, or "gradingDataDir" in ~/.flowmcp/config.json)
+  Export default: <island>/_exports (override via --export-dir,
+    FLOWMCP_GRADING_EXPORT, or "gradingExportDir" in ~/.flowmcp/config.json)
 
 Shared Lists (v4):
   dev lists list                             List all shared lists
@@ -11990,6 +11993,75 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Resolve the grading EXPORT root. Mirrors #gradingDataRoot exactly (PRD-007).
+    // Precedence (all explicit, no silent default):
+    //   1. --export-dir flag (per-call override, cwd-relative)
+    //   2. FLOWMCP_GRADING_EXPORT env var (cwd-relative / absolute)
+    //   3. "gradingExportDir" in the GLOBAL ~/.flowmcp/config.json (home-relative / absolute)
+    //   4. built-in default <gradingDataRoot>/_exports (backward-compatible)
+    // The string-and-non-empty type check on each level is explicit: a malformed
+    // (non-string / empty) value does NOT collapse to the default; it falls
+    // through to the next documented level. No `||`-default anywhere.
+    static async #gradingExportRoot( { cwd, gradingExportDir, gradingDataRoot } ) {
+        if( typeof gradingExportDir === 'string' && gradingExportDir.length > 0 ) {
+            return resolve( cwd, gradingExportDir )
+        }
+        const envDir = process.env[ 'FLOWMCP_GRADING_EXPORT' ]
+        if( typeof envDir === 'string' && envDir.length > 0 ) {
+            return resolve( cwd, envDir )
+        }
+        const home = homedir()
+        const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        if( globalConfig !== null && typeof globalConfig[ 'gradingExportDir' ] === 'string' && globalConfig[ 'gradingExportDir' ].length > 0 ) {
+            return resolve( globalConfigDir, globalConfig[ 'gradingExportDir' ] )
+        }
+        return join( gradingDataRoot, '_exports' )
+    }
+
+
+    // Repo-relative rendering for any path surfaced to the caller / logs / commit
+    // (FlowMCP global rule: only relative paths, never usernames/system paths).
+    // When the absolute path lies under cwd, return relative( cwd, path ). When it
+    // lies under the user home, collapse the home prefix to `~`. Otherwise return
+    // the path unchanged (already relative, or an unrelated absolute we cannot
+    // safely rewrite — explicit, no silent home-leak heuristic beyond these two).
+    static #toRepoRelativePath( { cwd, path } ) {
+        if( typeof path !== 'string' || path.length === 0 ) { return path }
+        if( !isAbsolute( path ) ) { return path }
+
+        const rel = relative( cwd, path )
+        if( rel.length > 0 && !rel.startsWith( '..' ) && !isAbsolute( rel ) ) {
+            return rel
+        }
+
+        const home = homedir()
+        if( path === home ) { return '~' }
+        if( path.startsWith( `${home}/` ) ) {
+            return `~/${path.slice( home.length + 1 )}`
+        }
+
+        return path
+    }
+
+
+    // Rewrite every absolute/home path embedded in a message string into its
+    // repo-relative / home-collapsed form (PRD-007 §3.8). Operates token-wise so a
+    // message like "...already exists: /Users/x/y" surfaces "...already exists: ~/y".
+    static #relativizeMessagePaths( { cwd, message } ) {
+        if( typeof message !== 'string' || message.length === 0 ) { return message }
+        return message
+            .split( ' ' )
+            .map( ( token ) => {
+                const stripped = token.replace( /[.,;:]+$/, '' )
+                const trailing = token.slice( stripped.length )
+                if( !isAbsolute( stripped ) ) { return token }
+                return `${FlowMcpCli.#toRepoRelativePath( { cwd, path: stripped } )}${trailing}`
+            } )
+            .join( ' ' )
+    }
+
+
     // Build the live validate gate the grading module calls per schema during
     // import. Reuses the CLI's structural validator (v4-aware). Signature:
     //   ( { schema, sourcePath } ) -> { valid, errors }
@@ -12225,7 +12297,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingExport( { cwd, target, onConflict, gradingDataDir, json } ) {
+    static async gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'GradingExport' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12241,8 +12313,9 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
+        const exportRoot = await FlowMcpCli.#gradingExportRoot( { cwd, gradingExportDir, gradingDataRoot } )
         const stamp = new Date().toISOString().replace( /[:.]/g, '-' )
-        const exportDir = join( gradingDataRoot, '_exports', `${target.replace( /\//g, '_' )}--${stamp}` )
+        const exportDir = join( exportRoot, `${target.replace( /\//g, '_' )}--${stamp}` )
 
         const run = await grading[ 'GradingExport' ].run( {
             'target': detected.targetDir,
@@ -12251,23 +12324,31 @@ allowlist, migrate-config, etc.).
         } )
 
         if( run.status !== true ) {
+            // Path-hardening (§3.8): rewrite any absolute/home path embedded in the
+            // module's error strings to a repo-relative / ~-collapsed form before
+            // it is surfaced to the caller / logged / committed.
+            const safeErrors = ( run.errors || [] )
+                .map( ( e ) => FlowMcpCli.#relativizeMessagePaths( { cwd, message: e } ) )
             return {
                 'result': {
                     'status': false,
-                    'error': `Export failed: ${( run.errors || [] ).join( '; ' )}`,
+                    'error': `Export failed: ${safeErrors.join( '; ' )}`,
                     'fix': 'Resolve the export error above (a pre-existing export folder is never overwritten).',
-                    'errors': run.errors || []
+                    'errors': safeErrors
                 }
             }
         }
 
+        // Path-hardening (§3.7): only the repo-relative form of the export paths is
+        // surfaced. The absolute form was used internally for the filesystem ops.
         return {
             'result': {
                 'status': true,
                 'flow': run.flow,
-                'indexExportPath': run.indexExportPath,
-                'schemaExports': run.schemaExports,
-                exportDir
+                'indexExportPath': FlowMcpCli.#toRepoRelativePath( { cwd, path: run.indexExportPath } ),
+                'schemaExports': ( run.schemaExports || [] )
+                    .map( ( s ) => ( { ...s, 'exportPath': FlowMcpCli.#toRepoRelativePath( { cwd, path: s.exportPath } ) } ) ),
+                'exportDir': FlowMcpCli.#toRepoRelativePath( { cwd, path: exportDir } )
             }
         }
     }

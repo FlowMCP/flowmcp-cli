@@ -50,7 +50,8 @@ const args = parseArgs( {
         'only': { type: 'string' },
         'phase': { type: 'string' },
         'member-source': { type: 'string' },
-        'grading-data': { type: 'string' }
+        'grading-data': { type: 'string' },
+        'export-dir': { type: 'string' }
     }
 } )
 
@@ -511,6 +512,7 @@ const runCommand = async () => {
         const onConflict = values[ 'on-conflict' ] === undefined ? null : values[ 'on-conflict' ]
         const memberSource = values[ 'member-source' ] === undefined ? null : values[ 'member-source' ]
         const gradingDataDir = values[ 'grading-data' ] === undefined ? null : values[ 'grading-data' ]
+        const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const json = values[ 'json' ] === true
 
         if( subCommand === 'import' ) {
@@ -521,7 +523,7 @@ const runCommand = async () => {
         }
 
         if( subCommand === 'export' ) {
-            const { result } = await FlowMcpCli.gradingExport( { cwd, target, onConflict, gradingDataDir, json } )
+            const { result } = await FlowMcpCli.gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } )
             output( { result } )
 
             return true
