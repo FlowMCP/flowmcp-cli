@@ -2,7 +2,8 @@ export default {
     transform: {},
     setupFiles: [
         '<rootDir>/tests/setup/global-home-mock.mjs',
-        '<rootDir>/tests/setup/path-guard.mjs'
+        '<rootDir>/tests/setup/path-guard.mjs',
+        '<rootDir>/tests/setup/mock-httpbin.mjs'
     ],
     globalTeardown: '<rootDir>/tests/setup/global-teardown.mjs',
     testMatch: [
