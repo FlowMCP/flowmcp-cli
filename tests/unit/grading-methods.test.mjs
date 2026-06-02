@@ -226,6 +226,61 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
         expect( state.phases.promptsEmitted ).not.toBeNull()
     } )
 
+    it( 'Memo 097 PA-1: emits composed areas[] (not just a goalBlock) with maxIterations default 1', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+
+        const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
+
+        const prompts = JSON.parse( await readFile( result.promptsPath, 'utf-8' ) )
+
+        // maxIterations defaults to 1 (opt-in higher) — replaces the historical fixed 3.
+        expect( prompts.maxIterations ).toBe( 1 )
+
+        // areas[] is the new top-level contract: one entry per provider area.
+        expect( Array.isArray( prompts.areas ) ).toBe( true )
+        expect( prompts.areas.length ).toBe( 6 )
+
+        // The neutral areas carry a fully composed prompt (PromptBuilder.build), not
+        // merely the goalBlock — they include a rendered question block.
+        const neutral = prompts.areas.filter( ( a ) => a.deferred === false )
+        expect( neutral.length ).toBeGreaterThan( 0 )
+        neutral.forEach( ( a ) => {
+            expect( typeof a.prompt ).toBe( 'string' )
+            expect( a.prompt.length ).toBeGreaterThan( 100 )
+            expect( a.prompt.includes( '## Questions' ) ).toBe( true )
+        } )
+
+        // Backward-compatible: goal + pretests remain intact.
+        expect( prompts.goal.goalBlock ).toContain( 'Goal-Block' )
+        expect( Array.isArray( prompts.pretests ) ).toBe( true )
+    } )
+
+
+    it( 'Memo 097 PA-1: --max-iterations opt-in higher is threaded into prompts.json', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+
+        const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: '3', json: false } )
+
+        const prompts = JSON.parse( await readFile( result.promptsPath, 'utf-8' ) )
+        expect( prompts.maxIterations ).toBe( 3 )
+    } )
+
+
+    it( 'Memo 097 PA-1: rejects a non-integer --max-iterations (no silent default)', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+
+        const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: 'lots', json: false } )
+
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'max-iterations' )
+    } )
+
+
     it( 'F26: persisted pretest handoff carries no request field and no key value', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )

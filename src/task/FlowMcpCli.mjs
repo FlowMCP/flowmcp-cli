@@ -12627,10 +12627,17 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        // NO SILENT DEFAULT: maxIterations is opt-in. Absent → 1 (single pass, the
+        // documented default). A supplied value must parse to a positive integer.
+        const { maxIterations: maxIterationsResolved, error: maxIterationsError } = FlowMcpCli.#resolveMaxIterations( { maxIterations } )
+        if( maxIterationsError !== null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': maxIterationsError, 'fix': 'Pass --max-iterations as a positive integer (default 1).' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
@@ -12700,17 +12707,48 @@ allowlist, migrate-config, etc.).
         }
 
         if( emitPrompts === true ) {
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'maxIterations': maxIterationsResolved, 'dependencyChain': deps.chain } )
         }
 
         return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, 'dependencyChain': deps.chain } )
     }
 
 
+    // Improvement-loop bound. Memo 097 Kap. 9.0 fix #3: the historical fixed
+    // value was 3; the new default is 1 (single pass), higher is opt-in. Absent
+    // means default; a supplied value must parse to a positive integer.
+    static #resolveMaxIterations( { maxIterations } ) {
+        if( maxIterations === null || maxIterations === undefined ) {
+            return { 'maxIterations': 1, 'error': null }
+        }
+        const parsed = Number( maxIterations )
+        if( Number.isInteger( parsed ) === false || parsed < 1 ) {
+            return { 'maxIterations': null, 'error': `Invalid --max-iterations value: ${maxIterations}` }
+        }
+
+        return { 'maxIterations': parsed, 'error': null }
+    }
+
+
+    // Compose one prompt per grading area via the AreaPromptLoader (Memo 097
+    // Kap. 9.0). The loader reuses PromptBuilder.build and resolves the package-
+    // local prompts/ tree itself, so the CLI does not guess paths.
+    static async #composeGradingAreas( { grading, flow } ) {
+        const AreaPromptLoader = grading[ 'AreaPromptLoader' ]
+        if( AreaPromptLoader === undefined || AreaPromptLoader === null ) {
+            throw new Error( 'AreaPromptLoader unavailable from flowmcp-grading — update the dependency.' )
+        }
+        const { promptsRoot } = AreaPromptLoader.getPromptsRoot()
+        const { areas } = await AreaPromptLoader.loadAllAreas( { promptsRoot, flow } )
+
+        return { areas }
+    }
+
+
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, maxIterations, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
@@ -12780,6 +12818,13 @@ allowlist, migrate-config, etc.).
             'maxTurns': 25
         } )
 
+        // Memo 097 Kap. 9.0 fix #1: compose ONE prompt per area via the
+        // AreaPromptLoader (which reuses PromptBuilder.build), not only the
+        // goalBlock. Neutral areas are composed deterministically here; persona-
+        // required areas are surfaced as deferred entries (harness composes them
+        // with the resolved domain/selection persona — no invented persona).
+        const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow } )
+
         const now = new Date().toISOString()
         const promptsDoc = {
             target,
@@ -12788,7 +12833,9 @@ allowlist, migrate-config, etc.).
             maxGrade,
             namespace,
             'scoringProtocol': 'v1',
+            maxIterations,
             'goal': { condition, maxTurns, goalBlock },
+            areas,
             'pretests': pretests
         }
 
