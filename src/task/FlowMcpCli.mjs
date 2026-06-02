@@ -3387,7 +3387,11 @@ class FlowMcpCli {
 
             // Resolve the schema files corresponding to refsToAdd so the guard
             // checks only those exact schemas (not the whole namespace).
+            // refSchemaMap keeps the ref -> schemaRef relation so a degraded
+            // (key-gated) schema can be removed from refsToAdd after the guard
+            // partitions keyless vs key-gated (Memo 092 PRD-L, keyless-first).
             const schemaFilesForGuard = []
+            const refSchemaMap = {}
             refsToAdd
                 .forEach( ( ref ) => {
                     const toolEntry = index[ 'tools' ] && index[ 'tools' ][ ref ]
@@ -3397,6 +3401,7 @@ class FlowMcpCli {
 
                     const { source, file } = toolEntry
                     const schemaRef = `${source}/${file}`
+                    refSchemaMap[ ref ] = schemaRef
                     const alreadyTracked = schemaFilesForGuard
                         .find( ( r ) => {
                             const isSame = r === schemaRef
@@ -3409,7 +3414,7 @@ class FlowMcpCli {
                     }
                 } )
 
-            const { allowed: guardAllowed, result: guardResult } = await FlowMcpCli.#activationGuard( {
+            const { allowed: guardAllowed, activatableRefs: guardActivatable, result: guardResult } = await FlowMcpCli.#activationGuard( {
                 'namespaces': namespacesToCheck,
                 'schemaFiles': schemaFilesForGuard,
                 cwd,
@@ -3419,6 +3424,31 @@ class FlowMcpCli {
 
             if( !guardAllowed ) {
                 return { 'result': guardResult }
+            }
+
+            // keyless-first: only keep refs whose schema is activatable. Refs
+            // without a known schemaRef (no tool entry) are kept unchanged so
+            // existing behavior for non-guarded refs is preserved.
+            const activatableSet = new Set( guardActivatable || [] )
+            refsToAdd = refsToAdd
+                .filter( ( ref ) => {
+                    const schemaRef = refSchemaMap[ ref ]
+                    if( schemaRef === undefined ) {
+                        return true
+                    }
+
+                    const isActivatable = activatableSet.has( schemaRef )
+
+                    return isActivatable
+                } )
+
+            if( refsToAdd.length === 0 ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Cannot activate "${toolName}" — no keyless provider available; all require keys.`,
+                    'fix': `Set a key or use --force.`
+                } )
+
+                return { result }
             }
 
             const localConfigDir = join( cwd, appConfig[ 'localConfigDirName' ] )
@@ -7452,6 +7482,14 @@ class FlowMcpCli {
     }
 
 
+    // Test-only accessor for #activationGuard (Memo 092 PRD-L). Lets tests
+    // assert the keyless-first partition (activatableRefs/degraded) directly
+    // for mixed keyless + key-gated schema sets. Do not use in production code.
+    static async _testActivationGuard( { namespaces = [], schemaFiles = null, cwd, force = false, toolName } ) {
+        return FlowMcpCli.#activationGuard( { namespaces, schemaFiles, cwd, force, toolName } )
+    }
+
+
     /**
      * Check whether an env value is "filled" (non-placeholder, sufficiently long, real).
      * Used by env doctor to bucket keys into filled vs missing.
@@ -7947,68 +7985,138 @@ class FlowMcpCli {
      *   - If schemaFiles is provided, restrict to those exact files.
      *   - Otherwise, fall back to namespace-wide scan via devEnvDoctor.
      */
-    static async #activationGuard( { namespaces, schemaFiles = null, cwd, force, toolName } ) {
-        const { envObject } = await FlowMcpCli.#resolveEnv( { cwd } )
-        const aggregatedMissing = []
+    /**
+     * Distinguish a blocking "API key" from a non-secret "identity" param
+     * (e.g. NOMINATIM_USER_AGENT, Memo 092 PRD-L decision #6). Identity params
+     * are required by the schema but carry no secret — their absence must NOT
+     * make a keyless provider key-gated, so they never block activation.
+     *
+     * [ANNAHME] Suffix heuristic (`_USER_AGENT`). A cleaner solution is a
+     * per-param schema field (e.g. kind: 'apiKey' | 'identity') in flowmcp-spec;
+     * replace this heuristic once the spec gains that field (PRD-L open point 1).
+     * Kept localized here on purpose — no new spec field is invented.
+     */
+    static #isBlockingKey( { paramName } ) {
+        const nonSecretSuffixes = [ '_USER_AGENT' ]
+        const isNonSecret = nonSecretSuffixes
+            .some( ( suffix ) => {
+                const matches = paramName.endsWith( suffix )
 
+                return matches
+            } )
+
+        return !isNonSecret
+    }
+
+
+    /**
+     * Per-schema activation evaluation (Memo 092 PRD-L). Replaces the old flat
+     * "aggregate all missing keys" logic with a partition: each evaluated entry
+     * carries its own blocking `missingKeys` and non-blocking `setupHints`
+     * (missing identity params). The caller decides keyless-first activation.
+     *
+     * Returns one entry per ref:
+     *   { ref, namespace, missingKeys: [...], setupHints: [...] }
+     * where `ref` is the schemaRef (schemaFiles branch) or namespace
+     * (namespaces fallback branch).
+     */
+    static async #evaluateActivation( { namespaces, schemaFiles = null, envObject, cwd } ) {
         if( schemaFiles && schemaFiles.length > 0 ) {
             const schemasBaseDir = FlowMcpCli.#schemasDir()
 
-            await schemaFiles
-                .reduce( ( promise, schemaRef ) => promise.then( async () => {
+            const { evaluated } = await schemaFiles
+                .reduce( ( promise, schemaRef ) => promise.then( async ( acc ) => {
                     const filePath = join( schemasBaseDir, schemaRef )
                     const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
                     if( !main ) {
-                        return
+                        acc[ 'evaluated' ].push( { 'ref': schemaRef, 'namespace': schemaRef, 'missingKeys': [], 'setupHints': [] } )
+
+                        return acc
                     }
 
                     const requiredServerParams = main[ 'requiredServerParams' ] || []
-                    requiredServerParams
-                        .forEach( ( key ) => {
-                            const isFilled = FlowMcpCli.#isKeyFilled( { 'value': envObject[ key ] } )
+                    const namespace = main[ 'namespace' ] || schemaRef
+                    const { missingKeys, setupHints } = FlowMcpCli.#partitionMissingParams( { requiredServerParams, envObject } )
 
-                            if( isFilled ) {
-                                return
-                            }
+                    acc[ 'evaluated' ].push( { 'ref': schemaRef, namespace, missingKeys, setupHints } )
 
-                            const alreadyTracked = aggregatedMissing
-                                .find( ( m ) => {
-                                    const isSame = m === key
+                    return acc
+                } ), Promise.resolve( { 'evaluated': [] } ) )
 
-                                    return isSame
-                                } )
-
-                            if( !alreadyTracked ) {
-                                aggregatedMissing.push( key )
-                            }
-                        } )
-                } ), Promise.resolve() )
-        } else {
-            await namespaces
-                .reduce( ( promise, namespace ) => promise.then( async () => {
-                    const { result } = await FlowMcpCli.devEnvDoctor( { 'schema': namespace, 'json': true, cwd } )
-                    const namespaceMissing = result[ 'missing' ] || []
-
-                    namespaceMissing
-                        .forEach( ( key ) => {
-                            const alreadyTracked = aggregatedMissing
-                                .find( ( m ) => {
-                                    const isSame = m === key
-
-                                    return isSame
-                                } )
-
-                            if( !alreadyTracked ) {
-                                aggregatedMissing.push( key )
-                            }
-                        } )
-                } ), Promise.resolve() )
+            return { evaluated }
         }
 
-        if( aggregatedMissing.length === 0 ) {
-            return { 'allowed': true, 'result': null }
-        }
+        const { evaluated } = await namespaces
+            .reduce( ( promise, namespace ) => promise.then( async ( acc ) => {
+                const { result } = await FlowMcpCli.devEnvDoctor( { 'schema': namespace, 'json': true, cwd } )
+                const namespaceMissing = result[ 'missing' ] || []
+                const { missingKeys, setupHints } = FlowMcpCli.#partitionMissingParams( { 'requiredServerParams': namespaceMissing, 'envObject': null } )
+
+                acc[ 'evaluated' ].push( { 'ref': namespace, namespace, missingKeys, setupHints } )
+
+                return acc
+            } ), Promise.resolve( { 'evaluated': [] } ) )
+
+        return { evaluated }
+    }
+
+
+    /**
+     * Split a list of (potentially missing) required params into blocking
+     * `missingKeys` and non-blocking `setupHints` (identity params).
+     * When `envObject` is provided, only params that are NOT already filled
+     * are considered; when it is null the params are assumed already-missing
+     * (used by the namespaces fallback which receives a pre-filtered list).
+     */
+    static #partitionMissingParams( { requiredServerParams, envObject } ) {
+        const missingKeys = []
+        const setupHints = []
+
+        requiredServerParams
+            .forEach( ( key ) => {
+                if( envObject !== null ) {
+                    const isFilled = FlowMcpCli.#isKeyFilled( { 'value': envObject[ key ] } )
+
+                    if( isFilled ) {
+                        return
+                    }
+                }
+
+                const isBlocking = FlowMcpCli.#isBlockingKey( { 'paramName': key } )
+                const target = isBlocking ? missingKeys : setupHints
+                const alreadyTracked = target
+                    .find( ( m ) => {
+                        const isSame = m === key
+
+                        return isSame
+                    } )
+
+                if( !alreadyTracked ) {
+                    target.push( key )
+                }
+            } )
+
+        return { missingKeys, setupHints }
+    }
+
+
+    /**
+     * Keyless-first activation guard (Memo 092 PRD-L, decision #6).
+     *
+     * Instead of all-or-nothing, the guard PARTITIONS the requested schemas:
+     * keyless providers (and providers whose only missing params are
+     * non-blocking identity params) are ALWAYS activatable; providers with a
+     * genuinely missing API key are DEGRADED (skipped) and reported EXPLICITLY
+     * (no silent skip). The anchor degrades, it does not block. Activation is
+     * only rejected when NO keyless provider remains.
+     *
+     * Returns { allowed, activatableRefs, degraded, setupHintRefs, result }.
+     * `--force` keeps Bestandsverhalten: it activates degraded providers too.
+     */
+    static async #activationGuard( { namespaces, schemaFiles = null, cwd, force, toolName } ) {
+        const { envObject } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const { evaluated } = await FlowMcpCli.#evaluateActivation( { namespaces, schemaFiles, envObject, cwd } )
 
         // process.exitCode may have been set by devEnvDoctor with strict:true.
         // Activation-guard is informative — clear it.
@@ -8016,19 +8124,93 @@ class FlowMcpCli {
             process.exitCode = 0
         }
 
+        const activatable = evaluated
+            .filter( ( e ) => {
+                const isClear = e[ 'missingKeys' ].length === 0
+
+                return isClear
+            } )
+        const degraded = evaluated
+            .filter( ( e ) => {
+                const isDegraded = e[ 'missingKeys' ].length > 0
+
+                return isDegraded
+            } )
+        const withSetupHints = evaluated
+            .filter( ( e ) => {
+                const hasHints = e[ 'setupHints' ].length > 0
+
+                return hasHints
+            } )
+
+        // Non-blocking identity params (e.g. NOMINATIM_USER_AGENT) are reported
+        // as a setup hint but never block — keyless-first.
+        if( withSetupHints.length > 0 ) {
+            const hintLines = withSetupHints
+                .map( ( e ) => {
+                    const line = `  - ${e[ 'namespace' ]}: set ${e[ 'setupHints' ].join( ', ' )} (identity param, recommended)`
+
+                    return line
+                } )
+                .join( '\n' )
+            console.warn( chalk.yellow( `Setup hint for "${toolName}" — non-blocking identity param(s) unset:\n${hintLines}` ) )
+        }
+
+        // --force keeps the old behavior: activate everything, including degraded
+        // providers, regardless of missing keys.
         if( force ) {
-            console.warn( chalk.yellow( `Warning: activating "${toolName}" with ${aggregatedMissing.length} missing key(s): ${aggregatedMissing.join( ', ' )}` ) )
+            if( degraded.length > 0 ) {
+                const missingAll = degraded
+                    .reduce( ( acc, e ) => acc.concat( e[ 'missingKeys' ] ), [] )
+                console.warn( chalk.yellow( `Warning: activating "${toolName}" with ${missingAll.length} missing key(s): ${missingAll.join( ', ' )}` ) )
+            }
 
-            return { 'allowed': true, 'result': null }
+            return {
+                'allowed': true,
+                'activatableRefs': evaluated.map( ( e ) => e[ 'ref' ] ),
+                degraded,
+                'result': null
+            }
         }
 
-        const result = {
-            'status': false,
-            'error': `Cannot activate "${toolName}" — ${aggregatedMissing.length} required key(s) missing: ${aggregatedMissing.join( ', ' )}`,
-            'fix': `Get keys: ${appConfig[ 'cliCommand' ]} dev env acquire --key ${aggregatedMissing[ 0 ]}. Or use --force.`
+        // keyless-first: degraded (key-gated) providers are skipped with an
+        // EXPLICIT report — never silently dropped (NO SILENT DEFAULT).
+        if( degraded.length > 0 ) {
+            const lines = degraded
+                .map( ( e ) => {
+                    const line = `  - ${e[ 'namespace' ]}: missing ${e[ 'missingKeys' ].join( ', ' )}`
+
+                    return line
+                } )
+                .join( '\n' )
+            console.warn( chalk.yellow(
+                `Degraded activation for "${toolName}" — keyless providers active, ${degraded.length} provider(s) skipped (set keys to enable):\n${lines}`
+            ) )
         }
 
-        return { 'allowed': false, result }
+        // Only block when not a single keyless provider survives.
+        if( activatable.length === 0 ) {
+            const allMissing = degraded
+                .reduce( ( acc, e ) => acc.concat( e[ 'missingKeys' ] ), [] )
+            const firstMissing = allMissing.length > 0 ? allMissing[ 0 ] : null
+            const fix = firstMissing
+                ? `Get keys: ${appConfig[ 'cliCommand' ]} dev env acquire --key ${firstMissing}. Or use --force.`
+                : `Set a key or use --force.`
+            const result = {
+                'status': false,
+                'error': `Cannot activate "${toolName}" — no keyless provider available; all require keys: ${allMissing.join( ', ' )}`,
+                fix
+            }
+
+            return { 'allowed': false, 'activatableRefs': [], degraded, result }
+        }
+
+        return {
+            'allowed': true,
+            'activatableRefs': activatable.map( ( e ) => e[ 'ref' ] ),
+            degraded,
+            'result': null
+        }
     }
 
 
