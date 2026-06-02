@@ -31,6 +31,16 @@ const ADDON_REGISTRY = {
         'name': 'gtfs-sqlite-toolkit',
         'source': 'github:FlowMCP/gtfs-sqlite-toolkit',
         'defaultVersion': 'main'
+    },
+    'sqlite-geojson': {
+        'name': 'geojson-sqlite-toolkit',
+        'source': 'github:FlowMCP/geojson-sqlite-toolkit',
+        'defaultVersion': 'main'
+    },
+    'sqlite-csv': {
+        'name': 'csv-tsv-sqlite-toolkit',
+        'source': 'github:FlowMCP/csv-tsv-sqlite-toolkit',
+        'defaultVersion': 'main'
     }
 }
 

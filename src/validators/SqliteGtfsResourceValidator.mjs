@@ -10,13 +10,15 @@
  */
 
 import { PathVariableResolver } from '../path/resolvePathVariables.mjs'
+import { ADDON_REGISTRY } from '../data/addons.mjs'
 
 
 /**
  * SqliteGtfsResourceValidator
  *
- * Structural validation for `source: 'sqlite-gtfs'` resources.
- * Emits RES030 (mode), RES031 (addon), and RES035 (path-variable).
+ * Structural validation for any registered sqlite add-on resource
+ * (`source` is a key in ADDON_REGISTRY, e.g. `sqlite-gtfs`, `sqlite-geojson`,
+ * `sqlite-csv`). Emits RES030 (mode), RES031 (addon), and RES035 (path-variable).
  *
  * Memo 051 REV-04 — Kap. 4.2 (RES030..RES035 codes), Kap. 7.1 (validate command),
  * Kap. 3.3 (Auto-Injection-Pfad Schritt 1 — Spec-Validator).
@@ -34,16 +36,16 @@ class SqliteGtfsResourceValidator {
 
         resources
             .forEach( ( resource, index ) => {
-                if( !resource || resource.source !== 'sqlite-gtfs' ) { return }
+                if( !resource || ADDON_REGISTRY[ resource.source ] === undefined ) { return }
 
-                const { mode, addon, path: resourcePath } = resource
+                const { source, mode, addon, path: resourcePath } = resource
                 const basePath = `main.resources[${index}]`
 
                 if( mode !== 'file-based' ) {
                     errors.push( {
                         code: 'RES030',
                         severity: 'error',
-                        message: `source 'sqlite-gtfs' requires mode 'file-based' (got: ${mode === undefined ? 'undefined' : mode}). in-memory is not allowed.`,
+                        message: `source '${source}' requires mode 'file-based' (got: ${mode === undefined ? 'undefined' : mode}). in-memory is not allowed.`,
                         path: `${basePath}.mode`
                     } )
                 }
@@ -53,7 +55,7 @@ class SqliteGtfsResourceValidator {
                     errors.push( {
                         code: 'RES031',
                         severity: 'error',
-                        message: `source 'sqlite-gtfs' requires non-empty 'addon' field (add-on package name).`,
+                        message: `source '${source}' requires non-empty 'addon' field (add-on package name).`,
                         path: `${basePath}.addon`
                     } )
                 }

@@ -133,3 +133,64 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
             .toThrow( /must be an array/ )
     } )
 } )
+
+
+// Memo 094 P3 — the validator is generalised across ALL registered sqlite
+// add-on sources (ADDON_REGISTRY), not just sqlite-gtfs.
+describe( 'SqliteGtfsResourceValidator — generalised sqlite add-on sources', () => {
+    it( 'validates a fully-valid sqlite-geojson resource without errors', () => {
+        const resources = [
+            {
+                source: 'sqlite-geojson',
+                mode: 'file-based',
+                path: '${FLOWMCP_RESOURCES}/places.db',
+                addon: 'geojson-sqlite-toolkit'
+            }
+        ]
+        const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
+
+        expect( errors ).toEqual( [] )
+    } )
+
+
+    it( 'emits RES030 for a sqlite-geojson resource with in-memory mode (dynamic source in message)', () => {
+        const resources = [
+            {
+                source: 'sqlite-geojson',
+                mode: 'in-memory',
+                addon: 'geojson-sqlite-toolkit'
+            }
+        ]
+        const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
+
+        const res030 = errors.find( ( e ) => e.code === 'RES030' )
+        expect( res030 ).toBeDefined()
+        expect( res030.message ).toContain( 'sqlite-geojson' )
+    } )
+
+
+    it( 'emits RES031 for a sqlite-csv resource missing the addon field', () => {
+        const resources = [
+            {
+                source: 'sqlite-csv',
+                mode: 'file-based',
+                path: '${FLOWMCP_RESOURCES}/places.db'
+            }
+        ]
+        const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
+
+        const res031 = errors.find( ( e ) => e.code === 'RES031' )
+        expect( res031 ).toBeDefined()
+        expect( res031.message ).toContain( 'sqlite-csv' )
+    } )
+
+
+    it( 'ignores a source that is NOT in ADDON_REGISTRY', () => {
+        const resources = [
+            { source: 'sqlite-unknown', mode: 'in-memory' }
+        ]
+        const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
+
+        expect( errors ).toEqual( [] )
+    } )
+} )

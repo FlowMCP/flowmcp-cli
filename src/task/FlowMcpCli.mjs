@@ -5552,23 +5552,23 @@ class FlowMcpCli {
     // which is invoked at the top of `add()`.
     // ---------------------------------------------------------------------
 
-    static #sqliteGtfsCacheDir() {
-        const dir = join( FlowMcpCli.#cacheDir(), 'sqlite-gtfs' )
+    static #sqliteGtfsCacheDir( { sourceKey } ) {
+        const dir = join( FlowMcpCli.#cacheDir(), sourceKey )
 
         return dir
     }
 
 
-    static #sqliteGtfsCachePath( { schemaNamespace, schemaName } ) {
+    static #sqliteGtfsCachePath( { schemaNamespace, schemaName, sourceKey } ) {
         const fileName = `${schemaNamespace}-${schemaName}.json`
-        const filePath = join( FlowMcpCli.#sqliteGtfsCacheDir(), fileName )
+        const filePath = join( FlowMcpCli.#sqliteGtfsCacheDir( { sourceKey } ), fileName )
 
         return { filePath }
     }
 
 
     static async #writeSealCache( { schemaNamespace, schemaName, schemaFile, dbPath, sourceKey, addonName, namespace, meta, tools, overridden } ) {
-        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName } )
+        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName, sourceKey } )
         await mkdir( dirname( filePath ), { recursive: true } )
 
         let dbMtime = null
@@ -5601,8 +5601,8 @@ class FlowMcpCli {
     }
 
 
-    static async #readSealCache( { schemaNamespace, schemaName } ) {
-        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName } )
+    static async #readSealCache( { schemaNamespace, schemaName, sourceKey } ) {
+        const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName, sourceKey } )
 
         try {
             const raw = await readFile( filePath, 'utf-8' )
@@ -5632,31 +5632,36 @@ class FlowMcpCli {
 
 
     static async #listSqliteGtfsCacheEntries() {
-        const dir = FlowMcpCli.#sqliteGtfsCacheDir()
         const entries = []
+        const sourceKeys = Object.keys( ADDON_REGISTRY )
 
-        try {
-            const files = await readdir( dir )
-            const jsonFiles = files
-                .filter( ( name ) => {
-                    const isJson = name.endsWith( '.json' )
+        await sourceKeys
+            .reduce( ( outer, sourceKey ) => outer.then( async () => {
+                const dir = FlowMcpCli.#sqliteGtfsCacheDir( { sourceKey } )
 
-                    return isJson
-                } )
+                try {
+                    const files = await readdir( dir )
+                    const jsonFiles = files
+                        .filter( ( name ) => {
+                            const isJson = name.endsWith( '.json' )
 
-            await jsonFiles
-                .reduce( ( promise, name ) => promise.then( async () => {
-                    try {
-                        const raw = await readFile( join( dir, name ), 'utf-8' )
-                        const parsed = JSON.parse( raw )
-                        entries.push( parsed )
-                    } catch {
-                        // corrupt — skip
-                    }
-                } ), Promise.resolve() )
-        } catch {
-            // cache dir doesn't exist yet
-        }
+                            return isJson
+                        } )
+
+                    await jsonFiles
+                        .reduce( ( inner, name ) => inner.then( async () => {
+                            try {
+                                const raw = await readFile( join( dir, name ), 'utf-8' )
+                                const parsed = JSON.parse( raw )
+                                entries.push( parsed )
+                            } catch {
+                                // corrupt — skip
+                            }
+                        } ), Promise.resolve() )
+                } catch {
+                    // cache dir for this source doesn't exist yet
+                }
+            } ), Promise.resolve() )
 
         return { entries }
     }
@@ -5697,7 +5702,7 @@ class FlowMcpCli {
 
         const sqliteGtfsResources = resourcesArr
             .filter( ( r ) => {
-                const isMatch = r && r.source === 'sqlite-gtfs'
+                const isMatch = r && ADDON_REGISTRY[ r.source ] !== undefined
 
                 return isMatch
             } )
@@ -5767,7 +5772,7 @@ class FlowMcpCli {
         if( !dbExists ) {
             const result = FlowMcpCli.#error( {
                 'error': `RES033: DB at ${resolvedPath} cannot be opened (file not found or corrupt).`,
-                'fix': `Place the converted GTFS SQLite at ${resolvedPath} (see gtfs-sqlite-toolkit docs).`
+                'fix': `Place the converted SQLite DB at ${resolvedPath} (see ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} docs).`
             } )
 
             return { result }
@@ -5815,8 +5820,8 @@ class FlowMcpCli {
         if( !sealResult || sealResult.sealed !== true ) {
             const reason = sealResult ? sealResult.reason : 'UNKNOWN'
             const result = FlowMcpCli.#error( {
-                'error': `RES032: DB at ${resolvedPath} does not contain meta.qualitySeal === 'sqlite-gtfs'. Schema rejected. (reason=${reason})`,
-                'fix': `Convert the GTFS source via gtfs-sqlite-toolkit to obtain a sealed DB.`
+                'error': `RES032: DB at ${resolvedPath} does not contain meta.qualitySeal === '${sourceKey}'. Schema rejected. (reason=${reason})`,
+                'fix': `Convert the source via ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} to obtain a sealed DB.`
             } )
 
             return { result }
@@ -5826,7 +5831,7 @@ class FlowMcpCli {
         const specRevision = meta && meta.specRevision ? meta.specRevision : 'unknown'
         const converterVersion = meta && meta.converterVersion ? meta.converterVersion : 'unknown'
 
-        console.log( `  → Seal: sqlite-gtfs ✓` )
+        console.log( `  → Seal: ${sourceKey} ✓` )
         console.log( `  → Spec-Revision: ${specRevision}` )
         console.log( `  → Converter: ${addonName}@${converterVersion}` )
 
@@ -10375,7 +10380,7 @@ allowlist, migrate-config, etc.).
 
         const hasAnySqliteGtfs = resourcesArray
             .some( ( r ) => {
-                const isMatch = r && r.source === 'sqlite-gtfs'
+                const isMatch = r && ADDON_REGISTRY[ r.source ] !== undefined
 
                 return isMatch
             } )
