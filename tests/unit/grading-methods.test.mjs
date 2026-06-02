@@ -358,9 +358,138 @@ describe( 'gradingExport — OUT round-trip (never overwrites source)', () => {
 
         expect( result.status ).toBe( true )
         expect( result.flow ).toBe( 'namespace' )
-        expect( existsSync( result.indexExportPath ) ).toBe( true )
+        // Returned paths are repo-relative (path-hardening §3.7): resolve against cwd
+        // to hit the filesystem.
+        expect( existsSync( join( cwd, result.indexExportPath ) ) ).toBe( true )
         // The fresh export folder must be distinct from the source index folder.
-        expect( dirname( result.indexExportPath ) ).not.toBe( dirname( sourceIndex ) )
+        expect( dirname( join( cwd, result.indexExportPath ) ) ).not.toBe( dirname( sourceIndex ) )
         expect( existsSync( sourceIndex ) ).toBe( true )
+    } )
+} )
+
+
+describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-007)', () => {
+    afterEach( () => {
+        FlowMcpCli.__testInjectGrading( { grading: null } )
+        delete process.env[ 'FLOWMCP_GRADING_EXPORT' ]
+    } )
+
+
+    async function seedImportedNamespace() {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+        return cwd
+    }
+
+
+    it( 'T1 — default: export lands under <island>/_exports (backward-compat)', async () => {
+        const cwd = await seedImportedNamespace()
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: null, json: false } )
+
+        expect( result.status ).toBe( true )
+        // Relative path under cwd: .flowmcp/grading/_exports/demoapi--<stamp>
+        expect( result.exportDir.startsWith( join( '.flowmcp', 'grading', '_exports' ) ) ).toBe( true )
+        expect( existsSync( join( cwd, result.exportDir ) ) ).toBe( true )
+    } )
+
+
+    it( 'T2 — --export-dir flag wins (resolve cwd, flag)', async () => {
+        const cwd = await seedImportedNamespace()
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: 'out/exports', json: false } )
+
+        expect( result.status ).toBe( true )
+        expect( result.exportDir.startsWith( join( 'out', 'exports' ) ) ).toBe( true )
+        expect( existsSync( join( cwd, result.exportDir ) ) ).toBe( true )
+    } )
+
+
+    it( 'T3 — FLOWMCP_GRADING_EXPORT env resolves the destination', async () => {
+        const cwd = await seedImportedNamespace()
+        process.env[ 'FLOWMCP_GRADING_EXPORT' ] = 'env-exports'
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: null, json: false } )
+
+        expect( result.status ).toBe( true )
+        expect( result.exportDir.startsWith( 'env-exports' ) ).toBe( true )
+    } )
+
+
+    it( 'T5 — precedence flag > env > default', async () => {
+        const cwd = await seedImportedNamespace()
+        process.env[ 'FLOWMCP_GRADING_EXPORT' ] = 'env-exports'
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: 'flag-exports', json: false } )
+
+        expect( result.status ).toBe( true )
+        // Flag wins over env.
+        expect( result.exportDir.startsWith( 'flag-exports' ) ).toBe( true )
+    } )
+
+
+    it( 'T7 — returned exportDir / indexExportPath are repo-relative (no /Users/, no abs)', async () => {
+        const cwd = await seedImportedNamespace()
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: null, json: false } )
+
+        expect( result.status ).toBe( true )
+        const blob = JSON.stringify( result )
+        // No absolute path, no username/home leak anywhere in the returned object.
+        expect( blob ).not.toContain( '/Users/' )
+        expect( result.exportDir.startsWith( '/' ) ).toBe( false )
+        expect( result.indexExportPath.startsWith( '/' ) ).toBe( false )
+        result.schemaExports.forEach( ( s ) => {
+            expect( s.exportPath.startsWith( '/' ) ).toBe( false )
+            expect( s.exportPath ).not.toContain( '/Users/' )
+        } )
+    } )
+
+
+    it( 'T8 — EXP-003 surfaced message is relativized (deterministic, injected module)', async () => {
+        const cwd = await freshCwd()
+        // Inject a grading module whose GradingExport.run returns an EXP-003 error
+        // that embeds an ABSOLUTE home path. The CLI must relativize it before
+        // surfacing it (no /Users/, ~-collapsed).
+        const home = ( await import( 'node:os' ) ).homedir()
+        const absLeak = join( home, '.flowmcp', 'grading', '_exports', 'demoapi--x' )
+        const injected = {
+            ...realGrading,
+            GradingExport: {
+                run: async () => ( {
+                    status: false,
+                    flow: 'namespace',
+                    indexExportPath: null,
+                    schemaExports: [],
+                    errors: [ `EXP-003: export folder already exists (no overwrite): ${absLeak}` ]
+                } )
+            }
+        }
+        FlowMcpCli.__testInjectGrading( { grading: injected } )
+        // F29 needs a real provider folder to pass flow detection.
+        await mkdir( join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'demoapi' ), { recursive: true } )
+
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: null, json: false } )
+
+        expect( result.status ).toBe( false )
+        const blob = JSON.stringify( result )
+        expect( blob ).not.toContain( '/Users/' )
+        expect( blob ).not.toContain( home )
+        // The home prefix is collapsed to ~.
+        expect( result.error ).toContain( '~/.flowmcp/grading/_exports/demoapi--x' )
+    } )
+
+
+    it( 'T9 — malformed (non-string) config gradingExportDir does not collapse; falls through', async () => {
+        const cwd = await seedImportedNamespace()
+        // A non-string flag value (number) must NOT be treated as a path. The
+        // resolver's explicit type check skips it and falls through to the default
+        // (level 4), not a silent collapse.
+        const { result } = await FlowMcpCli.gradingExport( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', onConflict: null, gradingExportDir: 12345, json: false } )
+
+        expect( result.status ).toBe( true )
+        // Fell through to the level-4 default <island>/_exports.
+        expect( result.exportDir.startsWith( join( '.flowmcp', 'grading', '_exports' ) ) ).toBe( true )
     } )
 } )
