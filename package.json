@@ -32,8 +32,10 @@
         "chalk": "^5.6.2",
         "ethers": "^6.16.0",
         "figlet": "^1.10.0",
-        "flowmcp": "github:FlowMCP/flowmcp-core#bca23b1fb8727fb4cd4877b1c0ea94f4ac14acb5",
+        "flowmcp": "github:FlowMCP/flowmcp-core#de3a08888fa3945a284203d3c6ecd1419caab2bc",
         "flowmcp-grading": "github:FlowMCP/flowmcp-grading#v2.0.0",
+        "csv-tsv-sqlite-toolkit": "github:FlowMCP/csv-tsv-sqlite-toolkit#b08b5288926b2620bf30b4d1b2571c574e1511bf",
+        "geojson-sqlite-toolkit": "github:FlowMCP/geojson-sqlite-toolkit#adeb4c779161759a39f5617ee2450c6e7dd2f98b",
         "gtfs-sqlite-toolkit": "github:FlowMCP/gtfs-sqlite-toolkit#9a37238e3a5cc11fb53bce90e702b59cb3d24739",
         "inquirer": "^12.3.0"
     },
