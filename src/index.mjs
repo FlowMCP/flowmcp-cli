@@ -52,7 +52,8 @@ const args = parseArgs( {
         'member-source': { type: 'string' },
         'grading-data': { type: 'string' },
         'export-dir': { type: 'string' },
-        'max-iterations': { type: 'string' }
+        'max-iterations': { type: 'string' },
+        'with-keys': { type: 'boolean' }
     }
 } )
 
@@ -493,13 +494,13 @@ const runCommand = async () => {
 
     if( command === 'grading' ) {
         const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'import', 'export', 'run', 'state' ]
+        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection>`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns>`
             }
             output( { result } )
 
@@ -515,6 +516,7 @@ const runCommand = async () => {
         const gradingDataDir = values[ 'grading-data' ] === undefined ? null : values[ 'grading-data' ]
         const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const maxIterations = values[ 'max-iterations' ] === undefined ? null : values[ 'max-iterations' ]
+        const withKeys = values[ 'with-keys' ] === true
         const json = values[ 'json' ] === true
 
         if( subCommand === 'import' ) {
@@ -532,7 +534,7 @@ const runCommand = async () => {
         }
 
         if( subCommand === 'run' ) {
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, withKeys, json } )
             output( { result } )
 
             return true
@@ -540,6 +542,13 @@ const runCommand = async () => {
 
         if( subCommand === 'state' ) {
             const { result } = await FlowMcpCli.gradingState( { cwd, target, gradingDataDir, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'worklist' ) {
+            const { result } = await FlowMcpCli.gradingWorklist( { cwd, target, gradingDataDir, json } )
             output( { result } )
 
             return true

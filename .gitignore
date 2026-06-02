@@ -28,6 +28,11 @@ temp/
 # Local FlowMCP config
 .flowmcp/
 
+# Grading island (Memo 097 PA-6 in-tree default <root>/_grading) + exports.
+# Holds schema duplicates / proofs — never version.
+_grading/
+_exports/
+
 # Test isolation directory (Memo 032 PRD-02)
 .test-home/
 

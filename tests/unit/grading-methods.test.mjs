@@ -548,3 +548,175 @@ describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-
         expect( result.exportDir.startsWith( join( '.flowmcp', 'grading', '_exports' ) ) ).toBe( true )
     } )
 } )
+
+
+// Memo 097 PA-3 — grading worklist <ns> --json (flat, deduplicated error list).
+describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+
+    async function seedEmitted( { ok } ) {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+        await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
+        return cwd
+    }
+
+
+    it( 'returns a flat array of { namespace, schema, code, message } from pretest errors', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+        await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
+
+        // Inject deterministic pretest errors into the emitted handoff.
+        const promptsPath = join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'prompts.json' )
+        const prompts = JSON.parse( await readFile( promptsPath, 'utf-8' ) )
+        prompts.pretests = [
+            { schemaName: 'demoapi', ok: false, errors: [
+                'DPT-005: Required server parameter absent from serverParams: DEMO_API_KEY',
+                'DPT-004: Test failed (not counted as a working download): getThing: HTTP 404: Not Found'
+            ] }
+        ]
+        await writeFile( promptsPath, JSON.stringify( prompts, null, 4 ), 'utf-8' )
+
+        const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', json: true } )
+
+        expect( Array.isArray( result ) ).toBe( true )
+        const codes = result.map( ( item ) => item.code )
+        expect( codes ).toContain( 'DPT-005' )
+        expect( codes ).toContain( 'DPT-004' )
+        result.forEach( ( item ) => {
+            expect( item.namespace ).toBe( 'demoapi' )
+            expect( typeof item.schema ).toBe( 'string' )
+            expect( typeof item.message ).toBe( 'string' )
+        } )
+        // DPT-005 surfaces the KEY NAME only, never a value.
+        const dpt005 = result.find( ( item ) => item.code === 'DPT-005' )
+        expect( dpt005.message ).toContain( 'DEMO_API_KEY' )
+    } )
+
+
+    it( 'deduplicates identical (schema, code, message) tuples', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+        await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
+
+        const promptsPath = join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'prompts.json' )
+        const prompts = JSON.parse( await readFile( promptsPath, 'utf-8' ) )
+        prompts.pretests = [
+            { schemaName: 'demoapi', ok: false, errors: [
+                'DPT-003: Data-pretest abort: tool(s) below 3 working downloadable tests',
+                'DPT-003: Data-pretest abort: tool(s) below 3 working downloadable tests'
+            ] }
+        ]
+        await writeFile( promptsPath, JSON.stringify( prompts, null, 4 ), 'utf-8' )
+
+        const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', json: true } )
+
+        const dpt003 = result.filter( ( item ) => item.code === 'DPT-003' )
+        expect( dpt003.length ).toBe( 1 )
+    } )
+
+
+    it( 'merges index.json blockers (import errors) into the worklist', async () => {
+        const cwd = await seedEmitted( { ok: true } )
+
+        const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', json: true } )
+
+        // The stubbed-ok fixture import leaves no blockers, but the call must
+        // still return a flat array (never throw, never null).
+        expect( Array.isArray( result ) ).toBe( true )
+    } )
+
+
+    it( 'NO SILENT DEFAULT: missing prompts.json returns a coded error, not an empty list', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        // Import only — never emit, so prompts.json does not exist.
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+
+        const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', json: true } )
+
+        expect( Array.isArray( result ) ).toBe( false )
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'WL-001' )
+        expect( result.fix ).toContain( '--emit-prompts' )
+    } )
+
+
+    it( 'reports a missing target', async () => {
+        const { result } = await FlowMcpCli.gradingWorklist( { cwd: '/tmp', gradingDataDir: '.flowmcp/grading', target: '', json: true } )
+
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'Missing worklist target' )
+    } )
+} )
+
+
+// Memo 097 PA-5 — grading.useKeys dev-flag (DEFAULT OFF).
+describe( 'gradingRun useKeys gate (PA-5, default OFF)', () => {
+    afterEach( () => {
+        FlowMcpCli.__testInjectGrading( { grading: null } )
+        delete process.env[ 'FLOWMCP_GRADING_USE_KEYS' ]
+    } )
+
+
+    it( 'default OFF: passes an EMPTY serverParams object to DataPretest (no live keys)', async () => {
+        const cwd = await freshCwd()
+        const injected = gradingWithStubbedPretest( { ok: true } )
+        FlowMcpCli.__testInjectGrading( { grading: injected } )
+        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+
+        const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, withKeys: false, json: false } )
+
+        // serverParams is an object with zero keys — key-gated tools fail with DPT-005.
+        expect( injected.__stub.lastCall ).not.toBeNull()
+        const sp = injected.__stub.lastCall.serverParams
+        expect( typeof sp ).toBe( 'object' )
+        expect( Object.keys( sp ).length ).toBe( 0 )
+        expect( result.useKeys ).toBe( false )
+    } )
+
+
+    it( 'env FLOWMCP_GRADING_USE_KEYS=1 opts in (serverParams populated when keys exist)', async () => {
+        process.env[ 'FLOWMCP_GRADING_USE_KEYS' ] = '1'
+        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: false } )
+        expect( useKeys ).toBe( true )
+    } )
+
+
+    it( '--with-keys flag opts in regardless of env/config', async () => {
+        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: true } )
+        expect( useKeys ).toBe( true )
+    } )
+
+
+    it( 'default (no flag, no env, no config) resolves to false', async () => {
+        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: false } )
+        expect( useKeys ).toBe( false )
+    } )
+} )
+
+
+// Memo 097 PA-6 — island resolution precedence (one global config).
+describe( 'island resolution precedence (PA-6)', () => {
+    afterEach( () => { delete process.env[ 'FLOWMCP_GRADING_DATA' ] } )
+
+
+    it( '--grading-data flag wins (cwd-relative)', async () => {
+        const cwd = await freshCwd()
+        const { root } = await FlowMcpCli.__testGradingDataRoot( { cwd, gradingDataDir: 'custom/island' } )
+        expect( root ).toBe( join( cwd, 'custom', 'island' ) )
+    } )
+
+
+    it( 'env FLOWMCP_GRADING_DATA wins when no flag', async () => {
+        const cwd = await freshCwd()
+        process.env[ 'FLOWMCP_GRADING_DATA' ] = 'env/island'
+        const { root } = await FlowMcpCli.__testGradingDataRoot( { cwd, gradingDataDir: null } )
+        expect( root ).toBe( join( cwd, 'env', 'island' ) )
+    } )
+} )

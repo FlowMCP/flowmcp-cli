@@ -12266,6 +12266,49 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Memo 097 Kap. 5 (PA-5) — resolve the grading key-injection opt-in. Default
+    // is OFF: the deterministic pretest runs WITHOUT live keys, so key-gated tools
+    // fail deterministically with DPT-005 (no authenticated request leaves the
+    // machine). Turning it ON fires real authenticated FLOWMCP.fetch requests
+    // against un-audited schema hosts using the developer's live keys — a security
+    // decision that MUST be an explicit opt-in, never silent (NO SILENT DEFAULT).
+    // Precedence (all explicit):
+    //   1. --with-keys flag (per-call developer opt-in)
+    //   2. FLOWMCP_GRADING_USE_KEYS env var ("1"/"true"/"yes"/"on" => true)
+    //   3. "grading.useKeys" boolean in the GLOBAL ~/.flowmcp/config.json
+    //   4. default false
+    static async #gradingUseKeys( { withKeys } ) {
+        if( withKeys === true ) {
+            return { useKeys: true }
+        }
+        const envFlag = process.env[ 'FLOWMCP_GRADING_USE_KEYS' ]
+        if( typeof envFlag === 'string' && [ '1', 'true', 'yes', 'on' ].includes( envFlag.toLowerCase() ) ) {
+            return { useKeys: true }
+        }
+        const home = homedir()
+        const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        if( globalConfig !== null && typeof globalConfig[ 'grading' ] === 'object' && globalConfig[ 'grading' ] !== null && globalConfig[ 'grading' ][ 'useKeys' ] === true ) {
+            return { useKeys: true }
+        }
+
+        return { useKeys: false }
+    }
+
+
+    // Test-only accessors (Memo 097 PA-5/PA-6). Do not use in production code.
+    static async __testGradingUseKeys( { withKeys } ) {
+        return FlowMcpCli.#gradingUseKeys( { withKeys } )
+    }
+
+
+    static async __testGradingDataRoot( { cwd, gradingDataDir } ) {
+        const root = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+
+        return { root }
+    }
+
+
     // Resolve the grading EXPORT root. Mirrors #gradingDataRoot exactly (PRD-007).
     // Precedence (all explicit, no silent default):
     //   1. --export-dir flag (per-call override, cwd-relative)
@@ -12627,7 +12670,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, withKeys, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12707,7 +12750,11 @@ allowlist, migrate-config, etc.).
         }
 
         if( emitPrompts === true ) {
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'maxIterations': maxIterationsResolved, 'dependencyChain': deps.chain } )
+            // PA-5: resolve the key-injection opt-in (default OFF) — gates whether the
+            // deterministic pretest fires authenticated requests with live keys.
+            const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
+
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'maxIterations': maxIterationsResolved, useKeys, 'dependencyChain': deps.chain } )
         }
 
         return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, 'dependencyChain': deps.chain } )
@@ -12748,7 +12795,7 @@ allowlist, migrate-config, etc.).
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, maxIterations, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, maxIterations, useKeys, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
@@ -12782,9 +12829,15 @@ allowlist, migrate-config, etc.).
                     return
                 }
 
-                const { envObject } = await FlowMcpCli.#resolveEnv( { cwd } )
+                // PA-5 gate: only inject local keys when the developer explicitly
+                // opted in (useKeys === true). When OFF (default), pass an empty
+                // serverParams object so key-gated tools fail deterministically with
+                // DPT-005 — no authenticated request leaves the machine. The env is
+                // still resolved when ON; when OFF we skip the read entirely.
                 const requiredServerParams = Array.isArray( main[ 'requiredServerParams' ] ) ? main[ 'requiredServerParams' ] : []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+                const serverParams = useKeys === true
+                    ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
+                    : {}
                 const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': snapshot.path } )
 
                 const pretest = await grading[ 'DataPretest' ].run( {
@@ -12870,6 +12923,7 @@ allowlist, migrate-config, etc.).
                 tier,
                 maxGrade,
                 target,
+                'useKeys': useKeys === true,
                 promptsPath,
                 statePath,
                 'pretestCount': pretests.length,
@@ -13022,6 +13076,101 @@ allowlist, migrate-config, etc.).
                 'statePresent': state !== null
             }
         }
+    }
+
+
+    // Memo 097 Kap. 3 (PA-3) — flat, deduplicated error/improvement worklist for
+    // one namespace. A sub-agent abarbeitet this list directly. Sources merged:
+    //   - prompts.json -> pretests[].errors  (DPT-003 abort, DPT-004 test-fail /
+    //     not-downloadable, DPT-005 missing requiredServerParam — KEY NAME only,
+    //     never the value; the emit stage already strips values)
+    //   - index.json   -> blockers[]         (import / rebuild errors: {node,reason})
+    // Output: a flat array [{ namespace, area|schema, code, message, hint? }].
+    // NO SILENT DEFAULT: if the namespace has no prompts.json (never emitted), the
+    // command returns a clear coded error instead of pretending an empty worklist.
+    static async gradingWorklist( { cwd, target, gradingDataDir, json } ) {
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing worklist target.', 'fix': 'Usage: flowmcp grading worklist <namespace> --json' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        const promptsPath = join( detected.targetDir, 'prompts.json' )
+        const indexPath = join( detected.targetDir, 'index.json' )
+
+        // NO SILENT DEFAULT: no prompts.json -> the pretest never ran. Do not
+        // fabricate an empty list; tell the caller to emit first.
+        if( existsSync( promptsPath ) === false ) {
+            return { 'result': FlowMcpCli.#error( {
+                'error': `WL-001: No prompts.json for namespace "${target}" — the deterministic pretest has not run yet.`,
+                'fix': `Run "${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts" first, then re-run worklist.`
+            } ) }
+        }
+
+        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        if( prompts === null ) {
+            return { 'result': FlowMcpCli.#error( {
+                'error': `WL-002: prompts.json for namespace "${target}" is unreadable or not valid JSON.`,
+                'fix': 'Re-emit the prompts (grading run --emit-prompts) to regenerate a valid handoff.'
+            } ) }
+        }
+
+        const items = []
+
+        // 1. Pretest errors (per-schema). The errors are flat "CODE: message"
+        // strings written by DataPretest; split off the leading code for the
+        // structured worklist item.
+        const pretests = Array.isArray( prompts[ 'pretests' ] ) ? prompts[ 'pretests' ] : []
+        pretests.forEach( ( pretest ) => {
+            const schemaName = typeof pretest[ 'schemaName' ] === 'string' ? pretest[ 'schemaName' ] : null
+            const errors = Array.isArray( pretest[ 'errors' ] ) ? pretest[ 'errors' ] : []
+            errors.forEach( ( raw ) => {
+                if( typeof raw !== 'string' || raw.length === 0 ) { return }
+                const { code, message } = FlowMcpCli.#splitErrorCode( { raw } )
+                items.push( { 'namespace': target, 'schema': schemaName, code, message } )
+            } )
+        } )
+
+        // 2. Import / rebuild blockers (per-node), if present.
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const blockers = index !== null && Array.isArray( index[ 'blockers' ] ) ? index[ 'blockers' ] : []
+        blockers.forEach( ( blocker ) => {
+            const node = typeof blocker[ 'node' ] === 'string' ? blocker[ 'node' ] : null
+            const reason = typeof blocker[ 'reason' ] === 'string' ? blocker[ 'reason' ] : null
+            if( reason === null ) { return }
+            const { code, message } = FlowMcpCli.#splitErrorCode( { 'raw': reason } )
+            items.push( { 'namespace': target, 'schema': node, 'code': code === null ? 'IMPORT' : code, message } )
+        } )
+
+        // Deduplicate on the (schema, code, message) tuple — the same blocker can
+        // surface from both prompts and index.
+        const seen = {}
+        const worklist = items.filter( ( item ) => {
+            const key = `${item.schema}|${item.code}|${item.message}`
+            if( seen[ key ] === true ) { return false }
+            seen[ key ] = true
+
+            return true
+        } )
+
+        return { 'result': worklist }
+    }
+
+
+    // Split a "CODE: message" string into { code, message }. When the string has
+    // no recognizable leading code, code is null and the whole string is the
+    // message (explicit — no invented code).
+    static #splitErrorCode( { raw } ) {
+        const match = raw.match( /^([A-Z]{2,}-\d{2,})(?::\s*)?(.*)$/ )
+        if( match === null ) {
+            return { 'code': null, 'message': raw.trim() }
+        }
+
+        return { 'code': match[ 1 ], 'message': match[ 2 ].trim() }
     }
 
 

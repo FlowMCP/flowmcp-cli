@@ -65,6 +65,23 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
         expect( parsed[ 'status' ] ).toBe( false )
         expect( parsed[ 'error' ] ).toContain( 'Mode required' )
     } )
+
+    it( 'PA-3: lists worklist in the allowlist fix text', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'fix' ] ).toContain( 'worklist' )
+    } )
+
+    it( 'PA-3: routes grading worklist to its method (missing prompts -> coded error)', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading', 'worklist', 'does-not-exist', '--json' ] } )
+        const parsed = JSON.parse( stdout )
+
+        // Flow detection fails for a non-imported namespace -> structured error,
+        // never the unknown-command fallback.
+        expect( parsed[ 'status' ] ).toBe( false )
+        expect( JSON.stringify( parsed ) ).not.toContain( 'Unknown command' )
+    } )
 } )
 
 
