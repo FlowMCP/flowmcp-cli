@@ -22,6 +22,9 @@
  *   value.name:        Add-on package name (matches package.json dependency key)
  *   value.source:      GitHub source path (NO npm) — `github:Owner/Repo`
  *   value.defaultVersion: Default version / branch reference for `github:` URLs
+ *   value.urlMode:     Whether the source supports `mode: 'url'` (Memo 096 —
+ *                      fetch a complete GeoJSON/CSV in one request, hold it in
+ *                      memory). `sqlite-gtfs` is file-based only (urlMode false).
  *
  * Local development may use `file:../<addon>` in package.json. Production
  * pinning happens via `github:FlowMCP/<addon>#<version>` (see PRD-16 loader).
@@ -30,17 +33,20 @@ const ADDON_REGISTRY = {
     'sqlite-gtfs': {
         'name': 'gtfs-sqlite-toolkit',
         'source': 'github:FlowMCP/gtfs-sqlite-toolkit',
-        'defaultVersion': 'main'
+        'defaultVersion': 'main',
+        'urlMode': false
     },
     'sqlite-geojson': {
         'name': 'geojson-sqlite-toolkit',
         'source': 'github:FlowMCP/geojson-sqlite-toolkit',
-        'defaultVersion': 'main'
+        'defaultVersion': 'main',
+        'urlMode': true
     },
     'sqlite-csv': {
         'name': 'csv-tsv-sqlite-toolkit',
         'source': 'github:FlowMCP/csv-tsv-sqlite-toolkit',
-        'defaultVersion': 'main'
+        'defaultVersion': 'main',
+        'urlMode': true
     }
 }
 

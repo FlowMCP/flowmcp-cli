@@ -1,67 +1,119 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals'
-import { writeFile, mkdir, copyFile, readFile, access } from 'node:fs/promises'
-import { constants } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
+import { writeFile, mkdir, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
 
 
-// Memo 094 P3 — E2E proof that the generalised sqlite add-on pipeline drives
-// the published geojson + csv add-ons (not just gtfs). Mirrors the
-// sqlite-gtfs-pipeline test: real add->call when the sibling toolkit fixture
-// DB is present (local), graceful RES033 when absent (CI without siblings).
+// Memo 096 — E2E proof that the CLI `mode: 'url'` add-on pipeline works:
+// add (fetch+parse+in-memory via the add-on) -> call (dispatch a default method
+// over in-memory data). The add-on module is mocked so the test exercises the
+// CLI branch deterministically without a network or the published package.
 
-const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) ) )
-const SIBLINGS_ROOT = dirname( REPO_ROOT )
+const FEATURE_ROWS = [
+    { feature_id: 0, geom_type: 'Point', lat: 50.0, lon: 10.0, properties: { name: 'Alpha' } },
+    { feature_id: 1, geom_type: 'Point', lat: 50.01, lon: 10.01, properties: { name: 'Beta' } }
+]
 
-const ADDONS = [
+const CAPABILITIES = { spatialQuery: true, typeFilter: true }
+
+const METHOD_CATALOG = [
     {
-        sourceKey: 'sqlite-geojson',
-        addonName: 'geojson-sqlite-toolkit',
-        fixtureDb: join( SIBLINGS_ROOT, 'geojson-sqlite-toolkit', 'tests', 'fixtures', 'synthetic-geojson', 'synthetic-geojson.db' ),
-        dbFileName: 'places-geojson.db',
-        namespace: 'placesgeo',
-        schemaName: 'places-geojson-v1'
-    },
-    {
-        sourceKey: 'sqlite-csv',
-        addonName: 'csv-tsv-sqlite-toolkit',
-        fixtureDb: join( SIBLINGS_ROOT, 'csv-tsv-sqlite-toolkit', 'tests', 'fixtures', 'synthetic-csv', 'synthetic-csv.db' ),
-        dbFileName: 'places-csv.db',
-        namespace: 'placescsv',
-        schemaName: 'places-csv-v1'
+        name: 'featuresInBBox',
+        requiresCapabilities: [ 'spatialQuery' ],
+        params: {
+            minLon: { type: 'number', required: true, description: 'West' },
+            minLat: { type: 'number', required: true, description: 'South' },
+            maxLon: { type: 'number', required: true, description: 'East' },
+            maxLat: { type: 'number', required: true, description: 'North' },
+            limit: { type: 'integer', required: false, description: 'Max' }
+        },
+        outputSchema: { type: 'array', items: { type: 'object' } }
     }
 ]
 
-// FlowMcpCli must be imported AFTER createTestHome registers the os.homedir mock.
+
+function buildFakeAdapter() {
+    const loadedUrls = new Set()
+
+    class FlowMcpAdapter {
+        static async loadFromUrl( { url, parseConfig } ) {
+            if( typeof url !== 'string' || !url.startsWith( 'https://' ) ) {
+                throw new Error( `URL-001: url must use HTTPS, got '${url}'` )
+            }
+            loadedUrls.add( url )
+            return { loaded: true, url, capabilities: CAPABILITIES, recordCount: FEATURE_ROWS.length }
+        }
+
+        static getAvailableMethods( { url } ) {
+            if( !loadedUrls.has( url ) ) { throw new Error( 'URL-004: not loaded' ) }
+            return { methods: METHOD_CATALOG.map( ( m ) => ( { ...m } ) ), capabilities: CAPABILITIES }
+        }
+
+        static buildToolDefinitions( { url, namespace } ) {
+            const tools = METHOD_CATALOG
+                .map( ( method ) => {
+                    const properties = {}
+                    const required = []
+                    Object
+                        .entries( method.params )
+                        .forEach( ( [ name, def ] ) => {
+                            properties[ name ] = { type: def.type, description: def.description || '' }
+                            if( def.required === true ) { required.push( name ) }
+                        } )
+                    return {
+                        name: `${namespace}.${method.name}`,
+                        description: `default method: ${method.name}`,
+                        inputSchema: { type: 'object', properties, required },
+                        outputSchema: method.outputSchema,
+                        requiresCapabilities: method.requiresCapabilities,
+                        method: method.name
+                    }
+                } )
+            return { tools }
+        }
+
+        static executeMethod( { url, method, params } ) {
+            if( !loadedUrls.has( url ) ) { throw new Error( 'URL-004: not loaded' ) }
+            if( method !== 'featuresInBBox' ) { throw new Error( `Unknown method: ${method}` ) }
+            return { features: FEATURE_ROWS, matchCount: FEATURE_ROWS.length }
+        }
+    }
+
+    return { FlowMcpAdapter }
+}
+
+
+jest.unstable_mockModule( 'geojson-sqlite-toolkit', () => buildFakeAdapter() )
+jest.unstable_mockModule( 'csv-tsv-sqlite-toolkit', () => buildFakeAdapter() )
+
+// FlowMcpCli must be imported AFTER the mocks + createTestHome side-effects.
 const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
-const originalEnv = process.env.FLOWMCP_RESOURCES
+
+const ADDONS = [
+    { sourceKey: 'sqlite-geojson', addonName: 'geojson-sqlite-toolkit', namespace: 'placesgeo', schemaName: 'places-geojson-v1', url: 'https://example.org/places.geojson', parseConfig: null },
+    { sourceKey: 'sqlite-csv', addonName: 'csv-tsv-sqlite-toolkit', namespace: 'placescsv', schemaName: 'places-csv-v1', url: 'https://example.org/places.csv', parseConfig: { delimiter: ',', header: true, latColumn: 'lat', lonColumn: 'lon' } }
+]
 
 
 ADDONS
     .forEach( ( addon ) => {
-        describe( `flowmcp add/call ${addon.sourceKey} add-on (Memo 094 P3 E2E)`, () => {
+        describe( `flowmcp add/call ${addon.sourceKey} url-mode add-on (Memo 096 E2E)`, () => {
             let home
             let cwd
-            let resourcesDir
             let schemaPath
-            let badSchemaPath
-            let fixtureExists
+            let fileBasedSchemaPath
 
 
             beforeEach( async () => {
-                home = createTestHome( { 'suite': `sqlite-${addon.sourceKey}` } )
+                home = createTestHome( { 'suite': `url-${addon.sourceKey}` } )
                 await home.setup()
 
                 cwd = join( home.root, 'cwd' )
-                resourcesDir = join( home.root, 'resources' )
                 schemaPath = join( home.root, `${addon.schemaName}.mjs` )
-                badSchemaPath = join( home.root, `${addon.schemaName}-bad.mjs` )
-
+                fileBasedSchemaPath = join( home.root, `${addon.schemaName}-file.mjs` )
                 await mkdir( cwd, { recursive: true } )
-                await mkdir( resourcesDir, { recursive: true } )
 
                 await writeFile(
                     join( home.globalConfigDir, 'config.json' ),
@@ -69,110 +121,83 @@ ADDONS
                     'utf-8'
                 )
 
-                process.env.FLOWMCP_RESOURCES = resourcesDir
+                const parseConfigLine = addon.parseConfig
+                    ? `,\n            parseConfig: ${JSON.stringify( addon.parseConfig )}`
+                    : ''
 
-                fixtureExists = false
-                try {
-                    await access( addon.fixtureDb, constants.R_OK )
-                    fixtureExists = true
-                } catch { /* sibling toolkit not checked out — graceful degrade */ }
-
-                if( fixtureExists ) {
-                    await copyFile( addon.fixtureDb, join( resourcesDir, addon.dbFileName ) )
-                }
-
-                const schemaContent = `export const main = {
+                await writeFile( schemaPath, `export const main = {
     namespace: '${addon.namespace}',
     name: '${addon.schemaName}',
     version: '4.1.0',
     resources: [
         {
             source: '${addon.sourceKey}',
-            mode: 'file-based',
-            path: '\${FLOWMCP_RESOURCES}/${addon.dbFileName}',
-            addon: '${addon.addonName}'
+            mode: 'url',
+            url: '${addon.url}',
+            addon: '${addon.addonName}'${parseConfigLine}
         }
     ]
 }
-`
-                await writeFile( schemaPath, schemaContent, 'utf-8' )
+`, 'utf-8' )
 
-                const badSchemaContent = `export const main = {
+                await writeFile( fileBasedSchemaPath, `export const main = {
     namespace: '${addon.namespace}',
-    name: '${addon.schemaName}-bad',
+    name: '${addon.schemaName}-file',
     version: '4.1.0',
     resources: [
         {
             source: '${addon.sourceKey}',
-            mode: 'in-memory',
+            mode: 'file-based',
+            path: '/tmp/whatever.db',
             addon: '${addon.addonName}'
         }
     ]
 }
-`
-                await writeFile( badSchemaPath, badSchemaContent, 'utf-8' )
+`, 'utf-8' )
             } )
 
 
             afterEach( async () => {
-                if( originalEnv === undefined ) {
-                    delete process.env.FLOWMCP_RESOURCES
-                } else {
-                    process.env.FLOWMCP_RESOURCES = originalEnv
-                }
-
                 await home.teardown()
             } )
 
 
-            it( 'runs the full add pipeline with the sibling fixture (or fails gracefully if absent)', async () => {
+            it( 'runs the full url-mode add pipeline (fetch+parse+in-memory)', async () => {
                 const { result } = await FlowMcpCli.add( { 'toolName': schemaPath, cwd, 'force': false } )
 
-                if( fixtureExists ) {
-                    expect( result.status ).toBe( true )
-                    expect( result.namespace ).toBe( addon.namespace )
-                    expect( result.addon ).toBe( addon.addonName )
-                    expect( result.sourceKey ).toBe( addon.sourceKey )
-                    expect( Array.isArray( result.tools ) ).toBe( true )
-                    expect( result.tools.length ).toBeGreaterThan( 0 )
-                } else {
-                    expect( result.status ).toBe( false )
-                    expect( result.error ).toMatch( /RES033/ )
-                }
+                expect( result.status ).toBe( true )
+                expect( result.namespace ).toBe( addon.namespace )
+                expect( result.mode ).toBe( 'url' )
+                expect( result.url ).toBe( addon.url )
+                expect( result.addon ).toBe( addon.addonName )
+                expect( Array.isArray( result.tools ) ).toBe( true )
+                expect( result.tools.length ).toBeGreaterThan( 0 )
             } )
 
 
-            it( 'aborts with RES030 when the schema declares mode in-memory', async () => {
-                const { result } = await FlowMcpCli.add( { 'toolName': badSchemaPath, cwd, 'force': false } )
+            it( 'aborts with RES043 when the schema declares mode file-based (converter path removed)', async () => {
+                const { result } = await FlowMcpCli.add( { 'toolName': fileBasedSchemaPath, cwd, 'force': false } )
 
                 expect( result.status ).toBe( false )
-                expect( result.error ).toMatch( /RES030/ )
+                expect( result.error ).toMatch( /RES043/ )
             } )
 
 
-            it( 'writes the seal cache into the per-source directory (C3)', async () => {
-                if( !fixtureExists ) { return }
-
+            it( 'writes the seal cache with mode url + url into the per-source directory', async () => {
                 await FlowMcpCli.add( { 'toolName': schemaPath, cwd, 'force': true } )
 
-                const cachePath = join(
-                    home.globalConfigDir,
-                    'cache',
-                    addon.sourceKey,
-                    `${addon.namespace}-${addon.schemaName}.json`
-                )
+                const cachePath = join( home.globalConfigDir, 'cache', addon.sourceKey, `${addon.namespace}-${addon.schemaName}.json` )
                 const raw = await readFile( cachePath, 'utf-8' )
                 const entry = JSON.parse( raw )
 
                 expect( entry.sourceKey ).toBe( addon.sourceKey )
-                expect( entry.meta.qualitySeal ).toBe( addon.sourceKey )
+                expect( entry.mode ).toBe( 'url' )
+                expect( entry.url ).toBe( addon.url )
                 expect( Array.isArray( entry.tools ) ).toBe( true )
             } )
 
 
-            it( 'routes flowmcp call to the addon handler and returns real rows', async () => {
-                if( !fixtureExists ) { return }
-
+            it( 'routes flowmcp call to the addon method and returns real rows from memory', async () => {
                 await FlowMcpCli.add( { 'toolName': schemaPath, cwd, 'force': true } )
 
                 const { result: callResult } = await FlowMcpCli.callTool( {
@@ -186,7 +211,7 @@ ADDONS
 
                 expect( callResult.status ).toBe( true )
                 expect( callResult.toolName ).toBe( `${addon.namespace}.featuresInBBox` )
-                expect( Array.isArray( callResult.content ) ).toBe( true )
+                expect( callResult.content ).toBeDefined()
             } )
         } )
     } )

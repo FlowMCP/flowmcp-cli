@@ -5567,16 +5567,18 @@ class FlowMcpCli {
     }
 
 
-    static async #writeSealCache( { schemaNamespace, schemaName, schemaFile, dbPath, sourceKey, addonName, namespace, meta, tools, overridden } ) {
+    static async #writeSealCache( { schemaNamespace, schemaName, schemaFile, dbPath, sourceKey, addonName, namespace, meta, tools, overridden, mode = 'file-based', url = null, parseConfig = null } ) {
         const { filePath } = FlowMcpCli.#sqliteGtfsCachePath( { schemaNamespace, schemaName, sourceKey } )
         await mkdir( dirname( filePath ), { recursive: true } )
 
         let dbMtime = null
-        try {
-            const st = await stat( dbPath )
-            dbMtime = st.mtime.toISOString()
-        } catch {
-            dbMtime = null
+        if( dbPath ) {
+            try {
+                const st = await stat( dbPath )
+                dbMtime = st.mtime.toISOString()
+            } catch {
+                dbMtime = null
+            }
         }
 
         const entry = {
@@ -5586,7 +5588,10 @@ class FlowMcpCli {
             'sourceKey': sourceKey,
             'addonName': addonName,
             'namespace': namespace,
+            'mode': mode,
             'dbPath': dbPath,
+            'url': url,
+            'parseConfig': parseConfig,
             'sealedAt': new Date().toISOString(),
             'dbMtime': dbMtime,
             'meta': meta,
@@ -5617,6 +5622,9 @@ class FlowMcpCli {
 
 
     static async #checkSealCacheStale( { entry, dbPath } ) {
+        // URL-mode entries (Memo 096) have no local file — file-mtime staleness
+        // does not apply. Freshness is governed by the add-on's in-memory TTL.
+        if( entry && entry[ 'mode' ] === 'url' ) { return { 'isStale': false } }
         if( !entry || !entry[ 'dbMtime' ] ) { return { 'isStale': true } }
 
         try {
@@ -5743,39 +5751,44 @@ class FlowMcpCli {
 
         const resource = sqliteGtfsResources[ 0 ]
         const sourceKey = resource.source
+        const isUrlMode = resource.mode === 'url'
 
-        // PRD-14 path resolution
-        let resolved
-        try {
-            resolved = PathVariableResolver.resolvePathVariables( { 'path': resource.path } )
-        } catch( err ) {
-            const result = FlowMcpCli.#error( {
-                'error': `RES035: ${err.message}`,
-                'fix': `Set FLOWMCP_RESOURCES or use a literal path in ${schemaFile}`
-            } )
+        // Memo 096 — URL mode: no path, no seal. Fetch + parse + in-memory.
+        let resolvedPath = null
+        if( !isUrlMode ) {
+            // PRD-14 path resolution
+            let resolved
+            try {
+                resolved = PathVariableResolver.resolvePathVariables( { 'path': resource.path } )
+            } catch( err ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `RES035: ${err.message}`,
+                    'fix': `Set FLOWMCP_RESOURCES or use a literal path in ${schemaFile}`
+                } )
 
-            return { result }
-        }
+                return { result }
+            }
 
-        const { resolvedPath } = resolved
-        console.log( `Resolving path: ${resource.path} → ${resolvedPath}` )
+            resolvedPath = resolved.resolvedPath
+            console.log( `Resolving path: ${resource.path} → ${resolvedPath}` )
 
-        // RES033 — DB existence + readable
-        let dbExists = false
-        try {
-            await access( resolvedPath, constants.R_OK )
-            dbExists = true
-        } catch {
-            dbExists = false
-        }
+            // RES033 — DB existence + readable
+            let dbExists = false
+            try {
+                await access( resolvedPath, constants.R_OK )
+                dbExists = true
+            } catch {
+                dbExists = false
+            }
 
-        if( !dbExists ) {
-            const result = FlowMcpCli.#error( {
-                'error': `RES033: DB at ${resolvedPath} cannot be opened (file not found or corrupt).`,
-                'fix': `Place the converted SQLite DB at ${resolvedPath} (see ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} docs).`
-            } )
+            if( !dbExists ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `RES033: DB at ${resolvedPath} cannot be opened (file not found or corrupt).`,
+                    'fix': `Place the converted SQLite DB at ${resolvedPath} (see ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} docs).`
+                } )
 
-            return { result }
+                return { result }
+            }
         }
 
         // PRD-15 + PRD-16 load addon
@@ -5804,38 +5817,80 @@ class FlowMcpCli {
             return { result }
         }
 
-        // PRD-06 verifySeal — RES032 on miss
-        let sealResult
-        try {
-            sealResult = FlowMcpAdapter.verifySeal( { 'dbPath': resolvedPath } )
-        } catch( err ) {
-            const result = FlowMcpCli.#error( {
-                'error': `RES033: DB at ${resolvedPath} cannot be opened: ${err.message}`,
-                'fix': `Verify the DB file is readable and not corrupt.`
-            } )
+        let meta = null
+        let capabilities = {}
+        const cacheKeyValue = isUrlMode ? resource.url : resolvedPath
 
-            return { result }
+        if( isUrlMode ) {
+            // RES044 — url must be present + HTTPS (defence in depth; structural check already ran)
+            const urlValid = typeof resource.url === 'string' && resource.url.startsWith( 'https://' )
+            if( !urlValid ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `RES044: resource.mode 'url' requires an HTTPS url (got: ${resource.url === undefined ? 'undefined' : resource.url}).`,
+                    'fix': `Set a valid https:// url in ${schemaFile}`
+                } )
+
+                return { result }
+            }
+
+            // Load on add: fetch complete file + parse + validate-on-load (F6, replaces verifySeal).
+            console.log( `Fetching ${resource.url} ...` )
+            let loaded
+            try {
+                loaded = await FlowMcpAdapter.loadFromUrl( { 'url': resource.url, 'parseConfig': resource.parseConfig } )
+            } catch( err ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `RES044: failed to load url resource '${resource.url}' via ${addonName}: ${err.message}`,
+                    'fix': `Verify the url returns a complete, valid ${sourceKey === 'sqlite-csv' ? 'CSV/TSV (and parseConfig matches its columns)' : 'GeoJSON'} document over HTTPS.`
+                } )
+
+                return { result }
+            }
+
+            capabilities = loaded.capabilities || {}
+            meta = {
+                'mode': 'url',
+                'url': resource.url,
+                'addon': addonName,
+                'recordCount': loaded.recordCount,
+                'capabilities': capabilities
+            }
+            console.log( `  → URL loaded: ${loaded.recordCount} records (in-memory)` )
+        } else {
+            // PRD-06 verifySeal — RES032 on miss
+            let sealResult
+            try {
+                sealResult = FlowMcpAdapter.verifySeal( { 'dbPath': resolvedPath } )
+            } catch( err ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `RES033: DB at ${resolvedPath} cannot be opened: ${err.message}`,
+                    'fix': `Verify the DB file is readable and not corrupt.`
+                } )
+
+                return { result }
+            }
+
+            if( !sealResult || sealResult.sealed !== true ) {
+                const reason = sealResult ? sealResult.reason : 'UNKNOWN'
+                const result = FlowMcpCli.#error( {
+                    'error': `RES032: DB at ${resolvedPath} does not contain meta.qualitySeal === '${sourceKey}'. Schema rejected. (reason=${reason})`,
+                    'fix': `Convert the source via ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} to obtain a sealed DB.`
+                } )
+
+                return { result }
+            }
+
+            meta = sealResult.meta
+            const specRevision = meta && meta.specRevision ? meta.specRevision : 'unknown'
+            const converterVersion = meta && meta.converterVersion ? meta.converterVersion : 'unknown'
+
+            console.log( `  → Seal: ${sourceKey} ✓` )
+            console.log( `  → Spec-Revision: ${specRevision}` )
+            console.log( `  → Converter: ${addonName}@${converterVersion}` )
+
+            capabilities = ( meta && meta.capabilities ) || {}
         }
 
-        if( !sealResult || sealResult.sealed !== true ) {
-            const reason = sealResult ? sealResult.reason : 'UNKNOWN'
-            const result = FlowMcpCli.#error( {
-                'error': `RES032: DB at ${resolvedPath} does not contain meta.qualitySeal === '${sourceKey}'. Schema rejected. (reason=${reason})`,
-                'fix': `Convert the source via ${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey} to obtain a sealed DB.`
-            } )
-
-            return { result }
-        }
-
-        const { meta } = sealResult
-        const specRevision = meta && meta.specRevision ? meta.specRevision : 'unknown'
-        const converterVersion = meta && meta.converterVersion ? meta.converterVersion : 'unknown'
-
-        console.log( `  → Seal: ${sourceKey} ✓` )
-        console.log( `  → Spec-Revision: ${specRevision}` )
-        console.log( `  → Converter: ${addonName}@${converterVersion}` )
-
-        const capabilities = ( meta && meta.capabilities ) || {}
         const activeCapabilities = Object
             .entries( capabilities )
             .filter( ( [ , value ] ) => {
@@ -5852,7 +5907,7 @@ class FlowMcpCli {
         // PRD-08 buildToolDefinitions
         let toolDefs
         try {
-            const built = FlowMcpAdapter.buildToolDefinitions( { 'dbPath': resolvedPath, namespace } )
+            const built = FlowMcpAdapter.buildToolDefinitions( { [ isUrlMode ? 'url' : 'dbPath' ]: cacheKeyValue, namespace } )
             toolDefs = built.tools || []
         } catch( err ) {
             const result = FlowMcpCli.#error( {
@@ -5960,7 +6015,10 @@ class FlowMcpCli {
             namespace,
             meta,
             'tools': registryTools,
-            'overridden': overriddenAutoTools
+            'overridden': overriddenAutoTools,
+            'mode': isUrlMode ? 'url' : 'file-based',
+            'url': isUrlMode ? resource.url : null,
+            'parseConfig': isUrlMode ? ( resource.parseConfig || null ) : null
         } )
 
         console.log( 'Schema active.' )
@@ -5970,6 +6028,8 @@ class FlowMcpCli {
             'schema': schemaName,
             'namespace': namespace,
             'dbPath': resolvedPath,
+            'url': isUrlMode ? resource.url : null,
+            'mode': isUrlMode ? 'url' : 'file-based',
             'addon': addonName,
             'sourceKey': sourceKey,
             'autoToolCount': filteredAutoTools.length,
@@ -6111,9 +6171,28 @@ class FlowMcpCli {
             return { result }
         }
 
+        const isUrlMode = entry[ 'mode' ] === 'url'
+
+        // URL mode (Memo 096): the in-memory store is process-local, so re-load
+        // on first runtime call. The add-on caches by url with its own TTL.
+        if( isUrlMode ) {
+            try {
+                await FlowMcpAdapter.loadFromUrl( { 'url': entry[ 'url' ], 'parseConfig': entry[ 'parseConfig' ] } )
+            } catch( err ) {
+                const result = FlowMcpCli.#error( {
+                    'error': `Failed to load url resource '${entry[ 'url' ]}' for '${toolName}': ${err.message}`,
+                    'fix': `Verify the url is reachable over HTTPS and returns a valid document.`
+                } )
+
+                return { result }
+            }
+        }
+
         let methodsResult
         try {
-            methodsResult = FlowMcpAdapter.getAvailableMethods( { 'dbPath': entry[ 'dbPath' ] } )
+            methodsResult = isUrlMode
+                ? FlowMcpAdapter.getAvailableMethods( { 'url': entry[ 'url' ] } )
+                : FlowMcpAdapter.getAvailableMethods( { 'dbPath': entry[ 'dbPath' ] } )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
                 'error': `Failed to read addon methods for ${entry[ 'addonName' ]}: ${err.message}`,
@@ -6141,7 +6220,14 @@ class FlowMcpCli {
 
         let handlerResult
         try {
-            if( typeof method.handler === 'function' ) {
+            if( isUrlMode ) {
+                // URL mode: the add-on owns the method; dispatch by name over in-memory data.
+                handlerResult = FlowMcpAdapter.executeMethod( {
+                    'url': entry[ 'url' ],
+                    'method': method.name,
+                    'params': userParams
+                } )
+            } else if( typeof method.handler === 'function' ) {
                 handlerResult = await method.handler( { 'dbPath': entry[ 'dbPath' ], 'params': userParams } )
             } else if( typeof method.sqlTemplate === 'string' && method.sqlTemplate.length > 0 ) {
                 // Fallback execution path — toolkit declares sqlTemplate + params, CLI runs it

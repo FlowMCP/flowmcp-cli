@@ -38,17 +38,8 @@ class SqliteGtfsResourceValidator {
             .forEach( ( resource, index ) => {
                 if( !resource || ADDON_REGISTRY[ resource.source ] === undefined ) { return }
 
-                const { source, mode, addon, path: resourcePath } = resource
+                const { source, mode, addon } = resource
                 const basePath = `main.resources[${index}]`
-
-                if( mode !== 'file-based' ) {
-                    errors.push( {
-                        code: 'RES030',
-                        severity: 'error',
-                        message: `source '${source}' requires mode 'file-based' (got: ${mode === undefined ? 'undefined' : mode}). in-memory is not allowed.`,
-                        path: `${basePath}.mode`
-                    } )
-                }
 
                 const addonValid = typeof addon === 'string' && addon.length > 0
                 if( !addonValid ) {
@@ -60,32 +51,106 @@ class SqliteGtfsResourceValidator {
                     } )
                 }
 
-                const pathIsString = typeof resourcePath === 'string' && resourcePath.length > 0
-                if( pathIsString && /\$\{FLOWMCP_[A-Z_]+\}/.test( resourcePath ) ) {
-                    try {
-                        PathVariableResolver.resolvePathVariables( { path: resourcePath } )
-                    } catch( err ) {
-                        const isRes035 = /^RES035/.test( err.message )
-                        if( isRes035 ) {
-                            errors.push( {
-                                code: 'RES035',
-                                severity: 'error',
-                                message: err.message,
-                                path: `${basePath}.path`
-                            } )
-                        } else {
-                            errors.push( {
-                                code: 'RES035',
-                                severity: 'error',
-                                message: `Path variable in '${resourcePath}' could not be resolved: ${err.message}`,
-                                path: `${basePath}.path`
-                            } )
-                        }
+                const registryEntry = ADDON_REGISTRY[ source ]
+
+                // urlMode sources (sqlite-geojson, sqlite-csv) are URL-only (Memo 096 — F3=B,
+                // the converter/seal path was removed). File-based sources (sqlite-gtfs) reject url.
+                if( registryEntry.urlMode ) {
+                    if( mode !== 'url' ) {
+                        errors.push( {
+                            code: 'RES043',
+                            severity: 'error',
+                            message: `source '${source}' requires mode 'url' (got: ${mode === undefined ? 'undefined' : mode}). The converter/file-based path was removed (Memo 096).`,
+                            path: `${basePath}.mode`
+                        } )
+                        return
                     }
+                    SqliteGtfsResourceValidator.#validateUrlMode( { resource, basePath, errors } )
+                    return
                 }
+
+                if( mode === 'url' ) {
+                    errors.push( {
+                        code: 'RES043',
+                        severity: 'error',
+                        message: `mode 'url' is not supported by source '${source}'. Only sqlite-geojson and sqlite-csv support URL mode.`,
+                        path: `${basePath}.mode`
+                    } )
+                    return
+                }
+
+                SqliteGtfsResourceValidator.#validateFileMode( { resource, basePath, errors } )
             } )
 
         return { errors }
+    }
+
+
+    static #validateUrlMode( { resource, basePath, errors } ) {
+        const { source, url, parseConfig } = resource
+
+        // RES044 — url is required and MUST use HTTPS.
+        const urlValid = typeof url === 'string' && url.startsWith( 'https://' )
+        if( !urlValid ) {
+            errors.push( {
+                code: 'RES044',
+                severity: 'error',
+                message: `mode 'url' requires an HTTPS 'url' field (got: ${url === undefined ? 'undefined' : url}).`,
+                path: `${basePath}.url`
+            } )
+        }
+
+        // RES045 — sqlite-csv in url mode requires a parseConfig object (no silent default).
+        if( source === 'sqlite-csv' ) {
+            const parseConfigValid = parseConfig !== null && typeof parseConfig === 'object' && !Array.isArray( parseConfig )
+            if( !parseConfigValid ) {
+                errors.push( {
+                    code: 'RES045',
+                    severity: 'error',
+                    message: `source 'sqlite-csv' with mode 'url' requires a 'parseConfig' object. No silent default.`,
+                    path: `${basePath}.parseConfig`
+                } )
+            }
+        }
+    }
+
+
+    static #validateFileMode( { resource, basePath, errors } ) {
+        const { source, mode, path: resourcePath } = resource
+
+        // RES030 — file-based sources require mode 'file-based'.
+        if( mode !== 'file-based' ) {
+            errors.push( {
+                code: 'RES030',
+                severity: 'error',
+                message: `source '${source}' requires mode 'file-based' (got: ${mode === undefined ? 'undefined' : mode}). in-memory is not allowed.`,
+                path: `${basePath}.mode`
+            } )
+        }
+
+        const pathIsString = typeof resourcePath === 'string' && resourcePath.length > 0
+        if( pathIsString && /\$\{FLOWMCP_[A-Z_]+\}/.test( resourcePath ) ) {
+            try {
+                PathVariableResolver.resolvePathVariables( { path: resourcePath } )
+            } catch( err ) {
+                const isRes035 = /^RES035/.test( err.message )
+                if( isRes035 ) {
+                    errors.push( {
+                        code: 'RES035',
+                        severity: 'error',
+                        message: err.message,
+                        path: `${basePath}.path`
+                    } )
+                } else {
+                    errors.push( {
+                        code: 'RES035',
+                        severity: 'error',
+                        message: `Path variable in '${resourcePath}' could not be resolved: ${err.message}`,
+                        path: `${basePath}.path`
+                    } )
+                }
+            }
+        }
     }
 
 
