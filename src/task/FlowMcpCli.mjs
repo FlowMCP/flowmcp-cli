@@ -2674,52 +2674,8 @@ class FlowMcpCli {
             return { result }
         }
 
-        let resolvedSchemas = null
-        let groupName = null
-
-        if( !group ) {
-            const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
-            if( !agentSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = agentSchemas
-            groupName = '_default'
-        } else {
-            const { groupName: resolvedGroupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
-            if( !resolvedGroupName ) {
-                const result = FlowMcpCli.#error( { 'error': groupNameError, 'fix': groupNameFix } )
-
-                return { result }
-            }
-
-            groupName = resolvedGroupName
-
-            const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await FlowMcpCli.#resolveGroupSchemas( { 'groupName': resolvedGroupName, cwd } )
-            if( !groupSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': schemasError, 'fix': schemasFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = groupSchemas
-        }
-
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
-        const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-        if( !envContent ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Cannot read .env file at: ${envPath}`,
-                'fix': `Ensure the .env file exists at ${envPath}`
-            } )
-
-            return { result }
-        }
-
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+        // Memo 099 Kap 5 — list ALL tools from the configured schemaFolders (no group/activation).
+        const { schemas: resolvedSchemas } = await FlowMcpCli.#resolveAllSchemas()
 
         const tools = []
 
@@ -2748,7 +2704,7 @@ class FlowMcpCli {
 
         const result = {
             'status': true,
-            'group': groupName,
+            'group': '_all',
             'toolCount': tools.length,
             tools
         }
@@ -2821,48 +2777,16 @@ class FlowMcpCli {
             resolvedToolName = mcpToolName
         }
 
-        let resolvedSchemas = null
-
-        if( !group ) {
-            const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
-            if( !agentSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = agentSchemas
-        } else {
-            const { groupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
-            if( !groupName ) {
-                const result = FlowMcpCli.#error( { 'error': groupNameError, 'fix': groupNameFix } )
-
-                return { result }
-            }
-
-            const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await FlowMcpCli.#resolveGroupSchemas( { groupName, cwd } )
-            if( !groupSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': schemasError, 'fix': schemasFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = groupSchemas
-        }
+        // Memo 099 Kap 5 — no activation: resolve against ALL configured schemaFolders.
+        const { schemas: allSchemas } = await FlowMcpCli.#resolveAllSchemas()
+        const resolvedSchemas = allSchemas
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
         const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-        if( !envContent ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Cannot read .env file at: ${envPath}`,
-                'fix': `Ensure the .env file exists at ${envPath}`
-            } )
-
-            return { result }
-        }
-
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+        const envObject = envContent
+            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            : {}
 
         let userParams = {}
         if( jsonArgs ) {
@@ -2923,8 +2847,29 @@ class FlowMcpCli {
             }
 
             const result = FlowMcpCli.#error( {
-                'error': `Tool "${toolName}" not found in active tools.`,
-                'fix': `Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tool names.`
+                'error': `Tool "${toolName}" not found.`,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> or ${appConfig[ 'cliCommand' ]} list to see available tool names.`
+            } )
+
+            return { result }
+        }
+
+        // Memo 099 Kap 6 — graceful degradation: a tool whose required keys are
+        // missing is disabled, never a global abort. The other tools stay usable.
+        const matchedRequiredKeys = matchedMain[ 'requiredServerParams' ] || []
+        const matchedMissingKeys = matchedRequiredKeys
+            .filter( ( key ) => {
+                const present = envObject[ key ] !== undefined && String( envObject[ key ] ).length > 0
+
+                return present === false
+            } )
+
+        if( matchedMissingKeys.length > 0 ) {
+            const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
+            const otherCount = availableTools.length > 0 ? availableTools.length - 1 : 0
+            const result = FlowMcpCli.#error( {
+                'error': `Tool "${toolName}" is not available — missing key(s): ${matchedMissingKeys.join( ', ' )}.`,
+                'fix': `Add the key(s) to ${envPath}. ${otherCount} other tool(s) remain callable.`
             } )
 
             return { result }
@@ -10149,6 +10094,38 @@ allowlist, migrate-config, etc.).
         const { schemas } = await FlowMcpCli.#resolveToolRefs( { toolRefs } )
 
         return { schemas, 'error': null, 'fix': null }
+    }
+
+
+    // Memo 099 Kap 5 — load ALL schemas from the configured schemaFolders[].
+    // No activation: every tool in every folder is immediately resolvable.
+    static async #resolveAllSchemas() {
+        const { sources } = await FlowMcpCli.#listSources()
+        const schemas = []
+
+        await sources
+            .reduce( ( promise, source ) => promise.then( async () => {
+                const { name: sourceName, schemas: sourceSchemas } = source
+
+                await sourceSchemas
+                    .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
+                        const { file, requiredServerParams } = schemaEntry
+                        const schemaRef = `${sourceName}/${file}`
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                        const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        if( main ) {
+                            schemas.push( {
+                                main,
+                                handlersFn,
+                                'file': schemaRef,
+                                'requiredServerParams': Array.isArray( requiredServerParams ) ? requiredServerParams : ( main[ 'requiredServerParams' ] || [] )
+                            } )
+                        }
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        return { schemas }
     }
 
 

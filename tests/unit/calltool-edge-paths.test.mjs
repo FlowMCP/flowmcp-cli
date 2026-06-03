@@ -279,14 +279,16 @@ describe( 'FlowMcpCli.callTool — with group param for non-existent group', () 
     } )
 
 
-    it( 'returns error for nonexistent group name', async () => {
+    // Memo 099 Kap 5 — group is removed; the group param is ignored and the
+    // tool resolves against all schemaFolders regardless of any group value.
+    it( 'ignores the group param and resolves the tool', async () => {
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_calledgesrc',
             'group': 'nonexistent-group',
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'status' ] ).toBe( true )
     } )
 } )
 
@@ -318,7 +320,9 @@ describe( 'FlowMcpCli.callTool — env file missing', () => {
     } )
 
 
-    it( 'returns error when env file cannot be read', async () => {
+    // Memo 099 Kap 6 — graceful degradation: a missing .env no longer hard-fails
+    // the whole call. A keyless tool still resolves (env treated as empty).
+    it( 'does not hard-fail when env file cannot be read (keyless tool)', async () => {
         const savedConfig = await readFile( GLOBAL_CONFIG_PATH, 'utf-8' )
         const parsed = JSON.parse( savedConfig )
         parsed[ 'envPath' ] = '/tmp/nonexistent-calledge-env.env'
@@ -329,11 +333,10 @@ describe( 'FlowMcpCli.callTool — env file missing', () => {
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'Cannot read .env' )
+        expect( result[ 'status' ] ).toBe( true )
 
         await writeFile( GLOBAL_CONFIG_PATH, savedConfig, 'utf-8' )
-    } )
+    }, 15000 )
 } )
 
 

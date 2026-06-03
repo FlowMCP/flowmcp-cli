@@ -347,7 +347,7 @@ describe( 'callTool — Spec-ID 2-slash dispatches via index', () => {
         // The tool exists (ping.mjs has no requiredServerParams but env is empty)
         // We expect either a successful call or a missing env error,
         // NOT a "not found" error — which confirms the Spec-ID was resolved correctly.
-        const isNotFoundError = result[ 'error' ] && result[ 'error' ].includes( 'not found in active tools' )
+        const isNotFoundError = Boolean( result[ 'error' ] && result[ 'error' ].includes( 'not found' ) )
 
         expect( isNotFoundError ).toBe( false )
 

@@ -175,18 +175,22 @@ describe( 'FlowMcpCli.callListTools', () => {
     } )
 
 
-    it( 'returns tools for a named group', async () => {
+    // Memo 099 Kap 5 — group is removed; the param is ignored and all tools list.
+    it( 'ignores a named group and lists all tools', async () => {
         const { result } = await FlowMcpCli.callListTools( { group: 'named-group', cwd: TEST_CWD } )
 
         expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'group' ] ).toBe( 'named-group' )
-        expect( result[ 'toolCount' ] ).toBe( 1 )
-        expect( result[ 'tools' ].length ).toBe( 1 )
-        expect( result[ 'tools' ][ 0 ][ 'toolName' ] ).toBe( 'get_status_callapi' )
+        expect( result[ 'group' ] ).toBe( '_all' )
+
+        const toolNames = result[ 'tools' ]
+            .map( ( tool ) => tool[ 'toolName' ] )
+
+        expect( toolNames ).toContain( 'get_status_callapi' )
     } )
 
 
-    it( 'returns error when env file is missing', async () => {
+    // Memo 099 Kap 5 — listing tools does not read .env; a missing env is fine.
+    it( 'does not require .env to list tools', async () => {
         const noEnvCwd = join( tmpdir(), 'flowmcp-cli-call-no-env-test' )
         const noEnvLocalDir = join( noEnvCwd, '.flowmcp' )
         await mkdir( noEnvLocalDir, { recursive: true } )
@@ -205,8 +209,7 @@ describe( 'FlowMcpCli.callListTools', () => {
 
         const { result } = await FlowMcpCli.callListTools( { group: undefined, cwd: noEnvCwd } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'Cannot read .env file' )
+        expect( result[ 'status' ] ).toBe( true )
 
         await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( TEST_GLOBAL_CONFIG, null, 4 ), 'utf-8' )
         await rm( noEnvCwd, { recursive: true, force: true } )
@@ -223,14 +226,18 @@ describe( 'FlowMcpCli.callTool', () => {
     } )
 
 
-    it( 'returns error when no local config exists', async () => {
+    // Memo 099 Kap 5 — no local config / activation is required anymore. A missing
+    // local config is NOT itself an error; tools resolve against the schemaFolders.
+    it( 'does not require a local config to resolve tools', async () => {
         const emptyCwd = join( tmpdir(), 'flowmcp-cli-call-empty-cwd' )
         await mkdir( emptyCwd, { recursive: true } )
 
-        const { result } = await FlowMcpCli.callTool( { toolName: 'get_status_callapi', jsonArgs: undefined, group: undefined, cwd: emptyCwd } )
+        const { result } = await FlowMcpCli.callTool( { toolName: 'nonexistent_tool_xyz', jsonArgs: undefined, group: undefined, cwd: emptyCwd } )
 
+        // resolves the folder index and reports "not found" — never "no active tools"
         expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
+        expect( result[ 'error' ] ).toContain( 'not found' )
+        expect( result[ 'error' ] ).not.toContain( 'active tools' )
 
         await rm( emptyCwd, { recursive: true, force: true } )
     } )

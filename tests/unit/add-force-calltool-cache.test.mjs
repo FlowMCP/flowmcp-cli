@@ -289,14 +289,15 @@ describe( 'FlowMcpCli.callListTools with group override', () => {
     } )
 
 
-    test( 'lists tools from specified group', async () => {
+    // Memo 099 Kap 5 — group is removed; call list-tools lists ALL tools.
+    test( 'ignores the group param and lists all tools', async () => {
         const { result } = await FlowMcpCli.callListTools( {
             'group': 'alternate-group',
             'cwd': CWD
         } )
 
         expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'group' ] ).toBe( 'alternate-group' )
+        expect( result[ 'group' ] ).toBe( '_all' )
         expect( result[ 'toolCount' ] ).toBeGreaterThan( 0 )
 
         const toolNames = result[ 'tools' ]
@@ -310,14 +311,14 @@ describe( 'FlowMcpCli.callListTools with group override', () => {
     } )
 
 
-    test( 'returns error for non-existent group', async () => {
+    test( 'ignores a non-existent group and still lists all tools', async () => {
         const { result } = await FlowMcpCli.callListTools( {
             'group': 'nonexistent',
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'not found' )
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( '_all' )
     } )
 } )
 

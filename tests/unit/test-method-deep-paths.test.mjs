@@ -329,46 +329,45 @@ describe( 'FlowMcpCli.test with schemaPath — config returns null', () => {
 // FlowMcpCli.callListTools — no active tools (lines 2177-2180)
 // ---------------------------------------------------------------------------
 
-describe( 'FlowMcpCli.callListTools — no active tools', () => {
-    it( 'returns No active tools error when local config has an empty tools array', async () => {
+// Memo 099 Kap 5 — call list-tools lists ALL tools from the schemaFolders.
+// There is no activation/group gate, so an empty/absent local config is fine.
+describe( 'FlowMcpCli.callListTools — no activation required (Memo 099)', () => {
+    it( 'lists all tools when local config has an empty tools array', async () => {
         const { result } = await FlowMcpCli.callListTools( {
             'group': undefined,
             'cwd': EMPTY_TOOLS_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'No active tools' )
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( '_all' )
     } )
 
 
-    it( 'returns No active tools error when cwd has no local config at all', async () => {
+    it( 'lists all tools when cwd has no local config at all', async () => {
         const { result } = await FlowMcpCli.callListTools( {
             'group': undefined,
             'cwd': NO_CONFIG_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'No active tools' )
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( '_all' )
     } )
 } )
 
 
 // ---------------------------------------------------------------------------
-// FlowMcpCli.callListTools — group schemas resolution failure (lines 2196-2199)
+// Memo 099 Kap 5 — group is removed; the group param is ignored.
 // ---------------------------------------------------------------------------
 
-describe( 'FlowMcpCli.callListTools — nonexistent group', () => {
-    it( 'returns group not found error when group name does not exist in local config', async () => {
+describe( 'FlowMcpCli.callListTools — group param ignored (Memo 099)', () => {
+    it( 'ignores a nonexistent group and still lists all tools', async () => {
         const { result } = await FlowMcpCli.callListTools( {
             'group': 'totally-nonexistent-group',
             'cwd': GROUP_MISSING_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'totally-nonexistent-group' )
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( '_all' )
     } )
 } )
 
@@ -377,8 +376,10 @@ describe( 'FlowMcpCli.callListTools — nonexistent group', () => {
 // FlowMcpCli.callTool — group schemas resolution failure (lines 2292-2295)
 // ---------------------------------------------------------------------------
 
-describe( 'FlowMcpCli.callTool — nonexistent group', () => {
-    it( 'returns group not found error when group name does not exist in local config', async () => {
+// Memo 099 Kap 5 — group is removed. The group param is ignored; the tool
+// resolves against the schemaFolders regardless of any (non-)existent group.
+describe( 'FlowMcpCli.callTool — group param ignored (Memo 099)', () => {
+    it( 'ignores a nonexistent group name and resolves the tool', async () => {
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_deeptest',
             'jsonArgs': undefined,
@@ -386,13 +387,11 @@ describe( 'FlowMcpCli.callTool — nonexistent group', () => {
             'cwd': GROUP_MISSING_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'totally-nonexistent-group' )
-    } )
+        expect( result[ 'status' ] ).toBe( true )
+    }, 15000 )
 
 
-    it( 'returns error when group name is valid but cwd has no local config', async () => {
+    it( 'ignores the group param even when cwd has no local config', async () => {
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_deeptest',
             'jsonArgs': undefined,
@@ -400,7 +399,6 @@ describe( 'FlowMcpCli.callTool — nonexistent group', () => {
             'cwd': NO_CONFIG_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-    } )
+        expect( result[ 'status' ] ).toBe( true )
+    }, 15000 )
 } )
