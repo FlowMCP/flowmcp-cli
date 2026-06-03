@@ -300,7 +300,9 @@ describe( 'callTool — no group and no active tools (lines 4636-4649)', () => {
         await rm( TEST_CWD, { recursive: true, force: true } ).catch( () => {} )
     } )
 
-    it( 'returns error when group is undefined and no defaultGroup or active tools exist', async () => {
+    // Memo 099 Kap 5 — no activation: with no defaultGroup or active tools, the
+    // tool still resolves against the schemaFolders (keyless ping succeeds).
+    it( 'resolves the tool without any active tools or group', async () => {
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_deepcfgsrc',
             'jsonArgs': '{}',
@@ -308,9 +310,8 @@ describe( 'callTool — no group and no active tools (lines 4636-4649)', () => {
             'cwd': TEST_CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-    } )
+        expect( result[ 'status' ] ).toBe( true )
+    }, 15000 )
 } )
 
 

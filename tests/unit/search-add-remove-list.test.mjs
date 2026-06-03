@@ -199,7 +199,7 @@ describe( 'FlowMcpCli.search', () => {
         expect( firstTool ).toHaveProperty( 'description' )
         expect( firstTool ).toHaveProperty( 'namespace' )
         expect( firstTool ).toHaveProperty( 'score' )
-        expect( firstTool ).toHaveProperty( 'add' )
+        expect( firstTool ).toHaveProperty( 'call' )
         expect( firstTool[ 'score' ] ).toBeGreaterThan( 0 )
     } )
 
@@ -366,15 +366,16 @@ describe( 'FlowMcpCli.add', () => {
 
 
 describe( 'FlowMcpCli.list', () => {
-    it( 'returns empty tools when no local config exists', async () => {
+    // Memo 099 Kap 5 — list shows ALL tools from the schemaFolders, independent
+    // of any local config. A missing local config no longer yields an empty list.
+    it( 'lists all folder tools regardless of local config', async () => {
         const emptyCwd = join( tmpdir(), 'flowmcp-cli-list-empty' )
         await mkdir( emptyCwd, { recursive: true } )
 
         const { result } = await FlowMcpCli.list( { cwd: emptyCwd } )
 
         expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'toolCount' ] ).toBe( 0 )
-        expect( result[ 'tools' ] ).toHaveLength( 0 )
+        expect( result[ 'toolCount' ] ).toBeGreaterThan( 0 )
 
         await rm( emptyCwd, { recursive: true, force: true } )
     } )

@@ -6,23 +6,29 @@ Command-line tool for developing, validating, and managing FlowMCP schemas.
 
 ## Description
 
-FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI provides schema validation, live API testing, repository imports, delta-based updates, and an MCP server mode for integration with AI agent frameworks like Claude Code.
+FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI reads schemas directly from the folders you list in `schemaFolders[]` (one global config), makes every tool immediately callable (no activation step), provides schema validation, live API testing, and an MCP server mode for integration with AI agent frameworks like Claude Code.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    A[Global: ~/.flowmcp/] --> B[Config + .env + Schemas]
-    B --> C[flowmcp init]
-    C --> D[Local: project/.flowmcp/]
-    D --> E[Groups with Selected Tools]
-    E --> F[flowmcp call / run]
+flowchart TD
+    A[~/.flowmcp/config.json] --> B{schemaFolders Array}
+    B --> C[name + path -> path/providers]
+    C --> D[Loader: all tools immediately available]
+    D --> E{requiredServerParams vs ~/.flowmcp/.env}
+    E -->|key present| F[tool active]
+    E -->|key missing| G[tool disabled: missing KEY visible]
+    F --> H[search / list / call]
+    G --> H
 ```
 
-| Level | Path | Content |
-|-------|------|---------|
-| **Global** | `~/.flowmcp/` | Config, .env with API keys, all imported schemas |
-| **Local** | `{project}/.flowmcp/` | Project config, groups with selected tools |
+One global config (`~/.flowmcp/config.json`) points — by path — directly at your schema folders. The folder on disk is the single source of truth: no copy, no registry, no per-project activation.
+
+| Setting | Path | Content |
+|---------|------|---------|
+| **Config** | `~/.flowmcp/config.json` | `envPath`, `schemaFolders[]`, `grading*` |
+| **Keys** | `~/.flowmcp/.env` | API keys (never in the repo) |
+| **Schemas** | `schemaFolders[].path` | Your schema repo (`providers/` + `selections/`) |
 
 ## Quickstart
 
@@ -32,6 +38,19 @@ cd flowmcp-cli
 npm i
 npx flowmcp init
 ```
+
+Then point the CLI at a schema folder by adding it to `~/.flowmcp/config.json`:
+
+```json
+{
+    "envPath": "~/.flowmcp/.env",
+    "schemaFolders": [
+        { "name": "development", "path": "~/path/to/flowmcp-schemas/schemas/v4.0.0" }
+    ]
+}
+```
+
+Every tool in every folder is now callable — no `add`. `path` may be `~`- or anchor-relative. A tool whose required API key is missing from `.env` is shown as `[disabled: missing KEY]` and skipped; all other tools stay usable.
 
 ## Commands
 
@@ -47,29 +66,18 @@ npx flowmcp init
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp search <query>` | Find available tools by keyword |
-| `flowmcp add <tool-name>` | Activate a tool for this project |
-| `flowmcp remove <tool-name>` | Deactivate a tool |
-| `flowmcp reload <tool-name>` | Remove and re-add a tool (force refresh) |
-| `flowmcp list` | Show active tools |
+| `flowmcp search <query>` | Find tools by keyword (key-gated tools flagged `disabled`) |
+| `flowmcp list` | Show all tools from the configured schemaFolders (with `disabledCount`) |
+
+> No `add`/`remove`/`reload`/`group`: every tool in every configured folder is immediately available to `search`/`list`/`call`. To add or remove a folder, edit `schemaFolders[]` in `~/.flowmcp/config.json`.
 
 ### Schema Management
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp schemas` | List all available schemas and their tools |
-| `flowmcp import <url> [--branch name]` | Import schemas from a GitHub repository |
-| `flowmcp import-registry <url>` | Import schemas from a registry URL |
-| `flowmcp update [source-name]` | Update schemas from remote registries (hash-based delta) |
+| `flowmcp schemas` | List all schemas (from the configured schemaFolders) and their tools |
 
-### Group Management
-
-| Command | Description |
-|---------|-------------|
-| `flowmcp group list` | List all groups and their tool counts |
-| `flowmcp group append <name> --tools "refs"` | Add tools to a group (creates group if new) |
-| `flowmcp group remove <name> --tools "refs"` | Remove tools from a group |
-| `flowmcp group set-default <name>` | Set the default group |
+> No `import`/`import-registry`/`update`: there is no registry or internet sync. Clone schema repos yourself (`gh repo clone …`) and add the path to `schemaFolders[]`.
 
 ### Prompt Management
 
@@ -221,11 +229,11 @@ flowmcp grading export providers/defillama
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp call list-tools [--group name]` | List available tools in default/specified group |
-| `flowmcp call <tool-name> [json] [--group name]` | Call a tool with optional JSON input |
+| `flowmcp call list-tools` | List all available tools from the schemaFolders |
+| `flowmcp call <tool-name> [json]` | Call a tool with optional JSON input (no activation needed) |
 | `flowmcp call <tool-name> [json] --no-cache` | Call a tool bypassing cache |
 | `flowmcp call <tool-name> [json] --refresh` | Call a tool and refresh cache |
-| `flowmcp run [--group name]` | Start MCP server (stdio transport) |
+| `flowmcp run` | Start MCP server (stdio transport) |
 
 ## Tool Reference Format
 
@@ -305,7 +313,7 @@ Resolution happens in two steps: first check whether the env var is set; if not,
 
 ### Error `RES035`
 
-When the CLI cannot resolve a variable — for example because an unknown variable appears in the `path`, or an env var without a default is empty — `flowmcp add` aborts with `RES035`. Users fix this by setting the env var explicitly (`export FLOWMCP_RESOURCES=/path/to/dir`) or by moving the database to the default location.
+When the CLI cannot resolve a variable — for example because an unknown variable appears in the `path`, or an env var without a default is empty — a resource `call` aborts with `RES035`. Users fix this by setting the env var explicitly (`export FLOWMCP_RESOURCES=/path/to/dir`) or by moving the database to the default location.
 
 ### The `FLOWMCP_*` Name Family
 
@@ -315,7 +323,7 @@ Example for an alternative location:
 
 ```bash
 export FLOWMCP_RESOURCES=/Volumes/MyData/flowmcp
-flowmcp add gtfsde-transit-v2
+flowmcp call <tool-name>
 ```
 
 Related sections: [Add-ons](#add-ons) (schema examples with `${FLOWMCP_RESOURCES}`), [FlowMCP Directory Structure](#flowmcp-directory-structure) (default resolution).
@@ -337,7 +345,7 @@ The path from a provider feed to a database usable by FlowMCP has four steps:
 1. **Download** the GTFS feed from the provider (examples: `gtfs.de/de/feeds/`, regional open-data portals, provider-owned download pages)
 2. **Convert** via the `gtfs-sqlite-toolkit` add-on (see the add-on README for the exact invocation)
 3. **Store** the database at `${FLOWMCP_RESOURCES}/<name>.db` (default `~/.flowmcp/resources/<name>.db`)
-4. **Activate** via `flowmcp add <schema>`
+4. **Use** the schema — it is already available via `call`/`list` once its folder is in `schemaFolders[]` (no activation step)
 
 Concrete command examples:
 
@@ -352,8 +360,8 @@ node convert.mjs --input=~/Downloads/latest.zip --output=~/.flowmcp/resources/gt
 # 3. Optional: move the database to a different location
 #    (when ${FLOWMCP_RESOURCES} does not point at the default)
 
-# 4. Activate the schema
-flowmcp add gtfsde-transit-v2
+# 4. Call the tool directly (the schema's folder is in schemaFolders[])
+flowmcp call <tool-name>
 ```
 
 ### Pre-Push Protection
@@ -400,11 +408,7 @@ Related sections: [Path Variables](#path-variables) (resolution logic), [Data So
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--help` | `-h` | Show help |
-| `--group <name>` | | Target a specific group |
 | `--route <name>` | | Filter by route name (for test commands) |
-| `--branch <name>` | | Git branch for import |
-| `--tools "refs"` | | Comma-separated tool references (for group commands) |
-| `--force` | | Force overwrite (for add) |
 | `--no-cache` | | Bypass cache (for call) |
 | `--refresh` | | Refresh cached result (for call) |
 | `--all` | | Apply to all schemas (for migrate) |
@@ -418,26 +422,23 @@ Related sections: [Path Variables](#path-variables) (resolution logic), [Data So
 ### Basic Setup and Usage
 
 ```bash
-# 1. Setup (quick install imports schemas and creates default group)
+# 1. Setup
 flowmcp init
 
-# 2. Or: Manual import and group creation
-flowmcp import https://github.com/FlowMCP/flowmcp-schemas
-flowmcp group append crypto --tools "flowmcp-schemas/coingecko/simplePrice.mjs,flowmcp-schemas/etherscan/getBalance.mjs"
-flowmcp group set-default crypto
+# 2. Point the CLI at a schema folder (clone it yourself first):
+#    gh repo clone FlowMCP/flowmcp-schemas ~/flowmcp-schemas
+#    then add to ~/.flowmcp/config.json:
+#      "schemaFolders": [ { "name": "development", "path": "~/flowmcp-schemas/schemas/v4.0.0" } ]
 
-# 3. Validate and test
-flowmcp validate
-flowmcp test project
+# 3. Discover tools (all immediately available — no add)
+flowmcp search coingecko
+flowmcp list
 
-# 4. Use tools
+# 4. Use tools directly
 flowmcp call list-tools
-flowmcp call coingecko_simplePrice '{"ids":"bitcoin","vs_currencies":"usd"}'
+flowmcp call simple_price_coingecko '{"ids":"bitcoin","vs_currencies":"usd"}'
 
-# 5. Update schemas from remote
-flowmcp update
-
-# 6. Run as MCP server
+# 5. Run as MCP server
 flowmcp run
 ```
 

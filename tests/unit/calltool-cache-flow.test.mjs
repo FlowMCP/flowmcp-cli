@@ -283,8 +283,8 @@ describe( 'FlowMcpCli.callTool env missing path', () => {
             'cwd': badEnvCwd
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( '.env' )
+        // Memo 099 Kap 6 — graceful: keyless tool still resolves with empty env
+        expect( result[ 'status' ] ).toBe( true )
 
         const restoredConfig = JSON.parse( savedConfig )
         restoredConfig[ 'envPath' ] = ENV_PATH
@@ -328,8 +328,8 @@ describe( 'FlowMcpCli.callListTools env missing path', () => {
             'cwd': badEnvCwd
         } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( '.env' )
+        // Memo 099 Kap 5 — listing tools no longer needs .env; it lists all schemaFolders tools
+        expect( result[ 'status' ] ).toBe( true )
 
         const restoredConfig = JSON.parse( savedConfig )
         restoredConfig[ 'envPath' ] = ENV_PATH

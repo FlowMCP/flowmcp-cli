@@ -329,12 +329,13 @@ describe( 'FlowMcpCli.list — broken toolRef schema returns null main', () => {
     } )
 
 
-    it( 'returns an empty tool list when the only toolRef points to a nonexistent schema', async () => {
+    // Memo 099 Kap 5 — list reads the schemaFolders, not local active toolRefs;
+    // a broken local toolRef is irrelevant and the folder tools are still listed.
+    it( 'lists folder tools and ignores a broken local toolRef', async () => {
         const { result } = await FlowMcpCli.list( { 'cwd': CWD } )
 
         expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'toolCount' ] ).toBe( 0 )
-        expect( result[ 'tools' ] ).toHaveLength( 0 )
+        expect( result[ 'toolCount' ] ).toBeGreaterThan( 0 )
     } )
 } )
 

@@ -102,31 +102,8 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'add' ) {
-        const toolName = positionals[ 1 ]
-        const force = values[ 'force' ] || false
-        const { result } = await FlowMcpCli.add( { toolName, cwd, force } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'reload' ) {
-        const toolName = positionals[ 1 ]
-        await FlowMcpCli.remove( { toolName, cwd } )
-        const { result } = await FlowMcpCli.add( { toolName, cwd, 'force': true } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'remove' ) {
-        const toolName = positionals[ 1 ]
-        const { result } = await FlowMcpCli.remove( { toolName, cwd } )
-        output( { result } )
-
-        return true
-    }
+    // Memo 099 Kap 5 — `add`/`reload`/`remove` removed. All tools from the
+    // configured schemaFolders are immediately available via search/list/call.
 
     if( command === 'list' ) {
         const { result } = await FlowMcpCli.list( { cwd } )
@@ -234,22 +211,9 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'import' ) {
-        const url = positionals[ 1 ]
-        const branch = values[ 'branch' ] || 'main'
-        const { result } = await FlowMcpCli.import( { url, branch } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'import-registry' ) {
-        const registryUrl = positionals[ 1 ]
-        const { result } = await FlowMcpCli.importRegistry( { registryUrl } )
-        output( { result } )
-
-        return true
-    }
+    // Memo 099 Kap 7 — `import`/`import-registry` removed (no registry/internet sync).
+    // Add a schema folder by editing schemaFolders[] in ~/.flowmcp/config.json;
+    // clone repos yourself with `gh repo clone`.
 
     if( command === 'import-agent' ) {
         const agentName = positionals[ 1 ]
@@ -332,13 +296,7 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'update' ) {
-        const sourceName = positionals[ 1 ] || undefined
-        const { result } = await FlowMcpCli.update( { sourceName } )
-        output( { result } )
-
-        return true
-    }
+    // Memo 099 Kap 7 — `update` removed (no registry polling / internet sync).
 
     if( command === 'schemas' ) {
         const { result } = await FlowMcpCli.schemas()
@@ -347,44 +305,8 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'group' ) {
-        const subCommand = positionals[ 1 ]
-        const groupName = positionals[ 2 ]
-
-        if( subCommand === 'append' ) {
-            const tools = values[ 'tools' ]
-            const { result } = await FlowMcpCli.groupAppend( { 'name': groupName, tools, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'remove' ) {
-            const tools = values[ 'tools' ]
-            const { result } = await FlowMcpCli.groupRemove( { 'name': groupName, tools, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'list' ) {
-            const { result } = await FlowMcpCli.groupList( { cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'set-default' ) {
-            const { result } = await FlowMcpCli.groupSetDefault( { 'name': groupName, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        await FlowMcpCli.help( { cwd } )
-
-        return true
-    }
+    // Memo 099 Kap 5 — `group` removed (it was bound to the project-local config).
+    // `selection` remains for named display/filter subsets.
 
     if( command === 'prompt' ) {
         const subCommand = positionals[ 1 ]

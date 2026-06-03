@@ -372,15 +372,16 @@ describe( 'FlowMcpCli.list — schema with no routes exercises line 2870', () =>
 } )
 
 
-describe( 'FlowMcpCli.callListTools — no active tools in empty cwd', () => {
-    it( 'returns error when cwd has no local config at all', async () => {
+// Memo 099 Kap 5 — no activation required; an empty cwd still lists all tools.
+describe( 'FlowMcpCli.callListTools — empty cwd lists all (Memo 099)', () => {
+    it( 'lists all tools even when cwd has no local config', async () => {
         const emptyCwd = join( tmpdir(), `flowmcp-listtools-empty-${Date.now()}` )
         await mkdir( emptyCwd, { recursive: true } )
 
         const { result } = await FlowMcpCli.callListTools( { 'cwd': emptyCwd } )
 
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'No active tools' )
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'group' ] ).toBe( '_all' )
 
         await rm( emptyCwd, { recursive: true, force: true } ).catch( () => {} )
     } )

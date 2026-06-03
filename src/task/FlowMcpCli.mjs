@@ -2674,52 +2674,8 @@ class FlowMcpCli {
             return { result }
         }
 
-        let resolvedSchemas = null
-        let groupName = null
-
-        if( !group ) {
-            const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
-            if( !agentSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = agentSchemas
-            groupName = '_default'
-        } else {
-            const { groupName: resolvedGroupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
-            if( !resolvedGroupName ) {
-                const result = FlowMcpCli.#error( { 'error': groupNameError, 'fix': groupNameFix } )
-
-                return { result }
-            }
-
-            groupName = resolvedGroupName
-
-            const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await FlowMcpCli.#resolveGroupSchemas( { 'groupName': resolvedGroupName, cwd } )
-            if( !groupSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': schemasError, 'fix': schemasFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = groupSchemas
-        }
-
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
-        const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-        if( !envContent ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Cannot read .env file at: ${envPath}`,
-                'fix': `Ensure the .env file exists at ${envPath}`
-            } )
-
-            return { result }
-        }
-
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+        // Memo 099 Kap 5 — list ALL tools from the configured schemaFolders (no group/activation).
+        const { schemas: resolvedSchemas } = await FlowMcpCli.#resolveAllSchemas()
 
         const tools = []
 
@@ -2748,7 +2704,7 @@ class FlowMcpCli {
 
         const result = {
             'status': true,
-            'group': groupName,
+            'group': '_all',
             'toolCount': tools.length,
             tools
         }
@@ -2821,48 +2777,16 @@ class FlowMcpCli {
             resolvedToolName = mcpToolName
         }
 
-        let resolvedSchemas = null
-
-        if( !group ) {
-            const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
-            if( !agentSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = agentSchemas
-        } else {
-            const { groupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
-            if( !groupName ) {
-                const result = FlowMcpCli.#error( { 'error': groupNameError, 'fix': groupNameFix } )
-
-                return { result }
-            }
-
-            const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await FlowMcpCli.#resolveGroupSchemas( { groupName, cwd } )
-            if( !groupSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': schemasError, 'fix': schemasFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = groupSchemas
-        }
+        // Memo 099 Kap 5 — no activation: resolve against ALL configured schemaFolders.
+        const { schemas: allSchemas } = await FlowMcpCli.#resolveAllSchemas()
+        const resolvedSchemas = allSchemas
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
         const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-        if( !envContent ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Cannot read .env file at: ${envPath}`,
-                'fix': `Ensure the .env file exists at ${envPath}`
-            } )
-
-            return { result }
-        }
-
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+        const envObject = envContent
+            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            : {}
 
         let userParams = {}
         if( jsonArgs ) {
@@ -2923,8 +2847,29 @@ class FlowMcpCli {
             }
 
             const result = FlowMcpCli.#error( {
-                'error': `Tool "${toolName}" not found in active tools.`,
-                'fix': `Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tool names.`
+                'error': `Tool "${toolName}" not found.`,
+                'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> or ${appConfig[ 'cliCommand' ]} list to see available tool names.`
+            } )
+
+            return { result }
+        }
+
+        // Memo 099 Kap 6 — graceful degradation: a tool whose required keys are
+        // missing is disabled, never a global abort. The other tools stay usable.
+        const matchedRequiredKeys = matchedMain[ 'requiredServerParams' ] || []
+        const matchedMissingKeys = matchedRequiredKeys
+            .filter( ( key ) => {
+                const present = envObject[ key ] !== undefined && String( envObject[ key ] ).length > 0
+
+                return present === false
+            } )
+
+        if( matchedMissingKeys.length > 0 ) {
+            const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
+            const otherCount = availableTools.length > 0 ? availableTools.length - 1 : 0
+            const result = FlowMcpCli.#error( {
+                'error': `Tool "${toolName}" is not available — missing key(s): ${matchedMissingKeys.join( ', ' )}.`,
+                'fix': `Add the key(s) to ${envPath}. ${otherCount} other tool(s) remain callable.`
             } )
 
             return { result }
@@ -3111,6 +3056,16 @@ class FlowMcpCli {
         const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
         const queryTokens = query.toLowerCase().trim().split( /\s+/ )
 
+        // Memo 099 Kap 6 — read env so search can flag key-gated (disabled) tools
+        const { config: searchConfig } = await FlowMcpCli.#readConfig( { cwd: process.cwd() } )
+        const searchEnvPath = searchConfig ? searchConfig[ 'envPath' ] : null
+        const { data: searchEnvContent } = searchEnvPath
+            ? await FlowMcpCli.#readText( { filePath: searchEnvPath } )
+            : { data: null }
+        const searchEnvObject = searchEnvContent
+            ? FlowMcpCli.#parseEnvFile( { envContent: searchEnvContent } ).envObject
+            : {}
+
         const { aliasIndex } = await FlowMcpCli.#loadSharedAliases()
         const sharedMatchRefs = new Set()
         aliasIndex
@@ -3140,7 +3095,7 @@ class FlowMcpCli {
                     tags,
                     score,
                     'type': tool[ 'type' ] || 'tool',
-                    'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`,
+                    'call': `${appConfig[ 'cliCommand' ]} call ${toolName}`,
                     schemaRef,
                     routeName
                 }
@@ -3173,6 +3128,19 @@ class FlowMcpCli {
                     const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
                     if( main ) {
+                        // Memo 099 Kap 6 — flag tools whose required keys are missing
+                        const requiredKeys = main[ 'requiredServerParams' ] || []
+                        const missingKeys = requiredKeys
+                            .filter( ( key ) => {
+                                const present = searchEnvObject[ key ] !== undefined && String( searchEnvObject[ key ] ).length > 0
+
+                                return present === false
+                            } )
+                        if( missingKeys.length > 0 ) {
+                            tool[ 'disabled' ] = true
+                            tool[ 'disabledReason' ] = `missing ${missingKeys.join( ', ' )}`
+                        }
+
                         const { meta } = FlowMcpCli.#extractMetaFlags( { main, routeName } )
                         const { requiredParams, optionalParams } = FlowMcpCli.#extractParameterDetails( { main, routeName } )
                         const { example } = FlowMcpCli.#generateCallExample( { toolName, requiredParams } )
@@ -3703,54 +3671,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { toolRefs } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
-
-        // Memo 051 PRD-19 — auto-injected sqlite-gtfs tools come from the seal cache
-        // and are visible even when no traditional toolRefs are active.
-        if( toolRefs.length === 0 ) {
-            const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
-            const autoToolsOnly = []
-            sealCacheEntries
-                .forEach( ( entry ) => {
-                    const entryTools = entry && entry[ 'tools' ] ? entry[ 'tools' ] : []
-                    entryTools
-                        .forEach( ( tool ) => {
-                            autoToolsOnly.push( {
-                                'name': tool.name,
-                                'description': tool.description || '',
-                                'tags': [],
-                                'parameters': {},
-                                'auto': tool.auto === true,
-                                'schema': entry[ 'schemaName' ]
-                            } )
-                        } )
-                } )
-
-            const result = {
-                'status': true,
-                'toolCount': autoToolsOnly.length,
-                'tools': autoToolsOnly
-            }
-
-            return { result }
-        }
-
-        const legacyRefs = toolRefs
-            .filter( ( ref ) => {
-                const isLegacy = !FlowMcpCli.#isSpecId( { 'ref': ref } )
-
-                return isLegacy
-            } )
-
-        const specIdRefs = toolRefs
-            .filter( ( ref ) => {
-                const isSpec = FlowMcpCli.#isSpecId( { 'ref': ref } )
-
-                return isSpec
-            } )
-
-        const { schemas } = await FlowMcpCli.#resolveToolRefs( { 'toolRefs': legacyRefs } )
-
+        // Memo 099 Kap 5/6 — list ALL tools from the configured schemaFolders.
+        // A tool whose required keys are missing from .env is flagged disabled
+        // (visible, never hidden) so the user sees exactly what is unavailable.
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
         const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
@@ -3758,7 +3681,10 @@ class FlowMcpCli {
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
 
+        const { schemas } = await FlowMcpCli.#resolveAllSchemas()
+
         const tools = []
+        let disabledCount = 0
 
         const sharedListsMap = {}
         await schemas
@@ -3781,6 +3707,15 @@ class FlowMcpCli {
                 const schemaTags = main[ 'tags' ] || []
                 const sharedLists = sharedListsMap[ file ] || {}
 
+                const requiredKeys = main[ 'requiredServerParams' ] || []
+                const missingKeys = requiredKeys
+                    .filter( ( key ) => {
+                        const present = envObject[ key ] !== undefined && String( envObject[ key ] ).length > 0
+
+                        return present === false
+                    } )
+                const disabled = missingKeys.length > 0
+
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
@@ -3791,31 +3726,19 @@ class FlowMcpCli {
                             const routeParameters = routeConfig[ 'parameters' ] || []
                             const { parameters } = FlowMcpCli.#extractParameters( { routeParameters, sharedLists } )
 
-                            tools.push( { name, description, 'tags': schemaTags, parameters } )
+                            const entry = { name, description, 'tags': schemaTags, parameters }
+                            if( disabled === true ) {
+                                entry[ 'disabled' ] = true
+                                entry[ 'disabledReason' ] = `missing ${missingKeys.join( ', ' )}`
+                                disabledCount += 1
+                            }
+
+                            tools.push( entry )
                         } catch {
                             // skip broken tools
                         }
                     } )
             } )
-
-        if( specIdRefs.length > 0 ) {
-            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
-
-            specIdRefs
-                .forEach( ( ref ) => {
-                    const toolEntry = index[ 'tools' ][ ref ]
-
-                    if( toolEntry ) {
-                        tools.push( {
-                            'name': ref,
-                            'specId': ref,
-                            'description': '',
-                            'tags': [],
-                            'parameters': {}
-                        } )
-                    }
-                } )
-        }
 
         // Memo 051 PRD-19 — include auto-injected tools from cached sqlite-gtfs schemas
         const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
@@ -3838,6 +3761,7 @@ class FlowMcpCli {
         const result = {
             'status': true,
             'toolCount': tools.length,
+            disabledCount,
             tools
         }
 
@@ -5258,6 +5182,57 @@ class FlowMcpCli {
     }
 
 
+    // Memo 099 Kap 3 — resolve ~/anchor-relative schemaFolders paths (no hardcoded usernames)
+    static #resolvePath( { path } ) {
+        if( typeof path !== 'string' || path.length === 0 ) {
+            return { resolvedPath: path }
+        }
+
+        if( path === '~' ) {
+            return { resolvedPath: homedir() }
+        }
+
+        if( path.startsWith( '~/' ) === true ) {
+            const resolvedPath = join( homedir(), path.slice( 2 ) )
+
+            return { resolvedPath }
+        }
+
+        if( isAbsolute( path ) === true ) {
+            return { resolvedPath: path }
+        }
+
+        const resolvedPath = resolve( path )
+
+        return { resolvedPath }
+    }
+
+
+    // Memo 099 Kap 3/4 — read schemaFolders[] (name + resolved path) from the global config
+    static async #readSchemaFolders() {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const raw = globalConfig && globalConfig[ 'schemaFolders' ]
+
+        if( raw === undefined || raw === null || Array.isArray( raw ) === false ) {
+            return { schemaFolders: [] }
+        }
+
+        const schemaFolders = raw
+            .filter( ( entry ) => entry && typeof entry === 'object' && Array.isArray( entry ) === false )
+            .filter( ( entry ) => typeof entry[ 'name' ] === 'string' && entry[ 'name' ].length > 0 )
+            .filter( ( entry ) => typeof entry[ 'path' ] === 'string' && entry[ 'path' ].length > 0 )
+            .map( ( entry ) => {
+                const { name, path } = entry
+                const { resolvedPath } = FlowMcpCli.#resolvePath( { path } )
+
+                return { name, 'path': resolvedPath }
+            } )
+
+        return { schemaFolders }
+    }
+
+
     static async #readLocalSources() {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -5282,6 +5257,17 @@ class FlowMcpCli {
 
 
     static async #resolveSourceDir( { sourceName } ) {
+        // Memo 099 Kap 4 — schemaFolders[] win: source dir = <path>/providers (direct, no disk-copy)
+        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
+        const folder = schemaFolders
+            .find( ( entry ) => entry[ 'name' ] === sourceName )
+
+        if( folder !== undefined ) {
+            const sourceDir = join( folder[ 'path' ], 'providers' )
+
+            return { sourceDir, isLocal: true }
+        }
+
         const { localSources } = await FlowMcpCli.#readLocalSources()
         const local = localSources[ sourceName ]
 
@@ -7237,30 +7223,42 @@ class FlowMcpCli {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
         const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
-        const { localSources } = await FlowMcpCli.#readLocalSources()
 
-        let sourceDirs = []
-        try {
-            const entries = await readdir( schemasBaseDir )
-            const dirChecks = await entries
-                .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
-                    const entryPath = join( schemasBaseDir, entry )
-                    const entryStat = await stat( entryPath )
-                    if( entryStat.isDirectory() ) {
-                        acc.push( entry )
-                    }
+        // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
+        // Legacy ~/.flowmcp/schemas scan + localSources are the fallback until migration (Memo 099 Kap 9).
+        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
 
-                    return acc
-                } ), Promise.resolve( [] ) )
+        let allSourceNames = []
 
-            sourceDirs = dirChecks
-        } catch {
-            sourceDirs = []
+        if( schemaFolders.length > 0 ) {
+            allSourceNames = schemaFolders
+                .map( ( entry ) => entry[ 'name' ] )
+        } else {
+            const { localSources } = await FlowMcpCli.#readLocalSources()
+
+            let sourceDirs = []
+            try {
+                const entries = await readdir( schemasBaseDir )
+                const dirChecks = await entries
+                    .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
+                        const entryPath = join( schemasBaseDir, entry )
+                        const entryStat = await stat( entryPath )
+                        if( entryStat.isDirectory() ) {
+                            acc.push( entry )
+                        }
+
+                        return acc
+                    } ), Promise.resolve( [] ) )
+
+                sourceDirs = dirChecks
+            } catch {
+                sourceDirs = []
+            }
+
+            const localSourceNames = Object.keys( localSources )
+                .filter( ( name ) => sourceDirs.includes( name ) === false )
+            allSourceNames = [ ...sourceDirs, ...localSourceNames ]
         }
-
-        const localSourceNames = Object.keys( localSources )
-            .filter( ( name ) => sourceDirs.includes( name ) === false )
-        const allSourceNames = [ ...sourceDirs, ...localSourceNames ]
 
         const sources = []
 
@@ -8393,26 +8391,29 @@ Setup:
 
 Tool Discovery:
   search <query>                      Find available tools
-  add <tool-name>                     Activate a tool for this project
-  remove <tool-name>                  Deactivate a tool
-  list                                Show active tools
+  list                                Show all tools from the configured schemaFolders
 
 Execution:
-  run                                 Start MCP server (stdio) for default group
-  call list-tools                     List available tools from default group
-  call <tool-name> [json]             Execute a tool call
+  run                                 Start MCP server (stdio)
+  call list-tools                     List all available tools
+  call <tool-name> [json]             Execute a tool call (no activation needed)
+
+Schema Folders (Memo 099):
+  Tools come directly from the folders listed in schemaFolders[] in
+  ~/.flowmcp/config.json. Add a folder by editing that array (name + path).
+  No "add"/"import" — every tool in every folder is immediately callable.
+  A tool whose required API key is missing is shown as
+  "[disabled: missing KEY]" and skipped; the rest stay usable.
 
 Development & Schema Maintenance:
   ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
                                       (validate, test, allowlist, migrate-config,
-                                       selection, lists, schemas, import, update, status,
-                                       group, prompt, resource, etc.)
+                                       selection, lists, schemas, status,
+                                       prompt, resource, etc.)
 
 Options:
   --tools <list>              Comma-separated tool refs (source/file.mjs::route)
-  --group <name>              Override default group for run/call/validate/test
   --route <name>              Filter test to a single route
-  --branch <name>             Branch for import (default: main)
   --basis <name>              Override basis folder (default: flowmcp)
   --yes, -y                   Auto-confirm prompts
   --dry-run                   Preview changes without applying
@@ -8454,18 +8455,11 @@ Configuration:
   dev migrate-config                  Migrate config from v3 path::route format to v4 spec-IDs
 
 Schema Management:
-  dev schemas                         List all imported sources and schemas
-  dev import <github-url>             Import schemas from a GitHub repository
-  dev import-registry <url>           Import schemas from a custom registry URL
+  dev schemas                         List all schemas from the configured schemaFolders
   dev import-agent <url>              Import an agent manifest
-  dev update [source-name]            Update schemas from remote registries
-  dev status                          Show config, sources, groups and health info
-
-Group Management:
-  dev group append <name> --tools <list>     Add tools to a group
-  dev group remove <name> --tools <list>     Remove tools from a group
-  dev group list                             List all groups
-  dev group set-default <name>               Set the default group
+  dev status                          Show config, schemaFolders and health info
+  (Memo 099: import/import-registry/update removed — add a folder by editing
+   schemaFolders[] in ~/.flowmcp/config.json; clone repos with "gh repo clone")
 
 Prompt Management:
   dev prompt list                            List all prompts across all groups
@@ -10075,6 +10069,38 @@ allowlist, migrate-config, etc.).
         const { schemas } = await FlowMcpCli.#resolveToolRefs( { toolRefs } )
 
         return { schemas, 'error': null, 'fix': null }
+    }
+
+
+    // Memo 099 Kap 5 — load ALL schemas from the configured schemaFolders[].
+    // No activation: every tool in every folder is immediately resolvable.
+    static async #resolveAllSchemas() {
+        const { sources } = await FlowMcpCli.#listSources()
+        const schemas = []
+
+        await sources
+            .reduce( ( promise, source ) => promise.then( async () => {
+                const { name: sourceName, schemas: sourceSchemas } = source
+
+                await sourceSchemas
+                    .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
+                        const { file, requiredServerParams } = schemaEntry
+                        const schemaRef = `${sourceName}/${file}`
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                        const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        if( main ) {
+                            schemas.push( {
+                                main,
+                                handlersFn,
+                                'file': schemaRef,
+                                'requiredServerParams': Array.isArray( requiredServerParams ) ? requiredServerParams : ( main[ 'requiredServerParams' ] || [] )
+                            } )
+                        }
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        return { schemas }
     }
 
 
