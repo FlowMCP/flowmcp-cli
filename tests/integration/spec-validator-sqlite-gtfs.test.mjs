@@ -16,7 +16,7 @@ const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) 
 const FIXTURE_DIR = join(
     REPO_ROOT,
     'node_modules',
-    'gtfs-sqlite-toolkit',
+    'geo-gtfs-toolkit',
     'tests',
     'fixtures',
     'synthetic-gtfs'
@@ -83,7 +83,7 @@ describe( 'SqliteGtfsResourceValidator — RES030 (mode must be file-based)', ()
                 source: 'sqlite-gtfs',
                 mode: 'in-memory',
                 path: '${FLOWMCP_RESOURCES}/synthetic-gtfs.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
 
@@ -119,7 +119,7 @@ describe( 'SqliteGtfsResourceValidator — RES031 (addon field required)', () =>
 
 describe( 'SqliteGtfsResourceValidator — RES032 (DB without seal)', () => {
     it( 'a plain SQLite DB without qualitySeal is detected as unsealed (NO_SEAL)', async () => {
-        const { FlowMcpAdapter } = await import( 'gtfs-sqlite-toolkit' )
+        const { FlowMcpAdapter } = await import( 'geo-gtfs-toolkit' )
 
         const verifyResult = FlowMcpAdapter.verifySeal( { dbPath: NO_SEAL_DB } )
 
@@ -131,7 +131,7 @@ describe( 'SqliteGtfsResourceValidator — RES032 (DB without seal)', () => {
 
 describe( 'SqliteGtfsResourceValidator — RES033 (DB cannot be opened)', () => {
     it( 'a path pointing to a nonexistent file is reported by the adapter as DB_UNREADABLE', async () => {
-        const { FlowMcpAdapter } = await import( 'gtfs-sqlite-toolkit' )
+        const { FlowMcpAdapter } = await import( 'geo-gtfs-toolkit' )
 
         const verifyResult = FlowMcpAdapter.verifySeal( {
             dbPath: join( FIXTURE_DIR, 'does-not-exist-dir', 'missing.db' )
@@ -150,7 +150,7 @@ describe( 'SqliteGtfsResourceValidator — RES034 (spec revision drift)', () => 
         // NOT perform any disk I/O. This test documents the contract: the synthetic
         // fixture exposes a specRevision via meta, and any pipeline drift check
         // must compare against this value, not classify it as an error.
-        const { FlowMcpAdapter } = await import( 'gtfs-sqlite-toolkit' )
+        const { FlowMcpAdapter } = await import( 'geo-gtfs-toolkit' )
 
         const verifyResult = FlowMcpAdapter.verifySeal( { dbPath: FIXTURE_DB } )
 
@@ -170,7 +170,7 @@ describe( 'SqliteGtfsResourceValidator — RES035 (path variable unknown)', () =
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_UNKNOWN_VAR}/foo.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
 
@@ -191,7 +191,7 @@ describe( 'SqliteGtfsResourceValidator — RES035 (path variable unknown)', () =
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_UNKNOWN_VAR}/foo.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
 
@@ -211,7 +211,7 @@ describe( 'SqliteGtfsResourceValidator — positive case (synthetic fixture sche
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_RESOURCES}/synthetic-gtfs.db',
-                addon: 'gtfs-sqlite-toolkit',
+                addon: 'geo-gtfs-toolkit',
                 addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
             }
         ]

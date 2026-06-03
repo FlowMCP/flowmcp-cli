@@ -15,7 +15,7 @@ const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) 
 const FIXTURE_DIR = join(
     REPO_ROOT,
     'node_modules',
-    'gtfs-sqlite-toolkit',
+    'geo-gtfs-toolkit',
     'tests',
     'fixtures',
     'synthetic-gtfs'
@@ -83,7 +83,7 @@ beforeAll( async () => {
             source: 'sqlite-gtfs',
             mode: 'file-based',
             path: '\${FLOWMCP_RESOURCES}/gtfs-de.db',
-            addon: 'gtfs-sqlite-toolkit',
+            addon: 'geo-gtfs-toolkit',
             addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
         }
     ]
