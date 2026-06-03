@@ -17,8 +17,8 @@ import { ADDON_REGISTRY } from '../data/addons.mjs'
  * SqliteGtfsResourceValidator
  *
  * Structural validation for any registered sqlite add-on resource
- * (`source` is a key in ADDON_REGISTRY, e.g. `sqlite-gtfs`, `sqlite-geojson`,
- * `sqlite-csv`). Emits RES030 (mode), RES031 (addon), and RES035 (path-variable).
+ * (`source` is a key in ADDON_REGISTRY, e.g. `sqlite-gtfs`, `geo-geojson`,
+ * `geo-csv`). Emits RES030 (mode), RES031 (addon), and RES035 (path-variable).
  *
  * Memo 051 REV-04 — Kap. 4.2 (RES030..RES035 codes), Kap. 7.1 (validate command),
  * Kap. 3.3 (Auto-Injection-Pfad Schritt 1 — Spec-Validator).
@@ -53,7 +53,7 @@ class SqliteGtfsResourceValidator {
 
                 const registryEntry = ADDON_REGISTRY[ source ]
 
-                // urlMode sources (sqlite-geojson, sqlite-csv) are URL-only (Memo 096 — F3=B,
+                // urlMode sources (geo-geojson, geo-csv) are URL-only (Memo 096 — F3=B,
                 // the converter/seal path was removed). File-based sources (sqlite-gtfs) reject url.
                 if( registryEntry.urlMode ) {
                     if( mode !== 'url' ) {
@@ -73,7 +73,7 @@ class SqliteGtfsResourceValidator {
                     errors.push( {
                         code: 'RES043',
                         severity: 'error',
-                        message: `mode 'url' is not supported by source '${source}'. Only sqlite-geojson and sqlite-csv support URL mode.`,
+                        message: `mode 'url' is not supported by source '${source}'. Only geo-geojson and geo-csv support URL mode.`,
                         path: `${basePath}.mode`
                     } )
                     return
@@ -100,14 +100,14 @@ class SqliteGtfsResourceValidator {
             } )
         }
 
-        // RES045 — sqlite-csv in url mode requires a parseConfig object (no silent default).
-        if( source === 'sqlite-csv' ) {
+        // RES045 — geo-csv in url mode requires a parseConfig object (no silent default).
+        if( source === 'geo-csv' ) {
             const parseConfigValid = parseConfig !== null && typeof parseConfig === 'object' && !Array.isArray( parseConfig )
             if( !parseConfigValid ) {
                 errors.push( {
                     code: 'RES045',
                     severity: 'error',
-                    message: `source 'sqlite-csv' with mode 'url' requires a 'parseConfig' object. No silent default.`,
+                    message: `source 'geo-csv' with mode 'url' requires a 'parseConfig' object. No silent default.`,
                     path: `${basePath}.parseConfig`
                 } )
             }

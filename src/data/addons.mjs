@@ -36,13 +36,20 @@ const ADDON_REGISTRY = {
         'defaultVersion': 'main',
         'urlMode': false
     },
-    'sqlite-geojson': {
+    'geo-geojson': {
+        // NOTE: `name` stays at the currently-installed/published package name
+        // until the GitHub repo is renamed + the add-on republished under
+        // `geo-geojson-toolkit` (user action, Memo 100 PRD-010 precondition).
+        // The loader imports by `name`, so it must match the installed module.
         'name': 'geojson-sqlite-toolkit',
         'source': 'github:FlowMCP/geojson-sqlite-toolkit',
         'defaultVersion': 'main',
         'urlMode': true
     },
-    'sqlite-csv': {
+    'geo-csv': {
+        // NOTE: `name` stays at the currently-installed/published package name
+        // until the GitHub repo is renamed + the add-on republished under
+        // `geo-csv-tsv-toolkit` (user action, Memo 100 PRD-010 precondition).
         'name': 'csv-tsv-sqlite-toolkit',
         'source': 'github:FlowMCP/csv-tsv-sqlite-toolkit',
         'defaultVersion': 'main',
