@@ -10,7 +10,7 @@ import { createTestHome } from '../helpers/test-home.mjs'
 const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) ) )
 const TOOLKIT_FIXTURE_DB = join(
     dirname( REPO_ROOT ),
-    'gtfs-sqlite-toolkit',
+    'geo-gtfs-toolkit',
     'tests',
     'fixtures',
     'synthetic-gtfs',
@@ -70,7 +70,7 @@ beforeEach( async () => {
             source: 'sqlite-gtfs',
             mode: 'file-based',
             path: '\${FLOWMCP_RESOURCES}/gtfs-de.db',
-            addon: 'gtfs-sqlite-toolkit'
+            addon: 'geo-gtfs-toolkit'
         }
     ]
 }
@@ -85,7 +85,7 @@ beforeEach( async () => {
         {
             source: 'sqlite-gtfs',
             mode: 'in-memory',
-            addon: 'gtfs-sqlite-toolkit'
+            addon: 'geo-gtfs-toolkit'
         }
     ]
 }
@@ -112,7 +112,7 @@ describe( 'flowmcp add sqlite-gtfs schema (PRD-18)', () => {
         if( fixtureExists ) {
             expect( result.status ).toBe( true )
             expect( result.namespace ).toBe( 'gtfsde' )
-            expect( result.addon ).toBe( 'gtfs-sqlite-toolkit' )
+            expect( result.addon ).toBe( 'geo-gtfs-toolkit' )
             expect( result.sourceKey ).toBe( 'sqlite-gtfs' )
             expect( Array.isArray( result.tools ) ).toBe( true )
             expect( result.tools.length ).toBeGreaterThan( 0 )
@@ -225,7 +225,7 @@ describe( 'flowmcp add sqlite-gtfs — override behavior (PRD-22)', () => {
             source: 'sqlite-gtfs',
             mode: 'file-based',
             path: '\${FLOWMCP_RESOURCES}/gtfs-de.db',
-            addon: 'gtfs-sqlite-toolkit'
+            addon: 'geo-gtfs-toolkit'
         }
     ],
     tools: {

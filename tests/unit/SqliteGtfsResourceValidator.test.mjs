@@ -27,7 +27,7 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_RESOURCES}/gtfs-de.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -41,7 +41,7 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
             {
                 source: 'sqlite-gtfs',
                 mode: 'in-memory',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -72,7 +72,7 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_XYZ}/foo.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -88,7 +88,7 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
                 source: 'sqlite-gtfs',
                 mode: 'file-based',
                 path: '${FLOWMCP_RESOURCES}/foo.db',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -113,7 +113,7 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
     it( 'reports error path index for arrays', () => {
         const resources = [
             { source: 'sqlite', mode: 'in-memory' },
-            { source: 'sqlite-gtfs', mode: 'in-memory', addon: 'gtfs-sqlite-toolkit' }
+            { source: 'sqlite-gtfs', mode: 'in-memory', addon: 'geo-gtfs-toolkit' }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
 
@@ -241,7 +241,7 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
                 source: 'sqlite-gtfs',
                 mode: 'url',
                 url: 'https://example.org/feed.zip',
-                addon: 'gtfs-sqlite-toolkit'
+                addon: 'geo-gtfs-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )

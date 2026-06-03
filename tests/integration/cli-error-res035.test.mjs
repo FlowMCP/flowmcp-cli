@@ -57,7 +57,7 @@ beforeAll( async () => {
             source: 'sqlite-gtfs',
             mode: 'file-based',
             path: '\${${BROKEN_VAR}}/foo.db',
-            addon: 'gtfs-sqlite-toolkit',
+            addon: 'geo-gtfs-toolkit',
             addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
         }
     ]

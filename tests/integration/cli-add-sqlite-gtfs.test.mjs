@@ -16,7 +16,7 @@ const REPO_ROOT = dirname( dirname( dirname( fileURLToPath( import.meta.url ) ) 
 const FIXTURE_DIR = join(
     REPO_ROOT,
     'node_modules',
-    'gtfs-sqlite-toolkit',
+    'geo-gtfs-toolkit',
     'tests',
     'fixtures',
     'synthetic-gtfs'
@@ -90,7 +90,7 @@ beforeAll( async () => {
             source: 'sqlite-gtfs',
             mode: 'file-based',
             path: '\${FLOWMCP_RESOURCES}/gtfs-de.db',
-            addon: 'gtfs-sqlite-toolkit',
+            addon: 'geo-gtfs-toolkit',
             addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
         }
     ]
@@ -128,7 +128,7 @@ describe( 'flowmcp add — sqlite-gtfs POC against synthetic fixture (PRD-26)', 
         expect( addResult.result ).toBeDefined()
         expect( addResult.result.status ).toBe( true )
         expect( addResult.result.namespace ).toBe( 'gtfsde' )
-        expect( addResult.result.addon ).toBe( 'gtfs-sqlite-toolkit' )
+        expect( addResult.result.addon ).toBe( 'geo-gtfs-toolkit' )
         expect( addResult.result.sourceKey ).toBe( 'sqlite-gtfs' )
     } )
 

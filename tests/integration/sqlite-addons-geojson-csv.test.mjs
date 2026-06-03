@@ -84,16 +84,16 @@ function buildFakeAdapter() {
 }
 
 
-jest.unstable_mockModule( 'geojson-sqlite-toolkit', () => buildFakeAdapter() )
-jest.unstable_mockModule( 'csv-tsv-sqlite-toolkit', () => buildFakeAdapter() )
+jest.unstable_mockModule( 'geo-geojson-toolkit', () => buildFakeAdapter() )
+jest.unstable_mockModule( 'geo-csv-tsv-toolkit', () => buildFakeAdapter() )
 
 // FlowMcpCli must be imported AFTER the mocks + createTestHome side-effects.
 const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
 const ADDONS = [
-    { sourceKey: 'geo-geojson', addonName: 'geojson-sqlite-toolkit', namespace: 'placesgeo', schemaName: 'places-geojson-v1', url: 'https://example.org/places.geojson', parseConfig: null },
-    { sourceKey: 'geo-csv', addonName: 'csv-tsv-sqlite-toolkit', namespace: 'placescsv', schemaName: 'places-csv-v1', url: 'https://example.org/places.csv', parseConfig: { delimiter: ',', header: true, latColumn: 'lat', lonColumn: 'lon' } }
+    { sourceKey: 'geo-geojson', addonName: 'geo-geojson-toolkit', namespace: 'placesgeo', schemaName: 'places-geojson-v1', url: 'https://example.org/places.geojson', parseConfig: null },
+    { sourceKey: 'geo-csv', addonName: 'geo-csv-tsv-toolkit', namespace: 'placescsv', schemaName: 'places-csv-v1', url: 'https://example.org/places.csv', parseConfig: { delimiter: ',', header: true, latColumn: 'lat', lonColumn: 'lon' } }
 ]
 
 
