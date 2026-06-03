@@ -8412,26 +8412,29 @@ Setup:
 
 Tool Discovery:
   search <query>                      Find available tools
-  add <tool-name>                     Activate a tool for this project
-  remove <tool-name>                  Deactivate a tool
-  list                                Show active tools
+  list                                Show all tools from the configured schemaFolders
 
 Execution:
-  run                                 Start MCP server (stdio) for default group
-  call list-tools                     List available tools from default group
-  call <tool-name> [json]             Execute a tool call
+  run                                 Start MCP server (stdio)
+  call list-tools                     List all available tools
+  call <tool-name> [json]             Execute a tool call (no activation needed)
+
+Schema Folders (Memo 099):
+  Tools come directly from the folders listed in schemaFolders[] in
+  ~/.flowmcp/config.json. Add a folder by editing that array (name + path).
+  No "add"/"import" — every tool in every folder is immediately callable.
+  A tool whose required API key is missing is shown as
+  "[disabled: missing KEY]" and skipped; the rest stay usable.
 
 Development & Schema Maintenance:
   ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
                                       (validate, test, allowlist, migrate-config,
-                                       selection, lists, schemas, import, update, status,
-                                       group, prompt, resource, etc.)
+                                       selection, lists, schemas, status,
+                                       prompt, resource, etc.)
 
 Options:
   --tools <list>              Comma-separated tool refs (source/file.mjs::route)
-  --group <name>              Override default group for run/call/validate/test
   --route <name>              Filter test to a single route
-  --branch <name>             Branch for import (default: main)
   --basis <name>              Override basis folder (default: flowmcp)
   --yes, -y                   Auto-confirm prompts
   --dry-run                   Preview changes without applying
@@ -8473,18 +8476,11 @@ Configuration:
   dev migrate-config                  Migrate config from v3 path::route format to v4 spec-IDs
 
 Schema Management:
-  dev schemas                         List all imported sources and schemas
-  dev import <github-url>             Import schemas from a GitHub repository
-  dev import-registry <url>           Import schemas from a custom registry URL
+  dev schemas                         List all schemas from the configured schemaFolders
   dev import-agent <url>              Import an agent manifest
-  dev update [source-name]            Update schemas from remote registries
-  dev status                          Show config, sources, groups and health info
-
-Group Management:
-  dev group append <name> --tools <list>     Add tools to a group
-  dev group remove <name> --tools <list>     Remove tools from a group
-  dev group list                             List all groups
-  dev group set-default <name>               Set the default group
+  dev status                          Show config, schemaFolders and health info
+  (Memo 099: import/import-registry/update removed — add a folder by editing
+   schemaFolders[] in ~/.flowmcp/config.json; clone repos with "gh repo clone")
 
 Prompt Management:
   dev prompt list                            List all prompts across all groups
