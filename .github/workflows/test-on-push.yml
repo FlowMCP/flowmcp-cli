@@ -18,13 +18,18 @@ jobs:
         with:
           node-version: 22
 
-      - name: Fetch GitHub git deps over HTTPS (runner has no SSH key)
-        run: |
-          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       - name: Install dependencies
         run: npm ci
+        env:
+          # Runner has no SSH key; npm resolves github: deps to ssh:// and
+          # isolates GIT_CONFIG_GLOBAL, so `git config --global` is ignored.
+          # GIT_CONFIG_* env vars are always honoured -> rewrite ssh -> https
+          # (anonymous https works for the public FlowMCP deps).
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "ssh://git@github.com/"
+          GIT_CONFIG_KEY_1: "url.https://github.com/.insteadOf"
+          GIT_CONFIG_VALUE_1: "git@github.com:"
 
       - name: Run Jest tests (with coverage)
         run: npm run test:coverage:src
