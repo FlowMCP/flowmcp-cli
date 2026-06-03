@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Fetch GitHub git deps over HTTPS (runner has no SSH key)
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Install dependencies
         run: npm ci
 
