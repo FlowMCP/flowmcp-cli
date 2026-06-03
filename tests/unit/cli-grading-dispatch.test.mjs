@@ -82,6 +82,21 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
         expect( parsed[ 'status' ] ).toBe( false )
         expect( JSON.stringify( parsed ) ).not.toContain( 'Unknown command' )
     } )
+
+    it( 'PRD-009: lists doctor in the allowlist fix text', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'fix' ] ).toContain( 'doctor' )
+    } )
+
+    it( 'PRD-009: routes grading doctor to its method (missing flow -> structured error, not fallback)', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading', 'doctor', 'does-not-exist', '--json' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'status' ] ).toBe( false )
+        expect( JSON.stringify( parsed ) ).not.toContain( 'Unknown command' )
+    } )
 } )
 
 

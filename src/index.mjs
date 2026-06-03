@@ -496,13 +496,13 @@ const runCommand = async () => {
 
     if( command === 'grading' ) {
         const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist', 'config' ]
+        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -536,7 +536,7 @@ const runCommand = async () => {
         }
 
         if( subCommand === 'run' ) {
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, withKeys, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } )
             output( { result } )
 
             return true
@@ -551,6 +551,13 @@ const runCommand = async () => {
 
         if( subCommand === 'worklist' ) {
             const { result } = await FlowMcpCli.gradingWorklist( { cwd, target, gradingDataDir, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'doctor' ) {
+            const { result } = await FlowMcpCli.gradingDoctor( { cwd, target, gradingDataDir, json } )
             output( { result } )
 
             return true

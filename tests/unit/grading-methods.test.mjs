@@ -238,9 +238,16 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
         // maxIterations defaults to 1 (opt-in higher) — replaces the historical fixed 3.
         expect( prompts.maxIterations ).toBe( 1 )
 
-        // areas[] is the new top-level contract: one entry per provider area.
+        // areas[] is the new top-level contract: one entry per EMITTED provider
+        // area. PRD-005: the demoapi fixture has no About resource, so
+        // `about-namespace` is moved to skippedAreas (out-of-scope-resource) and is
+        // NOT emitted — 6 composed areas minus the skipped About = 5 emitted.
         expect( Array.isArray( prompts.areas ) ).toBe( true )
-        expect( prompts.areas.length ).toBe( 6 )
+        expect( prompts.areas.length ).toBe( 5 )
+        expect( prompts.areas.map( ( a ) => a.area ) ).not.toContain( 'about-namespace' )
+        const aboutSkip = prompts.skippedAreas.find( ( s ) => s.area === 'about-namespace' )
+        expect( aboutSkip ).toBeDefined()
+        expect( aboutSkip.naReason ).toBe( 'out-of-scope-resource' )
 
         // The neutral areas carry a fully composed prompt (PromptBuilder.build), not
         // merely the goalBlock — they include a rendered question block.

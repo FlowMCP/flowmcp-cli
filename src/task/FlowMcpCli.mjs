@@ -14,7 +14,7 @@ import { join, resolve, basename, extname, dirname, relative, isAbsolute } from 
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { constants, existsSync, readFileSync } from 'node:fs'
+import { constants, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
@@ -8485,16 +8485,20 @@ Selection Management (v4):
 
 Grading (v2 — experimental; CLI surface may change):
   grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
-  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit grading prompts (handoff)
+  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent
   grading run <ns|selection> --consume-scores <path>
-                                             Stage 3: consume harness scores, rebuild index, finalize
-    --phase <area>                           Restrict grading to a single area / skill
+                                             Stage 3: consume ONE scores payload back; verifies the Task-ID + area-set + per-area question-count (partial-set supported), rebuilds the index, finalizes
+    --phase <area[,area...]>                 Restrict grading to an area set: no flag = all applicable areas; one area = single mode; comma-set = subset mode (named-but-not-emittable areas are reported, never silently dropped)
     --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
     --grading-data <path>                    Override the island location for this call
     --export-dir <path>                      Override the export destination root for this call
   grading export <ns|selection>              Export graded state (index.json) back to the source
-  grading state <ns|selection>               Show current rollup status (read-only)
+  grading state <ns|selection>               Show current rollup status (read-only); carries the nextAction split (deterministic-now CLI work vs ONE non-deterministic area-set + Task-ID preview, plus gated areas with reasons)
+  grading worklist <ns>                      Deterministic defect list only (subsumed into "doctor"; kept for back-compat)
+  grading doctor <ns>                        Local, read-only "defects + last tips + next step": merges the deterministic defects, the last LLM improvement tips, a next re-entry loop, and the same nextAction split as "state" (never online, never writes grade.json)
   (also available as "${cmd} grading ..." — the "dev" prefix is optional)
+  Two-level handover: the CLI emits ONE self-contained artifact for a sub-agent
+    and consumes ONE payload back — one area-set, one Task-ID, one round-trip.
   Island default: ~/.flowmcp/grading (override via --grading-data,
     FLOWMCP_GRADING_DATA, or "gradingDataDir" in ~/.flowmcp/config.json)
   Export default: <island>/_exports (override via --export-dir,
@@ -12725,7 +12729,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, maxIterations, withKeys, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12755,6 +12759,13 @@ allowlist, migrate-config, etc.).
         const validConflicts = [ 'abort', 'skip', 'overwrite' ]
         if( validConflicts.includes( conflict ) === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Invalid --on-conflict value: ${conflict}`, 'fix': `Use one of: ${validConflicts.join( ', ' )}.` } ) }
+        }
+
+        // PRD-004 — resolve the --phase flag into a multi-area selector (3 modes,
+        // no silent default). A bad token aborts before any emit (no partial emit).
+        const areaSelector = FlowMcpCli.#resolveAreaSelector( { phase, grading } )
+        if( areaSelector.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': areaSelector.error, 'fix': 'Pass --phase as a comma-separated set of known areas, or omit it for all applicable areas.' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
@@ -12809,10 +12820,10 @@ allowlist, migrate-config, etc.).
             // deterministic pretest fires authenticated requests with live keys.
             const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, phase, conflict, 'maxIterations': maxIterationsResolved, useKeys, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, useKeys, 'dependencyChain': deps.chain } )
         }
 
-        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, 'dependencyChain': deps.chain } )
+        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, 'dependencyChain': deps.chain } )
     }
 
 
@@ -12829,6 +12840,51 @@ allowlist, migrate-config, etc.).
         }
 
         return { 'maxIterations': parsed, 'error': null }
+    }
+
+
+    // PRD-004 — resolve the --phase flag into a multi-area selector. Three explicit
+    // modes, no silent default:
+    //   absent          -> { mode: 'default', areas: null } (all applicable)
+    //   one token       -> { mode: 'single', areas: [ a ] }
+    //   two+ tokens     -> { mode: 'subset', areas: [ a, b, ... ] }
+    // Every named token is whitelist-validated against VALID_AREAS (the grading
+    // module's canonical area list). An empty member after trim, a duplicate token,
+    // or an unknown area is a HARD error (no silent skip, no silent dedupe).
+    static #resolveAreaSelector( { phase, grading } ) {
+        if( phase === null || phase === undefined ) {
+            return { 'status': true, 'mode': 'default', 'areas': null, 'error': null }
+        }
+        if( typeof phase !== 'string' ) {
+            return { 'status': false, 'mode': null, 'areas': null, 'error': `Invalid --phase type: expected a comma-separated string, got ${typeof phase}.` }
+        }
+
+        const rawTokens = phase.split( ',' )
+        const tokens = rawTokens.map( ( t ) => t.trim() )
+        const emptyMember = tokens.some( ( t ) => t.length === 0 )
+        if( emptyMember === true ) {
+            return { 'status': false, 'mode': null, 'areas': null, 'error': `Empty --phase member in "${phase}" (no silent skip; every comma-separated area must be non-empty).` }
+        }
+
+        const { areas: validAreas } = grading[ 'PromptBuilder' ].getValidAreas()
+        const unknown = tokens.filter( ( t ) => validAreas.includes( t ) === false )
+        if( unknown.length > 0 ) {
+            return { 'status': false, 'mode': null, 'areas': null, 'error': `Unknown --phase area(s): ${unknown.join( ', ' )} (allowed: ${validAreas.join( ', ' )}).` }
+        }
+
+        const seen = []
+        const duplicates = []
+        tokens
+            .forEach( ( t ) => {
+                if( seen.includes( t ) === true ) { duplicates.push( t ) }
+                else { seen.push( t ) }
+            } )
+        if( duplicates.length > 0 ) {
+            return { 'status': false, 'mode': null, 'areas': null, 'error': `Duplicate --phase area(s): ${duplicates.join( ', ' )} (no silent dedupe; pass each area once).` }
+        }
+
+        const mode = tokens.length === 1 ? 'single' : 'subset'
+        return { 'status': true, mode, 'areas': tokens, 'error': null }
     }
 
 
@@ -12850,7 +12906,7 @@ allowlist, migrate-config, etc.).
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, phase, conflict, maxIterations, useKeys, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, useKeys, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
@@ -12868,10 +12924,12 @@ allowlist, migrate-config, etc.).
         const pretests = []
         const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { targetDir } )
 
+        // PRD-006: the deterministic pretest runs for EVERY schema regardless of
+        // the area selector — the per-schema/per-namespace requiredLevel is derived
+        // from these results to gate the namespace areas. The selector filters the
+        // emitted AREA prompts later, not the pretest pass.
         await schemaDirs
             .reduce( ( promise, schemaName ) => promise.then( async () => {
-                if( phase !== null && phase !== undefined && phase !== schemaName ) { return }
-
                 const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, targetDir, schemaName } )
                 if( snapshot === null ) {
                     pretests.push( { schemaName, 'ok': false, 'errors': [ `no resolvable schema snapshot for ${schemaName}` ] } )
@@ -12933,6 +12991,32 @@ allowlist, migrate-config, etc.).
         // with the resolved domain/selection persona — no invented persona).
         const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow } )
 
+        // PRD-005/006/004 — derive the FINAL emitted area set from the composed
+        // areas: applicability pre-filter (optional-area precondition absent ->
+        // skipped), dependency/Namespace-Gate (non-det namespace areas gated until
+        // all schemas deterministic-green), then the caller's area selector. Each
+        // partition is auditable; nothing is silently dropped.
+        const resolvedAreas = await FlowMcpCli.#resolveEmittedAreas( {
+            grading, areas, targetDir, schemaDirs, pretests, areaSelector
+        } )
+        if( resolvedAreas.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolvedAreas.error, 'fix': resolvedAreas.fix } ) }
+        }
+        const emittedAreas = resolvedAreas.emittedAreas
+        const skippedAreas = resolvedAreas.skippedAreas
+        const gatedAreas = resolvedAreas.gatedAreas
+
+        // PRD-007 — deterministic, order-independent Task-ID over the emitted set.
+        // The set must be non-empty to carry a Task-ID; an empty set (everything
+        // skipped/gated/filtered) is surfaced explicitly, not silently hashed.
+        const emittedAreaSet = emittedAreas.map( ( a ) => a.area )
+        const taskResult = FlowMcpCli.#computeGradingTaskId( { grading, namespace, emittedAreaSet } )
+        if( taskResult.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': taskResult.error, 'fix': taskResult.fix } ) }
+        }
+        const taskId = taskResult.taskId
+        const payloadSkeleton = { taskId, 'areas': emittedAreas.map( ( a ) => ( { 'area': a.area, 'results': [] } ) ) }
+
         const now = new Date().toISOString()
         const promptsDoc = {
             target,
@@ -12942,8 +13026,12 @@ allowlist, migrate-config, etc.).
             namespace,
             'scoringProtocol': 'v1',
             maxIterations,
+            taskId,
             'goal': { condition, maxTurns, goalBlock },
-            areas,
+            'areas': emittedAreas,
+            skippedAreas,
+            gatedAreas,
+            payloadSkeleton,
             'pretests': pretests
         }
 
@@ -12951,6 +13039,14 @@ allowlist, migrate-config, etc.).
             target,
             flow,
             tier,
+            taskId,
+            emittedAreaSet,
+            'askedByArea': emittedAreas
+                .filter( ( a ) => typeof a.questionCount === 'number' )
+                .reduce( ( acc, a ) => { acc[ a.area ] = a.questionCount; return acc }, {} ),
+            'taskComplete': false,
+            'consumedAreas': [],
+            'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
             'status': 'prompts-emitted',
             'createdAt': now,
             'lastUpdatedAt': now,
@@ -12982,15 +13078,277 @@ allowlist, migrate-config, etc.).
                 promptsPath,
                 statePath,
                 'pretestCount': pretests.length,
+                taskId,
+                'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
+                'emittedAreaSet': emittedAreaSet,
+                skippedAreas,
+                gatedAreas,
                 dependencyChain
             }
         }
     }
 
 
-    // Stage 3 — consume the harness scores -> grade -> rebuild*Index (5-status)
-    // -> finalize the state baton.
-    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, dependencyChain } ) {
+    // PRD-005/006/004 — partition composed areas into emitted / skipped / gated.
+    // Order: applicability pre-filter (PRD-005) -> dependency+Namespace-Gate
+    // (PRD-006) -> caller area selector (PRD-004). NO silent default at any step.
+    static async #resolveEmittedAreas( { grading, areas, targetDir, schemaDirs, pretests, areaSelector } ) {
+        // --- PRD-005: optional-area applicability pre-filter ---------------------
+        const aboutProbe = await FlowMcpCli.#detectAboutResourcePresent( { targetDir, schemaDirs } )
+        const filtered = FlowMcpCli.#filterApplicableAreas( { grading, areas, aboutPresent: aboutProbe.present } )
+        if( filtered.status === false ) {
+            return { 'status': false, 'error': filtered.error, 'fix': filtered.fix }
+        }
+
+        // --- PRD-006: derive levels + evaluate the dependency graph --------------
+        const gated = FlowMcpCli.#evaluateAreaGate( { grading, areas: filtered.applicableAreas, pretests, schemaCount: schemaDirs.length, aboutPresent: aboutProbe.present } )
+        if( gated.status === false ) {
+            return { 'status': false, 'error': gated.error, 'fix': gated.fix }
+        }
+
+        // --- PRD-004: apply the resolved area selector ---------------------------
+        const selected = FlowMcpCli.#applyAreaSelector( { areas: gated.readyAreas, areaSelector } )
+
+        // Caller-named-but-skipped/gated areas (subset/single) are surfaced so the
+        // caller is never silently ignored. Re-collect any selector-named area that
+        // landed in skipped/gated for the result note.
+        const skippedAreas = filtered.skippedAreas
+            .concat( selected.selectorSkippedNote )
+
+        return {
+            'status': true,
+            'emittedAreas': selected.emittedAreas,
+            'skippedAreas': skippedAreas,
+            'gatedAreas': gated.gatedAreas
+        }
+    }
+
+
+    // PRD-005 — probe whether the About resource exists at the SOURCE level for any
+    // schema folder (resources/about/), mirroring the rebuild lookup but at the
+    // resource (not _gradings/) level. A probe error returns present:false with a
+    // recorded note — never a thrown swallow, never a silent true.
+    static async #detectAboutResourcePresent( { targetDir, schemaDirs } ) {
+        const checks = await schemaDirs
+            .reduce( async ( accPromise, schemaName ) => {
+                const acc = await accPromise
+                if( acc.present === true ) { return acc }
+                const aboutDir = join( targetDir, schemaName, 'resources', 'about' )
+                const exists = existsSync( aboutDir )
+                return { 'present': exists, 'note': acc.note }
+            }, Promise.resolve( { 'present': false, 'note': null } ) )
+
+        return { 'present': checks.present }
+    }
+
+
+    // PRD-005 — partition composed areas into applicable vs skipped. An OPTIONAL
+    // area whose precondition is absent is skipped with a closed-set NaReason.
+    // The only optional provider area today is `about-namespace`, whose
+    // precondition is About-resource presence. The map is explicit (no silent
+    // default); the chosen NaReason is validated against the grading closed set so
+    // a spec drift surfaces immediately.
+    static #filterApplicableAreas( { grading, areas, aboutPresent } ) {
+        const OPTIONAL_AREA_PRECONDITION = { 'about-namespace': { 'naReason': 'out-of-scope-resource', 'present': aboutPresent } }
+
+        const applicableAreas = []
+        const skippedAreas = []
+        let failure = null
+
+        areas
+            .forEach( ( areaEntry ) => {
+                const rule = OPTIONAL_AREA_PRECONDITION[ areaEntry.area ]
+                if( rule === undefined ) {
+                    applicableAreas.push( areaEntry )
+                    return
+                }
+                if( rule.present === true ) {
+                    applicableAreas.push( areaEntry )
+                    return
+                }
+                const valid = grading[ 'NaReason' ].isAllowed( { 'naReason': rule.naReason } )
+                if( valid.allowed !== true ) {
+                    failure = `NaReason "${rule.naReason}" for skipped area ${areaEntry.area} is not in the grading closed set.`
+                    return
+                }
+                skippedAreas.push( { 'area': areaEntry.area, 'naReason': rule.naReason } )
+            } )
+
+        if( failure !== null ) {
+            return { 'status': false, 'error': failure, 'fix': 'Align the optional-area NaReason map with the grading NaReason closed set.' }
+        }
+
+        return { 'status': true, applicableAreas, skippedAreas }
+    }
+
+
+    // PRD-006 — derive per-schema + namespace levels from the pretest results and
+    // evaluate the seeded dependency graph. Namespace areas are gated until ALL
+    // schemas reach deterministic-green (the cost guard / Provider-Namespace-Gate).
+    // Returns ready vs gated partitions; no hardcoded threshold (read from graph).
+    static #evaluateAreaGate( { grading, areas, pretests, schemaCount, aboutPresent } ) {
+        const loaded = grading[ 'AreaDependencyGraph' ].loadDefaultGraph()
+        if( loaded.errors.length > 0 ) {
+            return { 'status': false, 'error': `Area dependency graph not loadable: ${loaded.errors.join( '; ' )}`, 'fix': 'Reinstall / update flowmcp-grading (the seeded graph data is missing).' }
+        }
+
+        const schemaLevels = pretests
+            .map( ( pretest ) => {
+                const detGreen = pretest.ok === true
+                const derived = grading[ 'RequiredLevel' ].deriveSchemaLevel( {
+                    'snapshotPresent': true,
+                    'structuralValid': true,
+                    'dataPretest': { 'ok': pretest.ok === true },
+                    detGreen,
+                    'gradingStatus': 'pending'
+                } )
+                return derived.level
+            } )
+            .filter( ( level ) => level !== null )
+
+        // No usable schema level (zero schemas / all unresolvable): the namespace
+        // cannot reach deterministic-green, so namespace areas stay gated. Use the
+        // lowest ladder rung explicitly rather than a silent default.
+        const namespaceLevel = schemaLevels.length === schemaCount && schemaLevels.length > 0
+            ? grading[ 'RequiredLevel' ].deriveNamespaceLevel( { schemaLevels } ).level
+            : 'imported'
+
+        const evaluated = grading[ 'AreaDependencyGraph' ].evaluate( {
+            'graph': loaded.graph,
+            'derivedLevels': { namespaceLevel, aboutPresent, 'memberLevel': 'imported' }
+        } )
+        if( evaluated.errors.length > 0 ) {
+            return { 'status': false, 'error': `Area gate evaluation failed: ${evaluated.errors.join( '; ' )}`, 'fix': 'Inspect the dependency graph data and derived levels.' }
+        }
+
+        const readyAreaNames = evaluated.ready
+        const gatedReasonByArea = evaluated.gated
+            .reduce( ( acc, g ) => { acc[ g.area ] = g.reason; return acc }, {} )
+
+        const readyAreas = areas.filter( ( a ) => readyAreaNames.includes( a.area ) === true )
+        const gatedAreas = areas
+            .filter( ( a ) => readyAreaNames.includes( a.area ) === false )
+            .map( ( a ) => ( { 'area': a.area, 'reason': gatedReasonByArea[ a.area ] === undefined ? 'dependency not satisfied' : gatedReasonByArea[ a.area ] } ) )
+
+        return { 'status': true, readyAreas, gatedAreas }
+    }
+
+
+    // PRD-004 — apply the resolved area selector to the ready areas. default mode
+    // emits all ready; single/subset emit only the named ready areas. A named area
+    // that is NOT ready (skipped/gated/unknown-to-flow) is recorded as a note so
+    // the caller is not silently ignored.
+    static #applyAreaSelector( { areas, areaSelector } ) {
+        if( areaSelector.mode === 'default' ) {
+            return { 'emittedAreas': areas, 'selectorSkippedNote': [] }
+        }
+
+        const readyNames = areas.map( ( a ) => a.area )
+        const emittedAreas = areas.filter( ( a ) => areaSelector.areas.includes( a.area ) === true )
+        const selectorSkippedNote = areaSelector.areas
+            .filter( ( name ) => readyNames.includes( name ) === false )
+            .map( ( name ) => ( { 'area': name, 'naReason': 'blocked-by-precondition', 'note': 'named in --phase but not currently emittable (skipped or gated)' } ) )
+
+        return { emittedAreas, selectorSkippedNote }
+    }
+
+
+    // PRD-007 — compute the deterministic Task-ID over the emitted area set via the
+    // shared TaskId generator (order-independent, 8-hex). An empty emitted set has
+    // no Task-ID — surfaced explicitly (no silent empty hash).
+    static #computeGradingTaskId( { grading, namespace, emittedAreaSet } ) {
+        if( emittedAreaSet.length === 0 ) {
+            return { 'status': false, 'error': 'No emittable areas after applicability/gate/selector resolution.', 'fix': 'Relax --phase, satisfy the dependency gate (reach deterministic-green), or add the missing optional resource.' }
+        }
+        const generated = grading[ 'TaskId' ].generate( { 'schemaIdSlug': namespace, 'areas': emittedAreaSet } )
+        if( generated.errors.length > 0 ) {
+            return { 'status': false, 'error': `Task-ID generation failed: ${generated.errors.join( '; ' )}`, 'fix': 'Ensure every emitted area is a known area.' }
+        }
+        return { 'status': true, 'taskId': generated.taskId }
+    }
+
+
+    // PRD-007 — verify a consume payload against the open emit recorded in
+    // state.json. Ordered checks (no silent default): taskId known, area-set
+    // subset of the emitted set, per-area answered==asked count. Partial-Set
+    // (F11=A): areas present-and-valid are accepted; emitted areas absent from the
+    // payload stay pending; the Task-ID is complete ONLY at the full set. Any
+    // mismatch -> Reject. The check is ADDITIVE: a scores doc that carries no
+    // `taskId` follows the legacy rebuild path unchanged (backward-compatible).
+    static #verifyConsumePayload( { grading, scoresDoc, state } ) {
+        const present = scoresDoc[ 'taskId' ] !== undefined && scoresDoc[ 'taskId' ] !== null
+        if( present === false ) {
+            return { 'status': true, 'verified': false, 'acceptedAreas': [], 'missingAreas': [], 'complete': false, 'error': null }
+        }
+
+        if( state === null || typeof state[ 'taskId' ] !== 'string' || Array.isArray( state[ 'emittedAreaSet' ] ) === false ) {
+            return { 'status': false, 'error': 'Consume payload carries a taskId but no open emit (state.json missing taskId/emittedAreaSet). Re-run --emit-prompts first.' }
+        }
+        if( scoresDoc[ 'taskId' ] !== state[ 'taskId' ] ) {
+            return { 'status': false, 'error': `Unknown taskId: ${scoresDoc[ 'taskId' ]} does not match the open emit ${state[ 'taskId' ]}.` }
+        }
+
+        if( Array.isArray( scoresDoc[ 'areas' ] ) === false ) {
+            return { 'status': false, 'error': 'Consume payload with a taskId must carry an areas[] array (one entry per consumed area).' }
+        }
+
+        const emittedSet = state[ 'emittedAreaSet' ]
+        const payloadAreaNames = scoresDoc[ 'areas' ].map( ( a ) => a.area )
+        const outOfSet = payloadAreaNames.filter( ( name ) => emittedSet.includes( name ) === false )
+        if( outOfSet.length > 0 ) {
+            return { 'status': false, 'error': `Area(s) not in the emitted set: ${outOfSet.join( ', ' )} (emitted: ${emittedSet.join( ', ' )}).` }
+        }
+
+        // Per-area question-count: an area is ANSWERED when its results[] is
+        // non-empty; then answered-count == asked-count, else Reject. An area
+        // present with an EMPTY results[] is not-yet-answered (it stays pending,
+        // F11=A partial-set) — that is NOT a count mismatch. `asked` is the per-area
+        // count the emit recorded; if no count was recorded for an area, the count
+        // is not enforced (explicit: only where a count exists, no silent zero).
+        const askedByArea = FlowMcpCli.#askedCountByArea( { state } )
+        const answeredAreas = scoresDoc[ 'areas' ]
+            .filter( ( a ) => Array.isArray( a.results ) === true && a.results.length > 0 )
+        const countMismatch = answeredAreas
+            .filter( ( a ) => {
+                const asked = askedByArea[ a.area ]
+                if( asked === undefined ) { return false }
+                return a.results.length !== asked
+            } )
+            .map( ( a ) => `${a.area} (answered ${a.results.length} != asked ${askedByArea[ a.area ]})` )
+        if( countMismatch.length > 0 ) {
+            return { 'status': false, 'error': `Per-area question-count mismatch: ${countMismatch.join( ', ' )}.` }
+        }
+
+        // Accept an area per-area when the agent supplied it in the payload (the
+        // skeleton-area is the consume acknowledgement; the rebuild reads the
+        // grading files on disk). Areas in the emitted set but absent from the
+        // payload stay pending. Task-ID complete ONLY at the full emitted set.
+        const priorConsumed = Array.isArray( state[ 'consumedAreas' ] ) ? state[ 'consumedAreas' ] : []
+        const acceptedAreas = priorConsumed
+            .concat( payloadAreaNames.filter( ( name ) => priorConsumed.includes( name ) === false ) )
+        const missingAreas = emittedSet.filter( ( name ) => acceptedAreas.includes( name ) === false )
+        const complete = missingAreas.length === 0
+
+        return { 'status': true, 'verified': true, acceptedAreas, missingAreas, complete, 'error': null }
+    }
+
+
+    // The emit recorded one payloadSkeleton area per emitted area; the asked
+    // question-count per area is carried on state via the emitted prompts. The
+    // skeleton itself has empty results[], so the asked count is read from the
+    // emitted prompts when present (state.askedByArea), else not enforced for that
+    // area (explicit: only enforce where a count was recorded — no silent zero).
+    static #askedCountByArea( { state } ) {
+        if( state === null || typeof state[ 'askedByArea' ] !== 'object' || state[ 'askedByArea' ] === null ) {
+            return {}
+        }
+        return state[ 'askedByArea' ]
+    }
+
+
+    // Stage 3 — consume the harness scores -> verify (PRD-007) -> grade ->
+    // rebuild*Index (5-status) -> write Provider-Proof (PRD-008) -> finalize baton.
+    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dependencyChain } ) {
         const scoresPath = resolve( cwd, consumeScores )
         if( existsSync( scoresPath ) === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
@@ -13002,6 +13360,16 @@ allowlist, migrate-config, etc.).
         }
         if( Array.isArray( scoresDoc[ 'scores' ] ) === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'See the grading scores schema.' } ) }
+        }
+
+        const statePath = join( targetDir, 'state.json' )
+        const { data: prevState } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
+
+        // PRD-007 — verify the multi-area Task-ID payload (additive; legacy scores
+        // without a taskId skip this and proceed). A mismatch is a hard Reject.
+        const verify = FlowMcpCli.#verifyConsumePayload( { grading, scoresDoc, 'state': prevState } )
+        if( verify.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area question counts.' } ) }
         }
 
         // Rebuild the 5-status index from the resolved grade snapshots on disk.
@@ -13024,10 +13392,24 @@ allowlist, migrate-config, etc.).
             }
         }
 
+        // PRD-008 — write the committable Provider-Proof grade.json for a graded
+        // namespace (and a blocked-only namespace via the same rebuilt index). The
+        // proof is the single producer of providers/<ns>/grade.json under the
+        // repo-side export root. NO silent default — an unresolved export root is a
+        // hard error, never a write to the island.
+        let proofPathRel = null
+        if( flow === 'provider' ) {
+            const proof = await FlowMcpCli.#writeProviderProof( {
+                cwd, grading, gradingDataRoot, gradingExportDir, target, 'namespaceIndex': rebuilt.index
+            } )
+            if( proof.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': proof.error, 'fix': proof.fix } ) }
+            }
+            proofPathRel = FlowMcpCli.#toRepoRelativePath( { cwd, 'path': proof.proofPath } )
+        }
+
         // Finalize the state baton (overwrite is the deliberate, named end-state).
-        const statePath = join( targetDir, 'state.json' )
         const now = new Date().toISOString()
-        const { data: prevState } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
         const stateDoc = prevState === null
             ? { target, flow, 'createdAt': now, 'phases': {} }
             : prevState
@@ -13040,6 +13422,12 @@ allowlist, migrate-config, etc.).
         stateDoc[ 'phases' ][ 'gradeComputed' ] = now
         stateDoc[ 'phases' ][ 'indexRebuilt' ] = now
         stateDoc[ 'dependencyChain' ] = dependencyChain
+        // PRD-007 — reflect the per-area accept / Task-ID completion on state.
+        if( verify.verified === true ) {
+            stateDoc[ 'consumedAreas' ] = verify.acceptedAreas
+            stateDoc[ 'missingAreas' ] = verify.missingAreas
+            stateDoc[ 'taskComplete' ] = verify.complete
+        }
 
         await FlowMcpCli.#writeGuarded( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onExists': 'overwrite' } )
 
@@ -13053,10 +13441,41 @@ allowlist, migrate-config, etc.).
                 'rollupStatus': rebuilt.index[ 'status' ],
                 'rollupGrade': rebuilt.index[ 'grade' ],
                 'indexPath': rebuilt.indexPath,
+                'proofPath': proofPathRel,
+                'acceptedAreas': verify.verified === true ? verify.acceptedAreas : null,
+                'missingAreas': verify.verified === true ? verify.missingAreas : null,
+                'taskComplete': verify.verified === true ? verify.complete : null,
                 'scoreCount': scoresDoc[ 'scores' ].length,
                 dependencyChain
             }
         }
+    }
+
+
+    // PRD-008 — write the committable Provider-Proof for one namespace. The
+    // producer (ProviderProof.write) is the SINGLE writer of
+    // <exportRoot>/providers/<ns>/grade.json (repo-side, NOT the island). The
+    // export root is resolved with the existing precedence; an unresolved root is
+    // a hard error (no silent skip, no island write). Idempotency (monitoring
+    // backref preservation) is guaranteed inside ProviderProof.write.
+    static async #writeProviderProof( { cwd, grading, gradingDataRoot, gradingExportDir, target, namespaceIndex } ) {
+        const ProviderProof = grading[ 'ProviderProof' ]
+        if( ProviderProof === undefined || ProviderProof === null ) {
+            return { 'status': false, 'error': 'ProviderProof unavailable from flowmcp-grading.', 'fix': 'Update the flowmcp-grading dependency.' }
+        }
+
+        const exportRoot = await FlowMcpCli.#gradingExportRoot( { cwd, gradingExportDir, gradingDataRoot } )
+        if( typeof exportRoot !== 'string' || exportRoot.length === 0 ) {
+            return { 'status': false, 'error': 'Export root not resolvable for the Provider-Proof.', 'fix': 'Configure --export-dir, FLOWMCP_GRADING_EXPORT, or gradingExportDir in the global config.' }
+        }
+
+        const providerDir = join( exportRoot, 'providers', target )
+        const written = await ProviderProof.write( { namespaceIndex, providerDir } )
+        if( written.status !== true ) {
+            return { 'status': false, 'error': `Provider-Proof write failed: ${( written.errors || [] ).join( '; ' )}`, 'fix': 'Resolve the proof write error above and re-run consume-scores.' }
+        }
+
+        return { 'status': true, 'proofPath': written.proofPath }
     }
 
 
@@ -13114,6 +13533,9 @@ allowlist, migrate-config, etc.).
         const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
         const { data: state } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
 
+        // PRD-010 — the graph-driven nextAction block, identical on state + doctor.
+        const nextAction = await FlowMcpCli.#computeNextAction( { grading, detected, target } )
+
         return {
             'result': {
                 'status': true,
@@ -13128,7 +13550,8 @@ allowlist, migrate-config, etc.).
                 indexPath,
                 statePath,
                 'indexPresent': index !== null,
-                'statePresent': state !== null
+                'statePresent': state !== null,
+                nextAction
             }
         }
     }
@@ -13154,31 +13577,52 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
+        // PRD-009 — `worklist` is subsumed into `doctor`: the deterministic
+        // collection logic lives in ONE shared private collector. `worklist` is
+        // retained as a thin wrapper (Never-delete-legacy) returning the same flat
+        // array shape as before, OR the WL-001/WL-002 coded error unchanged.
+        const collected = await FlowMcpCli.#collectDeterministicDefects( { detected, target } )
+        if( collected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+        }
+
+        return { 'result': collected.defects }
+    }
+
+
+    // PRD-009 — the single source of truth for the deterministic defect list of one
+    // namespace, reused by BOTH `worklist` (thin wrapper) and `doctor`. Sources:
+    //   - prompts.json -> pretests[].errors  (DPT-003/004/005, KEY NAME only)
+    //   - index.json   -> blockers[]         (import / rebuild {node,reason})
+    // Output: { status, defects: [ { namespace, schema, code, message } ] } with the
+    // SAME WL-001 (no prompts.json) / WL-002 (unreadable prompts.json) guards — NO
+    // SILENT DEFAULT (never an empty-list fabrication for a missing pretest). The
+    // (schema, code, message) tuple is deduplicated (a blocker can appear twice).
+    static async #collectDeterministicDefects( { detected, target } ) {
         const promptsPath = join( detected.targetDir, 'prompts.json' )
         const indexPath = join( detected.targetDir, 'index.json' )
 
-        // NO SILENT DEFAULT: no prompts.json -> the pretest never ran. Do not
-        // fabricate an empty list; tell the caller to emit first.
         if( existsSync( promptsPath ) === false ) {
-            return { 'result': FlowMcpCli.#error( {
+            return {
+                'status': false,
                 'error': `WL-001: No prompts.json for namespace "${target}" — the deterministic pretest has not run yet.`,
                 'fix': `Run "${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts" first, then re-run worklist.`
-            } ) }
+            }
         }
 
         const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
         if( prompts === null ) {
-            return { 'result': FlowMcpCli.#error( {
+            return {
+                'status': false,
                 'error': `WL-002: prompts.json for namespace "${target}" is unreadable or not valid JSON.`,
                 'fix': 'Re-emit the prompts (grading run --emit-prompts) to regenerate a valid handoff.'
-            } ) }
+            }
         }
 
         const items = []
 
         // 1. Pretest errors (per-schema). The errors are flat "CODE: message"
-        // strings written by DataPretest; split off the leading code for the
-        // structured worklist item.
+        // strings written by DataPretest; split off the leading code.
         const pretests = Array.isArray( prompts[ 'pretests' ] ) ? prompts[ 'pretests' ] : []
         pretests.forEach( ( pretest ) => {
             const schemaName = typeof pretest[ 'schemaName' ] === 'string' ? pretest[ 'schemaName' ] : null
@@ -13201,10 +13645,9 @@ allowlist, migrate-config, etc.).
             items.push( { 'namespace': target, 'schema': node, 'code': code === null ? 'IMPORT' : code, message } )
         } )
 
-        // Deduplicate on the (schema, code, message) tuple — the same blocker can
-        // surface from both prompts and index.
+        // Deduplicate on the (schema, code, message) tuple.
         const seen = {}
-        const worklist = items.filter( ( item ) => {
+        const defects = items.filter( ( item ) => {
             const key = `${item.schema}|${item.code}|${item.message}`
             if( seen[ key ] === true ) { return false }
             seen[ key ] = true
@@ -13212,7 +13655,324 @@ allowlist, migrate-config, etc.).
             return true
         } )
 
-        return { 'result': worklist }
+        return { 'status': true, defects }
+    }
+
+
+    // PRD-009 — `grading doctor <ns>` — ONE merged, local, read-only, terminal-only
+    // result: the deterministic defects (today's worklist, subsumed via the shared
+    // collector), the last LLM improvement tips (latest improvementHints[] per
+    // schema/area, with iteration), the next re-entry loop (PRD-009 self-contained),
+    // and the graph-driven nextAction split (PRD-010). It is NEVER online and NEVER
+    // writes grade.json / the island / Kanban: `online: false`, no fetch, no write.
+    static async gradingDoctor( { cwd, target, gradingDataDir, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing doctor target.', 'fix': 'Usage: flowmcp grading doctor <namespace>' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        // Deterministic defects (keeps WL-001/WL-002 — no empty-list fabrication).
+        const collected = await FlowMcpCli.#collectDeterministicDefects( { detected, target } )
+        if( collected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+        }
+        const defects = collected.defects
+
+        // Last LLM tips (read-only). An absence of grading entries is explicit: an
+        // empty tips array WITH a note, never a silently dropped section.
+        const tipsResult = await FlowMcpCli.#collectLastTips( { grading, detected } )
+        const tips = tipsResult.tips
+        const tipsNote = tipsResult.note
+
+        // Self-contained per-namespace next loop (PRD-009).
+        const nextLoop = FlowMcpCli.#buildNextLoop( { defects, tips, target } )
+
+        // Graph-driven next-action enumeration (PRD-010), identical on state + doctor.
+        const nextAction = await FlowMcpCli.#computeNextAction( { grading, detected, target } )
+
+        return {
+            'result': {
+                'status': true,
+                'namespace': target,
+                'online': false,
+                defects,
+                tips,
+                'tipsNote': tipsNote,
+                nextLoop,
+                nextAction
+            }
+        }
+    }
+
+
+    // PRD-009 — collect the most recent improvementHints[] per (schema, area) for a
+    // namespace, read-only, from the latest grading entry in every _gradings/ dir
+    // under the island. Uses RebuildIndex.resolveLatest (newest by filename) +
+    // Grading.readEntry (fills loop defaults on READ, never writes). An island with
+    // no grading entries yields tips:[] + an explicit note (NO SILENT DEFAULT — the
+    // absence is surfaced, not swallowed). Never writes; never goes online.
+    static async #collectLastTips( { grading, detected } ) {
+        const Grading = grading[ 'Grading' ]
+        const RebuildIndex = grading[ 'RebuildIndex' ]
+        if( Grading === undefined || RebuildIndex === undefined ) {
+            return { 'tips': [], 'note': 'Grading entry reader unavailable from flowmcp-grading; no tips could be read.' }
+        }
+
+        const gradingsDirs = await FlowMcpCli.#findGradingsDirs( { root: detected.targetDir } )
+        if( gradingsDirs.length === 0 ) {
+            return { 'tips': [], 'note': 'No grading entries on disk yet — no LLM grading round has run for this namespace.' }
+        }
+
+        const tips = []
+        await gradingsDirs
+            .reduce( async ( prevPromise, gradingsDir ) => {
+                await prevPromise
+                const resolved = await RebuildIndex.resolveLatest( { 'dir': gradingsDir, 'logicalName': FlowMcpCli.#gradingsLogicalName( { gradingsDir } ) } )
+                if( resolved.status !== true ) { return }
+
+                let raw = null
+                try { raw = await readFile( resolved.path, 'utf-8' ) }
+                catch { return }
+
+                const read = Grading.readEntry( { 'json': raw } )
+                if( read.entry === null ) { return }
+
+                const hints = Array.isArray( read.entry.improvementHints ) ? read.entry.improvementHints : []
+                if( hints.length === 0 ) { return }
+
+                const area = typeof read.entry.area === 'string' ? read.entry.area : FlowMcpCli.#gradingsLogicalName( { gradingsDir } )
+                const schema = FlowMcpCli.#schemaOfGradingsDir( { root: detected.targetDir, gradingsDir } )
+                const iteration = typeof read.entry.iteration === 'number' ? read.entry.iteration : 0
+                tips.push( { schema, area, iteration, hints } )
+            }, Promise.resolve() )
+
+        return { tips, 'note': null }
+    }
+
+
+    // The filename grammar prefixes every grading entry with its logicalName
+    // (`<logicalName>--<timestamp>.json`). The logicalName for a _gradings/ dir is
+    // the area-ish name the rebuild used; resolveLatest needs the SAME prefix. We
+    // derive it from the dir's existing files (the segment before the first `--`),
+    // so the resolver is data-driven, not a hardcoded per-area map.
+    static #gradingsLogicalName( { gradingsDir } ) {
+        let entries = []
+        try { entries = readdirSync( gradingsDir ) }
+        catch { return '' }
+        const first = entries
+            .filter( ( name ) => name.endsWith( '.json' ) === true )
+            .sort()
+            .at( -1 )
+        if( first === undefined ) { return '' }
+        const idx = first.indexOf( '--' )
+        return idx === -1 ? first.replace( /\.json$/, '' ) : first.slice( 0, idx )
+    }
+
+
+    // The owning schema of a _gradings/ dir is the first path segment under the
+    // namespace island root (providers/<ns>/<schema>/.../_gradings). Namespace-level
+    // gradings (providers/<ns>/_gradings) have no schema -> null (explicit).
+    static #schemaOfGradingsDir( { root, gradingsDir } ) {
+        const rel = relative( root, gradingsDir )
+        const segments = rel.split( /[\\/]/ ).filter( ( s ) => s.length > 0 )
+        if( segments.length === 0 ) { return null }
+        if( segments[ 0 ] === '_gradings' ) { return null }
+        return segments[ 0 ]
+    }
+
+
+    // Recursively find every `_gradings` directory under an island root. Read-only
+    // directory walk (no for/while; reduce over readdir). Reserved/non-schema dirs
+    // are still descended (About/skills gradings live deep), so we walk all dirs.
+    static async #findGradingsDirs( { root } ) {
+        let entries = []
+        try { entries = await readdir( root, { 'withFileTypes': true } ) }
+        catch { return [] }
+
+        const found = await entries
+            .filter( ( entry ) => entry.isDirectory() === true )
+            .reduce( async ( prevPromise, entry ) => {
+                const acc = await prevPromise
+                const childPath = join( root, entry.name )
+                if( entry.name === '_gradings' ) {
+                    return acc.concat( [ childPath ] )
+                }
+                const nested = await FlowMcpCli.#findGradingsDirs( { 'root': childPath } )
+                return acc.concat( nested )
+            }, Promise.resolve( [] ) )
+
+        return found
+    }
+
+
+    // PRD-009 — the self-contained per-namespace next re-entry loop: which areas
+    // still carry open defects/tips, and the single CLI action that resumes the
+    // Kap. 7.3 loop. Plain language, no invented jargon. When nothing is open the
+    // rationale says so explicitly (no silent empty).
+    static #buildNextLoop( { defects, tips, target } ) {
+        const defectAreas = defects
+            .map( ( d ) => ( typeof d.schema === 'string' ? d.schema : null ) )
+            .filter( ( s ) => s !== null )
+        const tipAreas = tips.map( ( t ) => t.area )
+
+        const openAreas = defectAreas
+            .concat( tipAreas )
+            .filter( ( name, idx, arr ) => arr.indexOf( name ) === idx )
+
+        if( openAreas.length === 0 ) {
+            return {
+                'openAreas': [],
+                'nextAction': `${appConfig[ 'cliCommand' ]} grading state ${target}`,
+                'rationale': 'No deterministic defects and no open improvement tips for this namespace; check the rollup state for remaining grading work.'
+            }
+        }
+
+        return {
+            'openAreas': openAreas,
+            'nextAction': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${openAreas.join( ',' )}`,
+            'rationale': 'These areas still carry deterministic defects or open improvement tips; re-emit prompts for them to continue the grading loop.'
+        }
+    }
+
+
+    // PRD-010 — graph-driven next-action enumeration. Read-only: derives per-schema
+    // / namespace levels, evaluates the seeded dependency graph (ready vs gated),
+    // removes inapplicable optional areas, then splits ready areas into:
+    //   - deterministicNow — areas FlowMCP can finish for free (free CLI command)
+    //   - nonDeterministic — areas needing an LLM round, collapsed into ONE area-set
+    //     with ONE TaskId.generate preview (no emission, no write, no side effect)
+    // and reports gated areas with a plain-language reason. NO emission, NO write,
+    // NO network. All graph/level/gate logic is CONSUMED from flowmcp-grading.
+    static async #computeNextAction( { grading, detected, target } ) {
+        const AreaDependencyGraph = grading[ 'AreaDependencyGraph' ]
+        const RequiredLevel = grading[ 'RequiredLevel' ]
+        const TaskId = grading[ 'TaskId' ]
+        if( AreaDependencyGraph === undefined || RequiredLevel === undefined || TaskId === undefined ) {
+            return { 'status': false, 'error': 'NA-001: graph/level/Task-ID modules unavailable from flowmcp-grading.', 'fix': 'Update the flowmcp-grading dependency.' }
+        }
+
+        const loaded = AreaDependencyGraph.loadDefaultGraph()
+        if( loaded.errors.length > 0 ) {
+            return { 'status': false, 'error': `NA-002: Area dependency graph not loadable: ${loaded.errors.join( '; ' )}`, 'fix': 'Reinstall / update flowmcp-grading (the seeded graph data is missing).' }
+        }
+
+        // Derive the namespace level from the per-schema pretest results carried in
+        // prompts.json. No prompts.json -> nothing emitted yet: report this state
+        // explicitly (NO SILENT DEFAULT) instead of fabricating a graph evaluation.
+        const promptsPath = join( detected.targetDir, 'prompts.json' )
+        if( existsSync( promptsPath ) === false ) {
+            return {
+                'status': true,
+                'deterministicNow': { 'areas': [], 'command': null, 'free': true },
+                'nonDeterministic': null,
+                'gated': [],
+                'note': 'No prompts.json yet — emit prompts first to derive the next applicable areas.'
+            }
+        }
+        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        const pretests = prompts !== null && Array.isArray( prompts[ 'pretests' ] ) ? prompts[ 'pretests' ] : []
+
+        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { 'targetDir': detected.targetDir } )
+        const aboutProbe = await FlowMcpCli.#detectAboutResourcePresent( { 'targetDir': detected.targetDir, schemaDirs } )
+
+        const schemaLevels = pretests
+            .map( ( pretest ) => {
+                const detGreen = pretest.ok === true
+                const derived = RequiredLevel.deriveSchemaLevel( {
+                    'snapshotPresent': true,
+                    'structuralValid': true,
+                    'dataPretest': { 'ok': pretest.ok === true },
+                    detGreen,
+                    'gradingStatus': 'pending'
+                } )
+                return derived.level
+            } )
+            .filter( ( level ) => level !== null )
+
+        const namespaceLevel = schemaLevels.length === schemaDirs.length && schemaLevels.length > 0
+            ? RequiredLevel.deriveNamespaceLevel( { schemaLevels } ).level
+            : 'imported'
+
+        const evaluated = AreaDependencyGraph.evaluate( {
+            'graph': loaded.graph,
+            'derivedLevels': { namespaceLevel, 'aboutPresent': aboutProbe.present, 'memberLevel': 'imported' }
+        } )
+        if( evaluated.errors.length > 0 ) {
+            return { 'status': false, 'error': `NA-003: Area gate evaluation failed: ${evaluated.errors.join( '; ' )}`, 'fix': 'Inspect the dependency graph data and derived levels.' }
+        }
+
+        // Restrict to the areas in scope for this flow (data-driven, not a hardcoded
+        // list): selection-only areas (dependsOn.kind === all-member-schemas) are
+        // not enumerated for a provider namespace, and vice versa.
+        const inFlowScope = ( name ) => {
+            const dep = AreaDependencyGraph.dependsOnFor( { 'graph': loaded.graph, 'area': name } )
+            if( dep.errors.length > 0 || dep.dependsOn === null ) { return false }
+            const isSelectionArea = dep.dependsOn.kind === 'all-member-schemas'
+            return detected.flow === 'selection' ? isSelectionArea === true : isSelectionArea === false
+        }
+
+        // Applicability (PRD-005): an optional area whose precondition is absent is
+        // not a next-action. about-namespace requires the About resource present.
+        const isApplicable = ( name ) => name === 'about-namespace' ? aboutProbe.present === true : true
+
+        const readyAreas = evaluated.ready
+            .filter( ( name ) => inFlowScope( name ) === true )
+            .filter( ( name ) => isApplicable( name ) === true )
+
+        // Split ready areas by their data-driven classification.
+        const classified = readyAreas
+            .reduce( ( acc, name ) => {
+                const c = AreaDependencyGraph.classifyArea( { 'graph': loaded.graph, 'area': name } )
+                if( c.errors.length > 0 ) { acc.errors.push( c.errors.join( '; ' ) ); return acc }
+                if( c.classification === 'deterministic' ) { acc.det.push( name ) } else { acc.nonDet.push( name ) }
+                return acc
+            }, { 'det': [], 'nonDet': [], 'errors': [] } )
+        if( classified.errors.length > 0 ) {
+            return { 'status': false, 'error': `NA-004: Area classification failed: ${classified.errors.join( '; ' )}`, 'fix': 'Ensure every graph area carries a valid classification.' }
+        }
+
+        const deterministicNow = classified.det.length === 0
+            ? { 'areas': [], 'command': null, 'free': true }
+            : {
+                'areas': classified.det,
+                'command': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${classified.det.join( ',' )}`,
+                'free': true
+            }
+
+        // ONE non-deterministic area-set, ONE Task-ID preview (Kap. 8). Empty -> null
+        // (explicit; no silent omission).
+        let nonDeterministic = null
+        if( classified.nonDet.length > 0 ) {
+            const generated = TaskId.generate( { 'schemaIdSlug': target, 'areas': classified.nonDet } )
+            if( generated.errors.length > 0 ) {
+                return { 'status': false, 'error': `NA-005: Task-ID preview generation failed: ${generated.errors.join( '; ' )}`, 'fix': 'Ensure every non-deterministic area is a known area.' }
+            }
+            nonDeterministic = {
+                'areaSet': classified.nonDet,
+                'taskIdPreview': generated.taskId,
+                'command': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${classified.nonDet.join( ',' )}`,
+                'skill': 'grade-score-single',
+                'free': false
+            }
+        }
+
+        // Gated provider areas with their plain-language reason (the cost guard:
+        // non-deterministic namespace areas stay here until deterministic-green).
+        const gated = evaluated.gated
+            .filter( ( g ) => inFlowScope( g.area ) === true )
+            .map( ( g ) => ( { 'area': g.area, 'reason': typeof g.reason === 'string' && g.reason.length > 0 ? g.reason : 'dependency not satisfied' } ) )
+
+        return { 'status': true, deterministicNow, nonDeterministic, gated }
     }
 
 
