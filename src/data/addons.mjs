@@ -54,6 +54,15 @@ const ADDON_REGISTRY = {
         'source': 'github:FlowMCP/csv-tsv-sqlite-toolkit',
         'defaultVersion': 'main',
         'urlMode': true
+    },
+    'geo-overpass': {
+        // Live-Query add-on (Memo 100). New repo, already named to the geo-*
+        // standard, so `name` matches the published package directly (no held
+        // legacy name). Live HTTP source — not url/file based, urlMode false.
+        'name': 'geo-overpass-toolkit',
+        'source': 'github:FlowMCP/geo-overpass-toolkit',
+        'defaultVersion': 'main',
+        'urlMode': false
     }
 }
 
