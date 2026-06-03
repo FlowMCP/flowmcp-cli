@@ -377,8 +377,10 @@ describe( 'search — results include specId field', () => {
 
 // ─── 11. list displays Spec-IDs from config ───────────────────────────────────
 
-describe( 'list — Spec-ID entries in config', () => {
-    it( 'includes Spec-ID entry in output when config has a Spec-ID ref', async () => {
+// Memo 099 Kap 5 — list shows ALL tools from the schemaFolders by their MCP
+// tool name (no per-config spec-id entries). The ping tool is listed regardless.
+describe( 'list — shows folder tools by MCP name (Memo 099)', () => {
+    it( 'lists the ping tool from the folder index', async () => {
         const cwd = await makeTmpCwdWithConfig( {
             'tools': [ 'demo/tool/ping' ],
             'suffix': 'list-specid'
@@ -388,15 +390,10 @@ describe( 'list — Spec-ID entries in config', () => {
 
         expect( result[ 'status' ] ).toBe( true )
 
-        const specEntry = result[ 'tools' ]
-            .find( ( t ) => {
-                const isSpecId = t[ 'specId' ] === 'demo/tool/ping'
+        const pingEntry = result[ 'tools' ]
+            .find( ( t ) => t[ 'name' ] && t[ 'name' ].includes( 'ping' ) )
 
-                return isSpecId
-            } )
-
-        expect( specEntry ).toBeDefined()
-        expect( specEntry[ 'name' ] ).toBe( 'demo/tool/ping' )
+        expect( pingEntry ).toBeDefined()
 
         await rm( cwd, { recursive: true, force: true } )
     } )

@@ -3056,6 +3056,16 @@ class FlowMcpCli {
         const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
         const queryTokens = query.toLowerCase().trim().split( /\s+/ )
 
+        // Memo 099 Kap 6 — read env so search can flag key-gated (disabled) tools
+        const { config: searchConfig } = await FlowMcpCli.#readConfig( { cwd: process.cwd() } )
+        const searchEnvPath = searchConfig ? searchConfig[ 'envPath' ] : null
+        const { data: searchEnvContent } = searchEnvPath
+            ? await FlowMcpCli.#readText( { filePath: searchEnvPath } )
+            : { data: null }
+        const searchEnvObject = searchEnvContent
+            ? FlowMcpCli.#parseEnvFile( { envContent: searchEnvContent } ).envObject
+            : {}
+
         const { aliasIndex } = await FlowMcpCli.#loadSharedAliases()
         const sharedMatchRefs = new Set()
         aliasIndex
@@ -3085,7 +3095,7 @@ class FlowMcpCli {
                     tags,
                     score,
                     'type': tool[ 'type' ] || 'tool',
-                    'add': `${appConfig[ 'cliCommand' ]} add ${toolName}`,
+                    'call': `${appConfig[ 'cliCommand' ]} call ${toolName}`,
                     schemaRef,
                     routeName
                 }
@@ -3118,6 +3128,19 @@ class FlowMcpCli {
                     const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
                     if( main ) {
+                        // Memo 099 Kap 6 — flag tools whose required keys are missing
+                        const requiredKeys = main[ 'requiredServerParams' ] || []
+                        const missingKeys = requiredKeys
+                            .filter( ( key ) => {
+                                const present = searchEnvObject[ key ] !== undefined && String( searchEnvObject[ key ] ).length > 0
+
+                                return present === false
+                            } )
+                        if( missingKeys.length > 0 ) {
+                            tool[ 'disabled' ] = true
+                            tool[ 'disabledReason' ] = `missing ${missingKeys.join( ', ' )}`
+                        }
+
                         const { meta } = FlowMcpCli.#extractMetaFlags( { main, routeName } )
                         const { requiredParams, optionalParams } = FlowMcpCli.#extractParameterDetails( { main, routeName } )
                         const { example } = FlowMcpCli.#generateCallExample( { toolName, requiredParams } )
@@ -3648,54 +3671,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { toolRefs } = await FlowMcpCli.#resolveActiveToolRefs( { cwd } )
-
-        // Memo 051 PRD-19 — auto-injected sqlite-gtfs tools come from the seal cache
-        // and are visible even when no traditional toolRefs are active.
-        if( toolRefs.length === 0 ) {
-            const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
-            const autoToolsOnly = []
-            sealCacheEntries
-                .forEach( ( entry ) => {
-                    const entryTools = entry && entry[ 'tools' ] ? entry[ 'tools' ] : []
-                    entryTools
-                        .forEach( ( tool ) => {
-                            autoToolsOnly.push( {
-                                'name': tool.name,
-                                'description': tool.description || '',
-                                'tags': [],
-                                'parameters': {},
-                                'auto': tool.auto === true,
-                                'schema': entry[ 'schemaName' ]
-                            } )
-                        } )
-                } )
-
-            const result = {
-                'status': true,
-                'toolCount': autoToolsOnly.length,
-                'tools': autoToolsOnly
-            }
-
-            return { result }
-        }
-
-        const legacyRefs = toolRefs
-            .filter( ( ref ) => {
-                const isLegacy = !FlowMcpCli.#isSpecId( { 'ref': ref } )
-
-                return isLegacy
-            } )
-
-        const specIdRefs = toolRefs
-            .filter( ( ref ) => {
-                const isSpec = FlowMcpCli.#isSpecId( { 'ref': ref } )
-
-                return isSpec
-            } )
-
-        const { schemas } = await FlowMcpCli.#resolveToolRefs( { 'toolRefs': legacyRefs } )
-
+        // Memo 099 Kap 5/6 — list ALL tools from the configured schemaFolders.
+        // A tool whose required keys are missing from .env is flagged disabled
+        // (visible, never hidden) so the user sees exactly what is unavailable.
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
         const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
@@ -3703,7 +3681,10 @@ class FlowMcpCli {
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
 
+        const { schemas } = await FlowMcpCli.#resolveAllSchemas()
+
         const tools = []
+        let disabledCount = 0
 
         const sharedListsMap = {}
         await schemas
@@ -3726,6 +3707,15 @@ class FlowMcpCli {
                 const schemaTags = main[ 'tags' ] || []
                 const sharedLists = sharedListsMap[ file ] || {}
 
+                const requiredKeys = main[ 'requiredServerParams' ] || []
+                const missingKeys = requiredKeys
+                    .filter( ( key ) => {
+                        const present = envObject[ key ] !== undefined && String( envObject[ key ] ).length > 0
+
+                        return present === false
+                    } )
+                const disabled = missingKeys.length > 0
+
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
@@ -3736,31 +3726,19 @@ class FlowMcpCli {
                             const routeParameters = routeConfig[ 'parameters' ] || []
                             const { parameters } = FlowMcpCli.#extractParameters( { routeParameters, sharedLists } )
 
-                            tools.push( { name, description, 'tags': schemaTags, parameters } )
+                            const entry = { name, description, 'tags': schemaTags, parameters }
+                            if( disabled === true ) {
+                                entry[ 'disabled' ] = true
+                                entry[ 'disabledReason' ] = `missing ${missingKeys.join( ', ' )}`
+                                disabledCount += 1
+                            }
+
+                            tools.push( entry )
                         } catch {
                             // skip broken tools
                         }
                     } )
             } )
-
-        if( specIdRefs.length > 0 ) {
-            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
-
-            specIdRefs
-                .forEach( ( ref ) => {
-                    const toolEntry = index[ 'tools' ][ ref ]
-
-                    if( toolEntry ) {
-                        tools.push( {
-                            'name': ref,
-                            'specId': ref,
-                            'description': '',
-                            'tags': [],
-                            'parameters': {}
-                        } )
-                    }
-                } )
-        }
 
         // Memo 051 PRD-19 — include auto-injected tools from cached sqlite-gtfs schemas
         const { entries: sealCacheEntries } = await FlowMcpCli.#listSqliteGtfsCacheEntries()
@@ -3783,6 +3761,7 @@ class FlowMcpCli {
         const result = {
             'status': true,
             'toolCount': tools.length,
+            disabledCount,
             tools
         }
 
