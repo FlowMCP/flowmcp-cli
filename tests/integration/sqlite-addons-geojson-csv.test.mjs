@@ -92,8 +92,8 @@ const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
 
 const ADDONS = [
-    { sourceKey: 'sqlite-geojson', addonName: 'geojson-sqlite-toolkit', namespace: 'placesgeo', schemaName: 'places-geojson-v1', url: 'https://example.org/places.geojson', parseConfig: null },
-    { sourceKey: 'sqlite-csv', addonName: 'csv-tsv-sqlite-toolkit', namespace: 'placescsv', schemaName: 'places-csv-v1', url: 'https://example.org/places.csv', parseConfig: { delimiter: ',', header: true, latColumn: 'lat', lonColumn: 'lon' } }
+    { sourceKey: 'geo-geojson', addonName: 'geojson-sqlite-toolkit', namespace: 'placesgeo', schemaName: 'places-geojson-v1', url: 'https://example.org/places.geojson', parseConfig: null },
+    { sourceKey: 'geo-csv', addonName: 'csv-tsv-sqlite-toolkit', namespace: 'placescsv', schemaName: 'places-csv-v1', url: 'https://example.org/places.csv', parseConfig: { delimiter: ',', header: true, latColumn: 'lat', lonColumn: 'lon' } }
 ]
 
 

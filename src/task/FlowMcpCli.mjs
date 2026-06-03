@@ -5827,7 +5827,7 @@ class FlowMcpCli {
             } catch( err ) {
                 const result = FlowMcpCli.#error( {
                     'error': `RES044: failed to load url resource '${resource.url}' via ${addonName}: ${err.message}`,
-                    'fix': `Verify the url returns a complete, valid ${sourceKey === 'sqlite-csv' ? 'CSV/TSV (and parseConfig matches its columns)' : 'GeoJSON'} document over HTTPS.`
+                    'fix': `Verify the url returns a complete, valid ${sourceKey === 'geo-csv' ? 'CSV/TSV (and parseConfig matches its columns)' : 'GeoJSON'} document over HTTPS.`
                 } )
 
                 return { result }

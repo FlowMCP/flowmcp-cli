@@ -138,13 +138,13 @@ describe( 'SqliteGtfsResourceValidator.validateResources', () => {
 // Memo 096 — geojson/csv add-on sources are URL-only (mode: 'url'). The
 // converter/file-based/seal path was removed (F3=B). gtfs stays file-based.
 describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', () => {
-    it( 'validates a fully-valid sqlite-geojson url resource without errors', () => {
+    it( 'validates a fully-valid geo-geojson url resource without errors', () => {
         const resources = [
             {
-                source: 'sqlite-geojson',
+                source: 'geo-geojson',
                 mode: 'url',
                 url: 'https://example.org/places.geojson',
-                addon: 'geojson-sqlite-toolkit'
+                addon: 'geo-geojson-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -153,13 +153,13 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
     } )
 
 
-    it( 'validates a fully-valid sqlite-csv url resource with parseConfig', () => {
+    it( 'validates a fully-valid geo-csv url resource with parseConfig', () => {
         const resources = [
             {
-                source: 'sqlite-csv',
+                source: 'geo-csv',
                 mode: 'url',
                 url: 'https://example.org/places.csv',
-                addon: 'csv-tsv-sqlite-toolkit',
+                addon: 'geo-csv-tsv-toolkit',
                 parseConfig: { delimiter: ',', header: true }
             }
         ]
@@ -169,30 +169,30 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
     } )
 
 
-    it( 'emits RES043 for a sqlite-geojson resource with file-based mode (converter path removed)', () => {
+    it( 'emits RES043 for a geo-geojson resource with file-based mode (converter path removed)', () => {
         const resources = [
             {
-                source: 'sqlite-geojson',
+                source: 'geo-geojson',
                 mode: 'file-based',
                 path: '${FLOWMCP_RESOURCES}/places.db',
-                addon: 'geojson-sqlite-toolkit'
+                addon: 'geo-geojson-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
 
         const res043 = errors.find( ( e ) => e.code === 'RES043' )
         expect( res043 ).toBeDefined()
-        expect( res043.message ).toContain( 'sqlite-geojson' )
+        expect( res043.message ).toContain( 'geo-geojson' )
     } )
 
 
-    it( 'emits RES044 for a sqlite-geojson url resource with a non-HTTPS url', () => {
+    it( 'emits RES044 for a geo-geojson url resource with a non-HTTPS url', () => {
         const resources = [
             {
-                source: 'sqlite-geojson',
+                source: 'geo-geojson',
                 mode: 'url',
                 url: 'http://example.org/places.geojson',
-                addon: 'geojson-sqlite-toolkit'
+                addon: 'geo-geojson-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -202,13 +202,13 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
     } )
 
 
-    it( 'emits RES045 for a sqlite-csv url resource missing parseConfig (no silent default)', () => {
+    it( 'emits RES045 for a geo-csv url resource missing parseConfig (no silent default)', () => {
         const resources = [
             {
-                source: 'sqlite-csv',
+                source: 'geo-csv',
                 mode: 'url',
                 url: 'https://example.org/places.csv',
-                addon: 'csv-tsv-sqlite-toolkit'
+                addon: 'geo-csv-tsv-toolkit'
             }
         ]
         const { errors } = SqliteGtfsResourceValidator.validateResources( { resources } )
@@ -218,10 +218,10 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
     } )
 
 
-    it( 'emits RES031 for a sqlite-csv url resource missing the addon field', () => {
+    it( 'emits RES031 for a geo-csv url resource missing the addon field', () => {
         const resources = [
             {
-                source: 'sqlite-csv',
+                source: 'geo-csv',
                 mode: 'url',
                 url: 'https://example.org/places.csv',
                 parseConfig: { delimiter: ',', header: true }
@@ -231,7 +231,7 @@ describe( 'SqliteGtfsResourceValidator — URL-mode add-on sources (Memo 096)', 
 
         const res031 = errors.find( ( e ) => e.code === 'RES031' )
         expect( res031 ).toBeDefined()
-        expect( res031.message ).toContain( 'sqlite-csv' )
+        expect( res031.message ).toContain( 'geo-csv' )
     } )
 
 
