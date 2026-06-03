@@ -7599,10 +7599,10 @@ class FlowMcpCli {
             return false
         }
 
-        if( trimmed.length < 10 ) {
-            return false
-        }
-
+        // No minimum-length heuristic: many valid credentials are short — usernames
+        // (GEONAMES_USERNAME, REGIONALSTATISTIK_USERNAME) and short API keys (OMDb
+        // keys are 8 chars). A length gate produced false "missing" reports. Empty
+        // and placeholder checks are the real signal.
         const placeholders = [ 'your_key_here', '<your-key', '# Example', 'YOUR_KEY', 'TODO' ]
         const lowered = trimmed.toLowerCase()
         const isPlaceholder = placeholders
@@ -12306,6 +12306,61 @@ allowlist, migrate-config, etc.).
         const root = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
 
         return { root }
+    }
+
+
+    // Writer for the grading-path keys in the GLOBAL ~/.flowmcp/config.json. The
+    // resolution precedence already honored "gradingDataDir" / "gradingExportDir";
+    // what was missing was a CLI writer (a hand-edit was required). With no --set-*
+    // flag this SHOWS the current values + resolved roots. It never auto-creates the
+    // config (init must run first) and never blind-writes — it reads the existing
+    // config, sets only the requested key(s), and writes back via the guarded writer.
+    static async gradingConfig( { cwd, setDataDir, setExportDir, json } ) {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: existingConfig } = await FlowMcpCli.#readJson( { 'filePath': globalConfigPath } )
+        if( existingConfig === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Global config not found at ${globalConfigPath}.`, 'fix': `Run "${appConfig[ 'cliCommand' ]} init" first to create it.` } ) }
+        }
+
+        const wantsSet = setDataDir !== null || setExportDir !== null
+
+        if( setDataDir !== null && ( typeof setDataDir !== 'string' || setDataDir.length === 0 ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': '--set-data-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-data-dir <path>` } ) }
+        }
+        if( setExportDir !== null && ( typeof setExportDir !== 'string' || setExportDir.length === 0 ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': '--set-export-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-export-dir <path>` } ) }
+        }
+
+        if( wantsSet === true ) {
+            const nextConfig = Object.keys( existingConfig )
+                .reduce( ( acc, key ) => {
+                    acc[ key ] = existingConfig[ key ]
+
+                    return acc
+                }, {} )
+            if( setDataDir !== null ) { nextConfig[ 'gradingDataDir' ] = setDataDir }
+            if( setExportDir !== null ) { nextConfig[ 'gradingExportDir' ] = setExportDir }
+
+            await FlowMcpCli.#writeGlobalConfig( { 'config': nextConfig } )
+        }
+
+        const { data: currentConfig } = await FlowMcpCli.#readJson( { 'filePath': globalConfigPath } )
+        const storedDataDir = typeof currentConfig[ 'gradingDataDir' ] === 'string' && currentConfig[ 'gradingDataDir' ].length > 0 ? currentConfig[ 'gradingDataDir' ] : null
+        const storedExportDir = typeof currentConfig[ 'gradingExportDir' ] === 'string' && currentConfig[ 'gradingExportDir' ].length > 0 ? currentConfig[ 'gradingExportDir' ] : null
+        const resolvedDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, 'gradingDataDir': null } )
+        const resolvedExportRoot = await FlowMcpCli.#gradingExportRoot( { cwd, 'gradingExportDir': null, 'gradingDataRoot': resolvedDataRoot } )
+
+        const result = {
+            'status': true,
+            'configPath': globalConfigPath,
+            'updated': wantsSet,
+            'gradingDataDir': storedDataDir,
+            'resolvedDataRoot': resolvedDataRoot,
+            'gradingExportDir': storedExportDir,
+            'resolvedExportRoot': resolvedExportRoot
+        }
+
+        return { result }
     }
 
 

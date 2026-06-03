@@ -171,10 +171,10 @@ describe( 'FlowMcpCli.devEnvDoctor (Memo 032 PRD-09)', () => {
     } )
 
 
-    it( 'rejects placeholder values as not-filled', async () => {
+    it( 'rejects placeholder values but accepts short real values', async () => {
         await writeFile( testHome.envPath(), [
             'ALPHA_KEY=your_key_here',
-            'BETA_KEY=short',
+            'BETA_KEY=usr1',
             'SHARED_KEY=this-is-a-real-key-12345',
             ''
         ].join( '\n' ), 'utf-8' )
@@ -185,7 +185,9 @@ describe( 'FlowMcpCli.devEnvDoctor (Memo 032 PRD-09)', () => {
         } )
 
         expect( result[ 'missing' ] ).toContain( 'ALPHA_KEY' )
-        expect( result[ 'missing' ] ).toContain( 'BETA_KEY' )
+        // Short non-placeholder values are valid — usernames and short API keys
+        // (e.g. OMDb keys are 8 chars). No minimum-length gate.
+        expect( result[ 'filled' ] ).toContain( 'BETA_KEY' )
         expect( result[ 'filled' ] ).toContain( 'SHARED_KEY' )
     } )
 

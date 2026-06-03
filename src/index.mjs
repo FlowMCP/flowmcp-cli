@@ -53,7 +53,9 @@ const args = parseArgs( {
         'grading-data': { type: 'string' },
         'export-dir': { type: 'string' },
         'max-iterations': { type: 'string' },
-        'with-keys': { type: 'boolean' }
+        'with-keys': { type: 'boolean' },
+        'set-data-dir': { type: 'string' },
+        'set-export-dir': { type: 'string' }
     }
 } )
 
@@ -494,13 +496,13 @@ const runCommand = async () => {
 
     if( command === 'grading' ) {
         const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist' ]
+        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns>`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -549,6 +551,15 @@ const runCommand = async () => {
 
         if( subCommand === 'worklist' ) {
             const { result } = await FlowMcpCli.gradingWorklist( { cwd, target, gradingDataDir, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'config' ) {
+            const setDataDir = values[ 'set-data-dir' ] === undefined ? null : values[ 'set-data-dir' ]
+            const setExportDir = values[ 'set-export-dir' ] === undefined ? null : values[ 'set-export-dir' ]
+            const { result } = await FlowMcpCli.gradingConfig( { cwd, setDataDir, setExportDir, json } )
             output( { result } )
 
             return true
