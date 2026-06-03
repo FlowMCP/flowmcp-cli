@@ -5258,6 +5258,57 @@ class FlowMcpCli {
     }
 
 
+    // Memo 099 Kap 3 — resolve ~/anchor-relative schemaFolders paths (no hardcoded usernames)
+    static #resolvePath( { path } ) {
+        if( typeof path !== 'string' || path.length === 0 ) {
+            return { resolvedPath: path }
+        }
+
+        if( path === '~' ) {
+            return { resolvedPath: homedir() }
+        }
+
+        if( path.startsWith( '~/' ) === true ) {
+            const resolvedPath = join( homedir(), path.slice( 2 ) )
+
+            return { resolvedPath }
+        }
+
+        if( isAbsolute( path ) === true ) {
+            return { resolvedPath: path }
+        }
+
+        const resolvedPath = resolve( path )
+
+        return { resolvedPath }
+    }
+
+
+    // Memo 099 Kap 3/4 — read schemaFolders[] (name + resolved path) from the global config
+    static async #readSchemaFolders() {
+        const globalConfigPath = FlowMcpCli.#globalConfigPath()
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const raw = globalConfig && globalConfig[ 'schemaFolders' ]
+
+        if( raw === undefined || raw === null || Array.isArray( raw ) === false ) {
+            return { schemaFolders: [] }
+        }
+
+        const schemaFolders = raw
+            .filter( ( entry ) => entry && typeof entry === 'object' && Array.isArray( entry ) === false )
+            .filter( ( entry ) => typeof entry[ 'name' ] === 'string' && entry[ 'name' ].length > 0 )
+            .filter( ( entry ) => typeof entry[ 'path' ] === 'string' && entry[ 'path' ].length > 0 )
+            .map( ( entry ) => {
+                const { name, path } = entry
+                const { resolvedPath } = FlowMcpCli.#resolvePath( { path } )
+
+                return { name, 'path': resolvedPath }
+            } )
+
+        return { schemaFolders }
+    }
+
+
     static async #readLocalSources() {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -5282,6 +5333,17 @@ class FlowMcpCli {
 
 
     static async #resolveSourceDir( { sourceName } ) {
+        // Memo 099 Kap 4 — schemaFolders[] win: source dir = <path>/providers (direct, no disk-copy)
+        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
+        const folder = schemaFolders
+            .find( ( entry ) => entry[ 'name' ] === sourceName )
+
+        if( folder !== undefined ) {
+            const sourceDir = join( folder[ 'path' ], 'providers' )
+
+            return { sourceDir, isLocal: true }
+        }
+
         const { localSources } = await FlowMcpCli.#readLocalSources()
         const local = localSources[ sourceName ]
 
@@ -7237,30 +7299,42 @@ class FlowMcpCli {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
         const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
-        const { localSources } = await FlowMcpCli.#readLocalSources()
 
-        let sourceDirs = []
-        try {
-            const entries = await readdir( schemasBaseDir )
-            const dirChecks = await entries
-                .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
-                    const entryPath = join( schemasBaseDir, entry )
-                    const entryStat = await stat( entryPath )
-                    if( entryStat.isDirectory() ) {
-                        acc.push( entry )
-                    }
+        // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
+        // Legacy ~/.flowmcp/schemas scan + localSources are the fallback until migration (Memo 099 Kap 9).
+        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
 
-                    return acc
-                } ), Promise.resolve( [] ) )
+        let allSourceNames = []
 
-            sourceDirs = dirChecks
-        } catch {
-            sourceDirs = []
+        if( schemaFolders.length > 0 ) {
+            allSourceNames = schemaFolders
+                .map( ( entry ) => entry[ 'name' ] )
+        } else {
+            const { localSources } = await FlowMcpCli.#readLocalSources()
+
+            let sourceDirs = []
+            try {
+                const entries = await readdir( schemasBaseDir )
+                const dirChecks = await entries
+                    .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
+                        const entryPath = join( schemasBaseDir, entry )
+                        const entryStat = await stat( entryPath )
+                        if( entryStat.isDirectory() ) {
+                            acc.push( entry )
+                        }
+
+                        return acc
+                    } ), Promise.resolve( [] ) )
+
+                sourceDirs = dirChecks
+            } catch {
+                sourceDirs = []
+            }
+
+            const localSourceNames = Object.keys( localSources )
+                .filter( ( name ) => sourceDirs.includes( name ) === false )
+            allSourceNames = [ ...sourceDirs, ...localSourceNames ]
         }
-
-        const localSourceNames = Object.keys( localSources )
-            .filter( ( name ) => sourceDirs.includes( name ) === false )
-        const allSourceNames = [ ...sourceDirs, ...localSourceNames ]
 
         const sources = []
 
