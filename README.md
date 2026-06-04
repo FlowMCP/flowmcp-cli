@@ -268,7 +268,7 @@ export const schema = {
                 source:      'sqlite-gtfs',
                 mode:        'file-based',
                 path:        '${FLOWMCP_RESOURCES}/gtfs-de.db',
-                addon:       'gtfs-sqlite-toolkit',
+                addon:       'geo-gtfs-toolkit',
                 addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
             }
         ]
@@ -276,7 +276,7 @@ export const schema = {
 }
 ```
 
-`source: 'sqlite-gtfs'` signals to the CLI that an add-on is required. `addon` names the repository, `addonSource` points to its location (always `github:<org>/<repo>` — no npm registry). `${FLOWMCP_RESOURCES}` is a path variable (see the next section) and resolves to the default `~/.flowmcp/resources/`.
+`source: 'sqlite-gtfs'` signals to the CLI that an add-on is required. `addon` names the package (`geo-*-toolkit`), while `addonSource` points to the GitHub clone-URL whose repo keeps its own name (`*-sqlite-toolkit` for the three sqlite repos) — always `github:<org>/<repo>`, no npm registry. `${FLOWMCP_RESOURCES}` is a path variable (see the next section) and resolves to the default `~/.flowmcp/resources/`.
 
 ### Discovery: ADDON_REGISTRY
 
@@ -285,7 +285,7 @@ The CLI keeps one registry entry per known `source` type, **hardcoded** in `src/
 ```javascript
 export const ADDON_REGISTRY = {
     'sqlite-gtfs': {
-        name:           'gtfs-sqlite-toolkit',
+        name:           'geo-gtfs-toolkit',
         source:         'github:FlowMCP/gtfs-sqlite-toolkit',
         defaultVersion: 'main'
     }

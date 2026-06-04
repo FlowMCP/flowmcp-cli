@@ -8039,12 +8039,18 @@ Shared Lists (v4):
   dev lists add-entry <name> <jsonEntry>     Add an entry to a shared list
   dev lists refs <alias>                     Backward-lookup: who references this alias?
 
+Environment (.env):
+  dev env doctor                             Coverage check: which required keys are missing?
+  dev env acquire                            Sign-up help for missing providers
+  dev env backup                             Snapshot the current .env
+  dev env restore <file>                     Restore .env from a backup
+  dev env diff <file>                        Compare current .env against a backup (key names only)
+
 Other:
   dev cache <subcommand>                     Manage tool cache
   dev validate-catalog                       Validate a catalog file
   dev skill <subcommand>                     Skill management
   dev catalog <subcommand>                   Catalog management
-  dev reload                                 Reload schemas
 
 Run "${cmd} --help" for Tier 1 commands (agent-facing).
 `
