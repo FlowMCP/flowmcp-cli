@@ -108,8 +108,8 @@ workbench island. They are reachable both as `flowmcp grading ...` and
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff). The schema is read live from `schemaFolders[]`; the island is built on first run — no separate import step |
-| `flowmcp grading run <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
+| `flowmcp grading non-deterministic <ns\|selection> --emit-prompts` | Stage 1 (alias `nondet`): deterministic pretest + emit grading prompts (handoff). The schema is read live from `schemaFolders[]`; the island is built on first run — no separate import step |
+| `flowmcp grading non-deterministic <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
 | `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
 | `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
 
@@ -147,9 +147,9 @@ first run.
 
 | Stage | Owner | What happens |
 |-------|-------|--------------|
-| 1 — Deterministic | CLI | `grading run --emit-prompts` reads the schema live from `schemaFolders[]`, builds the island on first run, runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
+| 1 — Deterministic | CLI | `grading non-deterministic --emit-prompts` reads the schema live from `schemaFolders[]`, builds the island on first run, runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
 | 2 — Non-deterministic | Harness | The agent loop reads `prompts.json`/`state.json` and grades each area (`start-grade → evaluate → apply-improvement`) — this is the only stage outside the CLI |
-| 3 — Finalize | CLI | `grading run --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
+| 3 — Finalize | CLI | `grading non-deterministic --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
 
 #### Flow auto-detection
 
@@ -162,8 +162,8 @@ The target's path decides the test flow, the tier, and the maximum reachable gra
 
 #### Handoff to the harness
 
-`grading run --emit-prompts` does not grade non-deterministically itself. It
-writes:
+`grading non-deterministic --emit-prompts` does not grade non-deterministically
+itself. It writes:
 
 - `prompts.json` — one grading prompt per area, each carrying a Goal-Block.
 - `state.json` — the run baton (which areas are pending/done), updated atomically
@@ -185,12 +185,12 @@ When the goal is reached, hand the scores back to the CLI:
 
 ```bash
 # Stage 1 — deterministic pretest + emit prompts (provider test)
-flowmcp grading run providers/defillama --emit-prompts
+flowmcp grading non-deterministic providers/defillama --emit-prompts
 
 # Stage 2 — harness grades each area (outside the CLI), writing scores
 
 # Stage 3 — consume the harness scores, rebuild the index, finalize
-flowmcp grading run providers/defillama --consume-scores scores.json
+flowmcp grading non-deterministic providers/defillama --consume-scores scores.json
 
 # Inspect the rollup, then export the graded state back to the source
 flowmcp grading state providers/defillama

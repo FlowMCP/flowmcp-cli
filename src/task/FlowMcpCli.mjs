@@ -1928,13 +1928,30 @@ class FlowMcpCli {
             'version': '1.0.0'
         } )
 
+        // PRD-008 — pre-serve dedup. Two schemaFolders carrying the same provider
+        // would compute the same MCP tool name and make the SDK throw
+        // "Tool ${name} is already registered". We track every registered name and,
+        // on a real collision, re-derive the name with the source coordinate appended
+        // (deterministic). A genuine within-config duplicate (same source, same name)
+        // is skipped with a visible stderr note instead of crashing the server.
+        const registeredToolNames = new Set()
+        const resolveRegisterableName = ( { baseName, routeName, namespace, source } ) => {
+            const plan = FlowMcpCli.#disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } )
+            if( plan.note !== null ) {
+                process.stderr.write( `${appConfig[ 'appName' ]}: ${plan.note}\n` )
+            }
+
+            return { 'finalName': plan.finalName, 'skip': plan.skip }
+        }
+
         await resolvedSchemas
-            .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
+            .reduce( ( promise, { main, handlersFn, file, source } ) => promise.then( async () => {
                 const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
                 const schemasBaseDir = FlowMcpCli.#schemasDir()
                 const schemaFilePath = join( schemasBaseDir, file )
                 const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+                const namespaceForTools = main[ 'namespace' ] || 'unknown'
 
                 Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} )
                     .forEach( ( routeName ) => {
@@ -1945,7 +1962,12 @@ class FlowMcpCli {
                             routeName
                         } )
 
-                        server.tool( toolName, description, zod, async ( args ) => {
+                        const { finalName, skip } = resolveRegisterableName( { 'baseName': toolName, routeName, 'namespace': namespaceForTools, source } )
+                        if( skip === true ) {
+                            return
+                        }
+
+                        server.tool( finalName, description, zod, async ( args ) => {
                             const callResult = await func( args )
                             const content = callResult[ 'dataAsString' ] || JSON.stringify( callResult[ 'data' ] || callResult )
 
@@ -1966,8 +1988,17 @@ class FlowMcpCli {
                             Object.entries( resourceDef[ 'queries' ] || {} )
                                 .forEach( ( [ queryName, queryDef ] ) => {
                                     const namespace = main[ 'namespace' ] || 'unknown'
-                                    const toolName = `${queryName}_${namespace}`
+                                    const baseQueryName = `${queryName}_${namespace}`
+                                    // PRD-008 — resource-query names are built here (not via
+                                    // #buildToolName); apply the same pre-serve dedup so two
+                                    // folders' resources can coexist.
+                                    const { finalName: queryToolName, skip: skipQuery } = resolveRegisterableName( { 'baseName': baseQueryName, 'routeName': queryName, namespace, source } )
+                                    const toolName = queryToolName
                                     const description = queryDef[ 'description' ] || `Query ${queryName} on ${resourceName}`
+
+                                    if( skipQuery === true ) {
+                                        return
+                                    }
 
                                     server.tool( toolName, description, {}, async ( args ) => {
                                         const queryHandlerMap = ( resourceHandlerMap[ resourceName ] ) || {}
@@ -2042,12 +2073,19 @@ class FlowMcpCli {
         }
 
         // Memo 099 Kap 5 — list ALL tools from the configured schemaFolders (no group/activation).
-        const { schemas: resolvedSchemas } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas: resolvedSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+
+        // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
+        if( resolveError !== null && resolveError !== undefined ) {
+            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+
+            return { result }
+        }
 
         const tools = []
 
         resolvedSchemas
-            .forEach( ( { main } ) => {
+            .forEach( ( { main, source } ) => {
                 const namespace = main[ 'namespace' ] || 'unknown'
                 const routes = main[ 'routes' ] || main[ 'tools' ] || {}
 
@@ -2057,12 +2095,15 @@ class FlowMcpCli {
                             const { toolName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
                             const description = routes[ routeName ][ 'description' ] || ''
 
-                            tools.push( { toolName, namespace, routeName, description } )
+                            // PRD-008 — surface the source coordinate so a qualified
+                            // "<source>:<namespace>/tool/<name>" call is readable from `list`.
+                            tools.push( { toolName, namespace, routeName, description, 'source': source || null } )
                         } catch( err ) {
                             tools.push( {
                                 'toolName': `error_${routeName}_${namespace}`,
                                 namespace,
                                 routeName,
+                                'source': source || null,
                                 'description': `Error: ${err.message}`
                             } )
                         }
@@ -2109,14 +2150,17 @@ class FlowMcpCli {
         }
 
         let resolvedToolName = toolName
+        // PRD-008 — an optional "<source>:" prefix scopes the call to one
+        // schemaFolders[] source (no first-wins guess on a collision).
+        let sourceFilter = null
 
         if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
-            const { valid, namespace, type, name: specName } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
+            const { valid, namespace, type, name: specName, source } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
 
             if( !valid ) {
                 const result = FlowMcpCli.#error( {
                     'error': `Invalid Spec-ID "${toolName}".`,
-                    'fix': `Use format: <namespace>/tool/<name>`
+                    'fix': `Use format: <namespace>/tool/<name> (optional prefix "<source>:").`
                 } )
 
                 return { result }
@@ -2140,13 +2184,35 @@ class FlowMcpCli {
                 return { result }
             }
 
+            sourceFilter = source
             const { toolName: mcpToolName } = FlowMcpCli.#buildToolName( { 'routeName': specName, 'namespace': namespace } )
             resolvedToolName = mcpToolName
         }
 
         // Memo 099 Kap 5 — no activation: resolve against ALL configured schemaFolders.
-        const { schemas: allSchemas } = await FlowMcpCli.#resolveAllSchemas()
-        const resolvedSchemas = allSchemas
+        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+
+        // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
+        if( resolveError !== null && resolveError !== undefined ) {
+            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+
+            return { result }
+        }
+
+        // PRD-008 — when a "<source>:" prefix is given, restrict resolution to that
+        // source so the qualified call hits exactly that folder (no first-wins).
+        const resolvedSchemas = sourceFilter === null || sourceFilter === undefined
+            ? allSchemas
+            : allSchemas.filter( ( entry ) => entry[ 'source' ] === sourceFilter )
+
+        if( ( sourceFilter !== null && sourceFilter !== undefined ) && resolvedSchemas.length === 0 ) {
+            const result = FlowMcpCli.#error( {
+                'error': `No schemaFolders[] source named "${sourceFilter}" provides the requested tool.`,
+                'fix': `Check the source name (run "${appConfig[ 'cliCommand' ]} call list-tools" to see each tool's "source"), or drop the "<source>:" prefix.`
+            } )
+
+            return { result }
+        }
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
         const { envPath } = config
@@ -3048,7 +3114,14 @@ class FlowMcpCli {
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
 
-        const { schemas } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+
+        // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
+        if( resolveError !== null && resolveError !== undefined ) {
+            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+
+            return { result }
+        }
 
         const tools = []
         let disabledCount = 0
@@ -3125,11 +3198,18 @@ class FlowMcpCli {
                     } )
             } )
 
+        // PRD-009 — surface collisions across schemaFolders[] (all four primitives)
+        // as visible, non-blocking warnings with the copyable "<source>:<spec-id>"
+        // fix. Never blocks `list`; the unqualified call still uses the first match.
+        const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+        const { warnings: collisionWarnings } = FlowMcpCli.#formatCollisionWarnings( { 'collisions': index ? index[ 'collisions' ] : [] } )
+
         const result = {
             'status': true,
             'toolCount': tools.length,
             disabledCount,
-            tools
+            tools,
+            collisionWarnings
         }
 
         return { result }
@@ -4596,7 +4676,34 @@ class FlowMcpCli {
                 return { name, 'path': resolvedPath }
             } )
 
-        return { schemaFolders }
+        // PRD-008 — the schemaFolders[] `name` is the source coordinate. It MUST be
+        // unique across folders, otherwise "<source>:" cannot select a folder. Two
+        // folders with the same name = hard config error (no silent first-wins).
+        const seenNames = {}
+        const duplicateNames = []
+        schemaFolders
+            .forEach( ( entry ) => {
+                const { name } = entry
+                if( seenNames[ name ] === true ) {
+                    if( duplicateNames.includes( name ) === false ) {
+                        duplicateNames.push( name )
+                    }
+                } else {
+                    seenNames[ name ] = true
+                }
+            } )
+
+        if( duplicateNames.length > 0 ) {
+            return {
+                schemaFolders,
+                'duplicateError': {
+                    'error': `Duplicate schemaFolders[] name(s): ${duplicateNames.join( ', ' )}. Each folder name must be unique (it is the "<source>:" coordinate).`,
+                    'fix': `Edit ${FlowMcpCli.#globalConfigPath()} and give every schemaFolders[] entry a distinct "name".`
+                }
+            }
+        }
+
+        return { schemaFolders, 'duplicateError': null }
     }
 
 
@@ -6056,7 +6163,15 @@ class FlowMcpCli {
     }
 
 
-    static #buildToolName( { routeName, namespace } ) {
+    // PRD-008 — the MCP tool name is `<route>_<namespace>` (snake_case, 63-char cap).
+    // The optional `source` (schemaFolders[] name) is appended ONLY when
+    // `disambiguate === true`, i.e. on a real collision between two folders that
+    // carry the same provider. Without disambiguation the name is byte-identical to
+    // the pre-PRD-008 behaviour — agents that reference existing tool names keep
+    // working (no silent rename). The source append is deterministic (same source
+    // string -> same suffix) and re-applies the 63-char cap so the SDK never sees an
+    // over-long name.
+    static #buildToolName( { routeName, namespace, source = null, disambiguate = false } ) {
         const routeNameSnakeCase = routeName
             .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
             .toLowerCase()
@@ -6064,14 +6179,53 @@ class FlowMcpCli {
             .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
             .toLowerCase()
 
-        let toolName = `${routeNameSnakeCase}_${namespaceSnakeCase}`
-        toolName = toolName
-            .substring( 0, 63 )
+        const sanitize = ( value ) => value
             .replaceAll( ':', '' )
             .replaceAll( '-', '_' )
             .replaceAll( '/', '_' )
 
+        if( disambiguate === true && typeof source === 'string' && source.length > 0 ) {
+            const sourceSnakeCase = source
+                .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
+                .toLowerCase()
+            // Reserve room for the source suffix so the base name is not truncated
+            // away entirely: cap the base at 63 - (1 + sourceLen) before appending.
+            const suffix = `_${sanitize( sourceSnakeCase )}`
+            const baseCap = Math.max( 0, 63 - suffix.length )
+            const base = sanitize( `${routeNameSnakeCase}_${namespaceSnakeCase}` ).substring( 0, baseCap )
+            const toolName = `${base}${suffix}`.substring( 0, 63 )
+
+            return { toolName }
+        }
+
+        let toolName = `${routeNameSnakeCase}_${namespaceSnakeCase}`
+        toolName = sanitize( toolName.substring( 0, 63 ) )
+
         return { toolName }
+    }
+
+
+    // PRD-008 — stateful pre-serve dedup planner (the SDK throws on a duplicate tool
+    // name). Given the already-registered names set, decide the final registerable
+    // name for one base name. On a real collision it appends the source coordinate
+    // (deterministic via #buildToolName disambiguate=true). A genuine duplicate that
+    // cannot be disambiguated (no/equal source) is skipped — never a silent throw.
+    // Mutates `registeredToolNames`. Returns { finalName, skip, note }.
+    static #disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } ) {
+        if( registeredToolNames.has( baseName ) === false ) {
+            registeredToolNames.add( baseName )
+
+            return { 'finalName': baseName, 'skip': false, 'note': null }
+        }
+
+        const { toolName: qualifiedName } = FlowMcpCli.#buildToolName( { routeName, namespace, source, 'disambiguate': true } )
+        if( qualifiedName !== baseName && registeredToolNames.has( qualifiedName ) === false ) {
+            registeredToolNames.add( qualifiedName )
+
+            return { 'finalName': qualifiedName, 'skip': false, 'note': `tool name collision on "${baseName}" — registered the source-qualified name "${qualifiedName}" instead.` }
+        }
+
+        return { 'finalName': baseName, 'skip': true, 'note': `duplicate tool name "${baseName}" cannot be disambiguated (same source) — skipped.` }
     }
 
 
@@ -6593,7 +6747,13 @@ class FlowMcpCli {
 
         // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
         // Legacy ~/.flowmcp/schemas scan + localSources are the fallback until migration (Memo 099 Kap 9).
-        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
+        const { schemaFolders, duplicateError } = await FlowMcpCli.#readSchemaFolders()
+
+        // PRD-008 — a duplicate folder name is a hard config error (the "<source>:"
+        // coordinate would be ambiguous). Surface it instead of resolving sources.
+        if( duplicateError !== null && duplicateError !== undefined ) {
+            return { 'sources': [], 'error': duplicateError.error, 'fix': duplicateError.fix }
+        }
 
         let allSourceNames = []
 
@@ -6686,7 +6846,7 @@ class FlowMcpCli {
                 sources.push( sourceEntry )
             } ), Promise.resolve() )
 
-        return { sources }
+        return { sources, 'error': null, 'fix': null }
     }
 
 
@@ -7845,8 +8005,9 @@ Selection Management (v4):
 Grading (v2 — experimental; CLI surface may change):
   grading deterministic <id>                 Structural validate + deterministic data pretest, no scoring (alias: "det"). <id> = <namespace>/<schema> or <namespace>/tool/<name>
     --only=<csv>                             Restrict to v4 primitives. Allowed: tools | resources | skills | prompts | selections
-  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent (schema read live from schemaFolders[]; the island is built on first run — no separate import step)
-  grading run <ns|selection> --consume-scores <path>
+  grading non-deterministic <ns|selection> --emit-prompts
+                                             Stage 1 (alias: "nondet"): deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent (schema read live from schemaFolders[]; the island is built on first run — no separate import step)
+  grading non-deterministic <ns|selection> --consume-scores <path>
                                              Stage 3: consume ONE scores payload back; verifies the Task-ID + area-set + per-area question-count (partial-set supported), rebuilds the index, finalizes
     --phase <area[,area...]>                 Restrict grading to an area set: no flag = all applicable areas; one area = single mode; comma-set = subset mode (named-but-not-emittable areas are reported, never silently dropped)
     --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
@@ -7863,6 +8024,13 @@ Grading (v2 — experimental; CLI surface may change):
     FLOWMCP_GRADING_DATA, or "gradingDataDir" in ~/.flowmcp/config.json)
   Export default: <island>/_exports (override via --export-dir,
     FLOWMCP_GRADING_EXPORT, or "gradingExportDir" in ~/.flowmcp/config.json)
+  Target <id> forms:
+    namespace                 whole provider           (no slash),  e.g. etherscan
+    namespace/schema-name     all tools from a schema  (1 slash),   e.g. etherscan/balance
+    namespace/tool/name       a single tool            (2 slashes), e.g. etherscan/tool/getBalance
+    namespace/selection/name  a named selection                     e.g. core/selection/mvp
+    optional prefix source:   pick one schemaFolders[] source       e.g. Production:etherscan/tool/getBalance
+      (CLI feature; the source coordinate is not part of the Spec-ID itself)
 
 Shared Lists (v4):
   dev lists list                             List all shared lists
@@ -9441,7 +9609,14 @@ allowlist, migrate-config, etc.).
     // Memo 099 Kap 5 — load ALL schemas from the configured schemaFolders[].
     // No activation: every tool in every folder is immediately resolvable.
     static async #resolveAllSchemas() {
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources, error: sourcesError, fix: sourcesFix } = await FlowMcpCli.#listSources()
+
+        // PRD-008 — a duplicate schemaFolders[] name is a hard config error; surface
+        // it instead of silently resolving an empty / ambiguous schema list.
+        if( sourcesError !== null && sourcesError !== undefined ) {
+            return { 'schemas': [], 'error': sourcesError, 'fix': sourcesFix }
+        }
+
         const schemas = []
 
         await sources
@@ -9460,13 +9635,16 @@ allowlist, migrate-config, etc.).
                                 main,
                                 handlersFn,
                                 'file': schemaRef,
+                                // PRD-008 — carry the source coordinate (folder name) so the
+                                // serve/list/call layers can disambiguate identical providers.
+                                'source': sourceName,
                                 'requiredServerParams': Array.isArray( requiredServerParams ) ? requiredServerParams : ( main[ 'requiredServerParams' ] || [] )
                             } )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
 
-        return { schemas }
+        return { schemas, 'error': null, 'fix': null }
     }
 
 
@@ -9569,7 +9747,13 @@ allowlist, migrate-config, etc.).
 
 
     static async #loadAllSchemas() {
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources, error: sourcesError, fix: sourcesFix } = await FlowMcpCli.#listSources()
+
+        // PRD-008 — duplicate schemaFolders[] name is a hard config error.
+        if( sourcesError !== null && sourcesError !== undefined ) {
+            return { 'schemas': [], 'error': sourcesError, 'fix': sourcesFix }
+        }
+
         const allSchemas = []
 
         await sources
@@ -10634,13 +10818,44 @@ allowlist, migrate-config, etc.).
             return { 'valid': false, 'error': 'Spec-ID must be a non-empty string' }
         }
 
-        const parts = specId.split( '/' )
+        // PRD-008 — optional leading "<source>:" coordinate. The colon trenner does
+        // not collide with the slash-based Spec-ID grammar, so it is split off first
+        // and the remainder is parsed unchanged. No silent default: an empty source
+        // ("...:foo") or an empty remainder ("source:") is a hard error.
+        let source = null
+        let rest = specId
+        const colonIndex = specId.indexOf( ':' )
+        if( colonIndex !== -1 ) {
+            source = specId.slice( 0, colonIndex )
+            rest = specId.slice( colonIndex + 1 )
+
+            if( source.length === 0 ) {
+                return { 'valid': false, 'error': `Invalid source coordinate in "${specId}": the prefix before ":" must be a schemaFolders[] name.` }
+            }
+
+            if( rest.length === 0 ) {
+                return { 'valid': false, 'error': `Invalid Spec-ID "${specId}": nothing after the "${source}:" source prefix. Expected "${source}:<namespace>[/tool/name]".` }
+            }
+        }
+
+        const parts = rest.split( '/' )
         const slashCount = parts.length - 1
+
+        if( slashCount === 0 ) {
+            const [ namespace ] = parts
+            const namespaceValid = /^[a-z][a-z0-9-]*$/.test( namespace )
+
+            if( namespaceValid === false ) {
+                return { 'valid': false, 'error': `Invalid namespace "${namespace}": expected a lowercase identifier matching ^[a-z][a-z0-9-]*$ (e.g. "etherscan").` }
+            }
+
+            return { 'valid': true, source, namespace, 'type': 'namespace' }
+        }
 
         if( slashCount === 1 ) {
             const [ namespace, name ] = parts
 
-            return { 'valid': true, namespace, 'type': 'schema', name }
+            return { 'valid': true, source, namespace, 'type': 'schema', name }
         }
 
         if( slashCount === 2 ) {
@@ -10654,13 +10869,85 @@ allowlist, migrate-config, etc.).
                 } )
 
             if( !isAllowed ) {
-                return { 'valid': false, 'error': `Unknown Spec-ID type "${type}": expected one of tool|resource|prompt|skill|selection|agent` }
+                return { 'valid': false, 'error': `Unknown Spec-ID type "${type}": expected one of tool|resource|prompt|skill|selection|agent. Example: "${namespace}/tool/${name || 'someRoute'}".` }
             }
 
-            return { 'valid': true, namespace, type, name }
+            return { 'valid': true, source, namespace, type, name }
         }
 
-        return { 'valid': false, 'error': `Invalid Spec-ID format: ${specId}` }
+        return {
+            'valid': false,
+            'error': `Invalid Spec-ID format: "${specId}". Valid forms: "<namespace>" (whole provider), "<namespace>/<schema-name>" (1 slash = schema), "<namespace>/tool/<name>" (2 slashes = tool). Optional "<source>:" prefix. Example: "etherscan/tool/getBalance".`
+        }
+    }
+
+
+    // PRD-009 — shared add-or-collide for ALL four primitives (tools/resources/
+    // prompts/skills). Before writing a spec-id, check whether it already exists; if
+    // so, record a collision instead of silently overwriting (last-wins) / pushing a
+    // first-wins duplicate. The collision entry carries `files` AND `sources` so the
+    // visible warning can suggest the qualified "<source>:<spec-id>" fix (PRD-008).
+    // Mutates `map` and `collisions`.
+    static #trackPrimitive( { map, collisions, specId, file, source, extra } ) {
+        if( map[ specId ] ) {
+            const existing = collisions
+                .find( ( c ) => {
+                    const matches = c[ 'specId' ] === specId
+
+                    return matches
+                } )
+
+            if( existing ) {
+                existing[ 'files' ].push( file )
+                existing[ 'sources' ].push( source )
+            } else {
+                collisions.push( {
+                    specId,
+                    'files': [ map[ specId ][ 'file' ], file ],
+                    'sources': [ map[ specId ][ 'source' ], source ]
+                } )
+            }
+
+            return
+        }
+
+        map[ specId ] = { file, source, ...extra }
+    }
+
+
+    // PRD-009 — render the collisions[] list (built by #trackPrimitive over all four
+    // primitives) into visible, non-blocking warnings. Each warning names the
+    // colliding spec-id, the involved sources and the copyable qualified fix
+    // "<source>:<spec-id>" (PRD-008). One bundled line per spec-id (no per-call
+    // noise). English, no risk jargon. Returns [] when there is no collision.
+    static #formatCollisionWarnings( { collisions } ) {
+        if( Array.isArray( collisions ) === false || collisions.length === 0 ) {
+            return { 'warnings': [] }
+        }
+
+        const warnings = collisions
+            .map( ( collision ) => {
+                const { specId, files, sources } = collision
+                const knownSources = ( Array.isArray( sources ) ? sources : [] )
+                    .filter( ( s ) => typeof s === 'string' && s.length > 0 )
+                const uniqueSources = [ ...new Set( knownSources ) ]
+                const fixForms = uniqueSources.length > 0
+                    ? uniqueSources
+                        .map( ( s ) => `${s}:${specId}` )
+                        .join( ' or ' )
+                    : `<source>:${specId}`
+                const sourceLabel = uniqueSources.length > 0 ? uniqueSources.join( ', ' ) : 'unknown sources'
+                const fileLabel = ( Array.isArray( files ) ? files : [] ).join( ', ' )
+
+                return {
+                    specId,
+                    'sources': uniqueSources,
+                    'files': Array.isArray( files ) ? files : [],
+                    'message': `Collision on "${specId}" across sources [${sourceLabel}] (files: ${fileLabel}). The unqualified call uses the first match. To pick one explicitly, prefix the source: ${fixForms}.`
+                }
+            } )
+
+        return { warnings }
     }
 
 
@@ -10696,23 +10983,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaTools )
                     .forEach( ( routeName ) => {
                         const specId = `${namespace}/tool/${routeName}`
-
-                        if( tools[ specId ] ) {
-                            const existing = collisions
-                                .find( ( c ) => {
-                                    const matches = c[ 'specId' ] === specId
-
-                                    return matches
-                                } )
-
-                            if( existing ) {
-                                existing[ 'files' ].push( file )
-                            } else {
-                                collisions.push( { specId, 'files': [ tools[ specId ][ 'file' ], file ] } )
-                            }
-                        } else {
-                            tools[ specId ] = { file, source, routeName }
-                        }
+                        FlowMcpCli.#trackPrimitive( { 'map': tools, collisions, specId, file, source, 'extra': { routeName } } )
                     } )
 
                 const schemaResources = main[ 'resources' ] || {}
@@ -10720,7 +10991,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaResources )
                     .forEach( ( resourceName ) => {
                         const specId = `${namespace}/resource/${resourceName}`
-                        resources[ specId ] = { file, source, resourceName }
+                        FlowMcpCli.#trackPrimitive( { 'map': resources, collisions, specId, file, source, 'extra': { resourceName } } )
                     } )
 
                 const schemaPrompts = main[ 'prompts' ] || {}
@@ -10728,7 +10999,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaPrompts )
                     .forEach( ( promptName ) => {
                         const specId = `${namespace}/prompt/${promptName}`
-                        prompts[ specId ] = { file, source, promptName }
+                        FlowMcpCli.#trackPrimitive( { 'map': prompts, collisions, specId, file, source, 'extra': { promptName } } )
                     } )
 
                 const schemaSkills = main[ 'skills' ] || []
@@ -10742,7 +11013,7 @@ allowlist, migrate-config, etc.).
                         }
 
                         const specId = `${namespace}/skill/${skillName}`
-                        skills[ specId ] = { file, source, skillName }
+                        FlowMcpCli.#trackPrimitive( { 'map': skills, collisions, specId, file, source, 'extra': { skillName } } )
                     } )
             } )
 
@@ -10878,6 +11149,40 @@ allowlist, migrate-config, etc.).
     }
 
 
+    static __testOnly_parseSpecId( { specId } ) {
+        return FlowMcpCli.#parseSpecId( { specId } )
+    }
+
+
+    static __testOnly_buildToolName( { routeName, namespace, source = null, disambiguate = false } ) {
+        return FlowMcpCli.#buildToolName( { routeName, namespace, source, disambiguate } )
+    }
+
+
+    // PRD-008 — exercises the pre-serve dedup planner over a list of tool entries
+    // exactly like the serve-loop does, but without the MCP SDK. Returns the final
+    // registered names (and skips) so a test can prove two same-provider folders
+    // produce NO duplicate registration (the SDK would otherwise throw).
+    static __testOnly_planServeToolNames( { entries } ) {
+        const registeredToolNames = new Set()
+        const plan = entries
+            .map( ( entry ) => {
+                const { routeName, namespace, source } = entry
+                const { toolName: baseName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                const decided = FlowMcpCli.#disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } )
+
+                return { baseName, 'finalName': decided.finalName, 'skip': decided.skip, 'note': decided.note }
+            } )
+
+        return { plan, 'registeredNames': [ ...registeredToolNames ] }
+    }
+
+
+    static __testOnly_formatCollisions( { collisions } ) {
+        return FlowMcpCli.#formatCollisionWarnings( { collisions } )
+    }
+
+
     static async __testOnly_buildIndex( { schemas } ) {
         const tools = {}
         const resources = {}
@@ -10905,23 +11210,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaTools )
                     .forEach( ( routeName ) => {
                         const specId = `${namespace}/tool/${routeName}`
-
-                        if( tools[ specId ] ) {
-                            const existing = collisions
-                                .find( ( c ) => {
-                                    const matches = c[ 'specId' ] === specId
-
-                                    return matches
-                                } )
-
-                            if( existing ) {
-                                existing[ 'files' ].push( file )
-                            } else {
-                                collisions.push( { specId, 'files': [ tools[ specId ][ 'file' ], file ] } )
-                            }
-                        } else {
-                            tools[ specId ] = { file, source, routeName }
-                        }
+                        FlowMcpCli.#trackPrimitive( { 'map': tools, collisions, specId, file, source, 'extra': { routeName } } )
                     } )
 
                 const schemaResources = main[ 'resources' ] || {}
@@ -10929,7 +11218,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaResources )
                     .forEach( ( resourceName ) => {
                         const specId = `${namespace}/resource/${resourceName}`
-                        resources[ specId ] = { file, source, resourceName }
+                        FlowMcpCli.#trackPrimitive( { 'map': resources, collisions, specId, file, source, 'extra': { resourceName } } )
                     } )
 
                 const schemaPrompts = main[ 'prompts' ] || {}
@@ -10937,7 +11226,7 @@ allowlist, migrate-config, etc.).
                 Object.keys( schemaPrompts )
                     .forEach( ( promptName ) => {
                         const specId = `${namespace}/prompt/${promptName}`
-                        prompts[ specId ] = { file, source, promptName }
+                        FlowMcpCli.#trackPrimitive( { 'map': prompts, collisions, specId, file, source, 'extra': { promptName } } )
                     } )
 
                 const schemaSkills = main[ 'skills' ] || []
@@ -10951,7 +11240,7 @@ allowlist, migrate-config, etc.).
                         }
 
                         const specId = `${namespace}/skill/${skillName}`
-                        skills[ specId ] = { file, source, skillName }
+                        FlowMcpCli.#trackPrimitive( { 'map': skills, collisions, specId, file, source, 'extra': { skillName } } )
                     } )
             } )
 
@@ -11872,6 +12161,74 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // PRD-007 (Memo 102 Phase 3) — the grading target is no longer passed as a raw
+    // string straight into #detectGradingFlow. It is first structured through
+    // #parseSpecId, which distinguishes the three addressing levels:
+    //   - namespace            (no slash)        -> whole provider
+    //   - namespace/schema     (1 slash)         -> a schema file (granularity stays
+    //                                               namespace-bound in the island, the
+    //                                               schema name is carried as scope)
+    //   - namespace/tool/name  (2 slashes)       -> a single tool; resolved back to its
+    //                                               namespace via #buildNamespaceIndex
+    //   - namespace/selection/name               -> selection path (kept first-class)
+    // No silent default: an unparseable id or an unknown tool id is a hard abort with
+    // a copyable fix. The resolved namespace (and any scope) is returned so callers
+    // route into the existing #detectGradingFlow on the namespace.
+    static async #resolveGradingTarget( { cwd, gradingDataRoot, target } ) {
+        const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
+
+        if( parsed.valid === false ) {
+            return { 'status': false, 'error': parsed.error, 'fix': 'Pass a target as <namespace>, <namespace>/<schema-name> (1 slash = schema), <namespace>/tool/<name> (2 slashes = tool) or <namespace>/selection/<name>. Optional prefix "<source>:".' }
+        }
+
+        const { type, namespace, name, source } = parsed
+
+        // selection stays a first-class grading target (F12 = A): route on the
+        // selection name, NOT on the namespace.
+        if( type === 'selection' ) {
+            const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, 'target': name } )
+
+            return { ...detected, 'specType': 'selection', 'scopeName': name, source }
+        }
+
+        // namespace or schema: the grading granularity is the namespace. For a schema
+        // id the schema-name is carried as scope (no behavioural change in the island).
+        if( type === 'namespace' || type === 'schema' ) {
+            const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, 'target': namespace } )
+
+            return { ...detected, 'specType': type, 'scopeName': type === 'schema' ? name : null, source }
+        }
+
+        // tool: resolve the tool id back to its namespace via the namespace index.
+        if( type === 'tool' ) {
+            const specId = `${namespace}/tool/${name}`
+            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+            const toolEntry = index && index[ 'tools' ] ? index[ 'tools' ][ specId ] : undefined
+
+            if( toolEntry === undefined ) {
+                return {
+                    'status': false,
+                    'error': `Unknown tool id "${target}": no tool "${specId}" is registered in the configured schemaFolders[].`,
+                    'fix': `Use the 2-slash tool form "<namespace>/tool/<name>" with a tool that exists (run "${appConfig[ 'cliCommand' ]} list" to see registered tools), or grade the whole provider with "${appConfig[ 'cliCommand' ]} grading deterministic ${namespace}".`
+                }
+            }
+
+            const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, 'target': namespace } )
+            const { warnings: collisionWarnings } = FlowMcpCli.#formatCollisionWarnings( { 'collisions': index ? index[ 'collisions' ] : [] } )
+
+            return { ...detected, 'specType': 'tool', 'scopeName': name, 'source': source !== null ? source : ( toolEntry[ 'source' ] || null ), collisionWarnings }
+        }
+
+        // A 2-slash id of a non-tool primitive (resource/prompt/skill/agent) is not a
+        // grading target — no silent default.
+        return {
+            'status': false,
+            'error': `Spec-ID type "${type}" is not a grading target.`,
+            'fix': `Grade a <namespace>, a <namespace>/<schema-name>, a <namespace>/tool/<name> or a <namespace>/selection/<name>.`
+        }
+    }
+
+
     // F16 Dependency-Resolver decision tree (implementation-plan N1, owned by
     // the CLI). Branches:
     //   (a) data missing + provider in schemaFolders[] -> build the island
@@ -12080,7 +12437,7 @@ allowlist, migrate-config, etc.).
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
@@ -12145,7 +12502,7 @@ allowlist, migrate-config, etc.).
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading run <namespace|selection> --emit-prompts | --consume-scores <path>' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading non-deterministic <namespace|selection> --emit-prompts | --consume-scores <path>` } ) }
         }
 
         // NO SILENT DEFAULT for the mode — exactly one of emit/consume.
@@ -12153,7 +12510,7 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': 'Mode required: --emit-prompts or --consume-scores <path>.', 'fix': 'Pick exactly one mode (2-phase grading, no default mode).' } ) }
         }
         if( emitPrompts === true && consumeScores !== null && consumeScores !== undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Modes are mutually exclusive: pass either --emit-prompts or --consume-scores, not both.', 'fix': 'Run emit-prompts first, then consume-scores in a separate call.' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': 'Modes are mutually exclusive: pass either --emit-prompts or --consume-scores, not both.', 'fix': `Run --emit-prompts first, then --consume-scores in a separate call.` } ) }
         }
 
         // NO SILENT DEFAULT for the conflict policy — explicit allowlist.
@@ -12173,7 +12530,7 @@ allowlist, migrate-config, etc.).
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
 
         // F29 flow detection.
-        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
@@ -13339,7 +13696,7 @@ allowlist, migrate-config, etc.).
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
@@ -13388,7 +13745,7 @@ allowlist, migrate-config, etc.).
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
@@ -13422,7 +13779,7 @@ allowlist, migrate-config, etc.).
             return {
                 'status': false,
                 'error': `WL-001: No prompts.json for namespace "${target}" — the deterministic pretest has not run yet.`,
-                'fix': `Run "${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts" first, then re-run worklist.`
+                'fix': `Run "${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts" first, then re-run worklist.`
             }
         }
 
@@ -13431,7 +13788,7 @@ allowlist, migrate-config, etc.).
             return {
                 'status': false,
                 'error': `WL-002: prompts.json for namespace "${target}" is unreadable or not valid JSON.`,
-                'fix': 'Re-emit the prompts (grading run --emit-prompts) to regenerate a valid handoff.'
+                'fix': `Re-emit the prompts (${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts) to regenerate a valid handoff.`
             }
         }
 
@@ -13492,7 +13849,7 @@ allowlist, migrate-config, etc.).
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const detected = await FlowMcpCli.#detectGradingFlow( { gradingDataRoot, target } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
             return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
@@ -13655,7 +14012,7 @@ allowlist, migrate-config, etc.).
 
         return {
             'openAreas': openAreas,
-            'nextAction': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${openAreas.join( ',' )}`,
+            'nextAction': `${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --phase ${openAreas.join( ',' )}`,
             'rationale': 'These areas still carry deterministic defects or open improvement tips; re-emit prompts for them to continue the grading loop.'
         }
     }
@@ -13761,7 +14118,7 @@ allowlist, migrate-config, etc.).
             ? { 'areas': [], 'command': null, 'free': true }
             : {
                 'areas': classified.det,
-                'command': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${classified.det.join( ',' )}`,
+                'command': `${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --phase ${classified.det.join( ',' )}`,
                 'free': true
             }
 
@@ -13776,7 +14133,7 @@ allowlist, migrate-config, etc.).
             nonDeterministic = {
                 'areaSet': classified.nonDet,
                 'taskIdPreview': generated.taskId,
-                'command': `${appConfig[ 'cliCommand' ]} grading run ${target} --emit-prompts --phase ${classified.nonDet.join( ',' )}`,
+                'command': `${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --phase ${classified.nonDet.join( ',' )}`,
                 'skill': 'grade-score-single',
                 'free': false
             }

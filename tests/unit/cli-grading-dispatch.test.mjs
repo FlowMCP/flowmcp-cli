@@ -30,7 +30,8 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
         expect( parsed[ 'fix' ] ).not.toContain( 'import' )
         expect( parsed[ 'fix' ] ).toContain( 'deterministic' )
         expect( parsed[ 'fix' ] ).toContain( 'export' )
-        expect( parsed[ 'fix' ] ).toContain( 'run' )
+        // PRD-010: the user-facing non-deterministic command replaces `run`.
+        expect( parsed[ 'fix' ] ).toContain( 'non-deterministic' )
         expect( parsed[ 'fix' ] ).toContain( 'state' )
     } )
 
@@ -72,6 +73,22 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
         // PRD-011: the method now requires a mode flag. Without --emit-prompts /
         // --consume-scores it returns the no-default-mode error (not a stub).
         const { stdout } = await runCli( { 'args': [ 'grading', 'run', 'demo/ns', '--phase', 'P1' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'status' ] ).toBe( false )
+        expect( parsed[ 'error' ] ).toContain( 'Mode required' )
+    } )
+
+    it( 'PRD-010: `non-deterministic` routes to gradingRun (same mode mechanic)', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading', 'non-deterministic', 'demo/ns', '--phase', 'P1' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'status' ] ).toBe( false )
+        expect( parsed[ 'error' ] ).toContain( 'Mode required' )
+    } )
+
+    it( 'PRD-010: `nondet` alias routes to gradingRun', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading', 'nondet', 'demo/ns', '--phase', 'P1' ] } )
         const parsed = JSON.parse( stdout )
 
         expect( parsed[ 'status' ] ).toBe( false )

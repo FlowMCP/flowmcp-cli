@@ -417,19 +417,26 @@ const runCommand = async () => {
     }
 
     if( command === 'grading' ) {
-        // PRD-001 — normalize the `det` alias to `deterministic` BEFORE the
-        // allowlist check (no silent default: an unknown sub-command still errors).
+        // PRD-001 / PRD-010 — normalize the short aliases to their full command
+        // names BEFORE the allowlist check (no silent default: an unknown
+        // sub-command still errors). `det` -> deterministic, `nondet` ->
+        // non-deterministic.
         const rawSubCommand = positionals[ 1 ]
-        const subCommand = rawSubCommand === 'det' ? 'deterministic' : rawSubCommand
+        const aliasMap = { 'det': 'deterministic', 'nondet': 'non-deterministic' }
+        const subCommand = aliasMap[ rawSubCommand ] !== undefined ? aliasMap[ rawSubCommand ] : rawSubCommand
         // Memo 102 Phase 2 / PRD-006 — `import` removed: the grading run reads the
         // schema live from schemaFolders[] (no internal importer left).
-        const validSubCommands = [ 'deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        // Memo 102 Phase 3 / PRD-010 — `non-deterministic` (alias `nondet`) is the
+        // non-deterministic LLM-scoring path (emit + consume), formerly only reached
+        // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
+        // internal mechanic (Never-delete-legacy).
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -463,7 +470,12 @@ const runCommand = async () => {
             return true
         }
 
-        if( subCommand === 'run' ) {
+        if( subCommand === 'run' || subCommand === 'non-deterministic' ) {
+            // PRD-010 — `non-deterministic` (alias `nondet`) is the user-facing name
+            // for the non-deterministic LLM-scoring path; `run` stays as the internal
+            // mechanic. Both share the exact same gradingRun() implementation (no
+            // code drift). The mode (--emit-prompts | --consume-scores) is still
+            // explicit — no silent default.
             const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } )
             output( { result } )
 
