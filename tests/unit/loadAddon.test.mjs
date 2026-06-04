@@ -4,7 +4,7 @@ import { AddonLoader } from '../../src/addons/loadAddon.mjs'
 
 
 describe( 'AddonLoader.loadAddon', () => {
-    it( 'loads gtfs-sqlite-toolkit for sourceKey sqlite-gtfs', async () => {
+    it( 'loads geo-gtfs-toolkit for sourceKey sqlite-gtfs', async () => {
         const result = await AddonLoader.loadAddon( { sourceKey: 'sqlite-gtfs' } )
 
         expect( result.addonName ).toBe( 'geo-gtfs-toolkit' )

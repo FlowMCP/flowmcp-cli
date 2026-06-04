@@ -32,21 +32,23 @@
 const ADDON_REGISTRY = {
     'sqlite-gtfs': {
         // `name` = the package's own name (geo-gtfs-toolkit); the loader imports
-        // by `name`. The GitHub repo keeps its original name (not renamed).
+        // by `name`. The source KEY ('sqlite-gtfs') is the schema-facing resource
+        // identifier and is independent of the repo name (do not rename it). The
+        // GitHub repo was renamed gtfs-sqlite-toolkit -> geo-gtfs-toolkit (Memo 106).
         'name': 'geo-gtfs-toolkit',
-        'source': 'github:FlowMCP/gtfs-sqlite-toolkit',
+        'source': 'github:FlowMCP/geo-gtfs-toolkit',
         'defaultVersion': 'main',
         'urlMode': false
     },
     'geo-geojson': {
         'name': 'geo-geojson-toolkit',
-        'source': 'github:FlowMCP/geojson-sqlite-toolkit',
+        'source': 'github:FlowMCP/geo-geojson-toolkit',
         'defaultVersion': 'main',
         'urlMode': true
     },
     'geo-csv': {
         'name': 'geo-csv-tsv-toolkit',
-        'source': 'github:FlowMCP/csv-tsv-sqlite-toolkit',
+        'source': 'github:FlowMCP/geo-csv-tsv-toolkit',
         'defaultVersion': 'main',
         'urlMode': true
     },

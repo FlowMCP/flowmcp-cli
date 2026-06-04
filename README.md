@@ -255,7 +255,7 @@ The promise: a schema that points to an add-on automatically gets generated tool
 
 ### Example: sqlite-gtfs
 
-The first add-on is [`gtfs-sqlite-toolkit`](https://github.com/FlowMCP/gtfs-sqlite-toolkit). It converts GTFS Schedule feeds (CSV in ZIP) into spec-compliant SQLite databases and provides capability-based auto-tool generation. A schema references it like this:
+The first add-on is [`geo-gtfs-toolkit`](https://github.com/FlowMCP/geo-gtfs-toolkit). It converts GTFS Schedule feeds (CSV in ZIP) into spec-compliant SQLite databases and provides capability-based auto-tool generation. A schema references it like this:
 
 ```javascript
 export const schema = {
@@ -269,7 +269,7 @@ export const schema = {
                 mode:        'file-based',
                 path:        '${FLOWMCP_RESOURCES}/gtfs-de.db',
                 addon:       'geo-gtfs-toolkit',
-                addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
+                addonSource: 'github:FlowMCP/geo-gtfs-toolkit'
             }
         ]
     }
@@ -286,7 +286,7 @@ The CLI keeps one registry entry per known `source` type, **hardcoded** in `src/
 export const ADDON_REGISTRY = {
     'sqlite-gtfs': {
         name:           'geo-gtfs-toolkit',
-        source:         'github:FlowMCP/gtfs-sqlite-toolkit',
+        source:         'github:FlowMCP/geo-gtfs-toolkit',
         defaultVersion: 'main'
     }
 }
@@ -344,7 +344,7 @@ FlowMCP distributes **no** provider data in its public repositories. There are t
 The path from a provider feed to a database usable by FlowMCP has four steps:
 
 1. **Download** the GTFS feed from the provider (examples: `gtfs.de/de/feeds/`, regional open-data portals, provider-owned download pages)
-2. **Convert** via the `gtfs-sqlite-toolkit` add-on (see the add-on README for the exact invocation)
+2. **Convert** via the `geo-gtfs-toolkit` add-on (see the add-on README for the exact invocation)
 3. **Store** the database at `${FLOWMCP_RESOURCES}/<name>.db` (default `~/.flowmcp/resources/<name>.db`)
 4. **Use** the schema — it is already available via `call`/`list` once its folder is in `schemaFolders[]` (no activation step)
 
@@ -354,8 +354,8 @@ Concrete command examples:
 # 1. Download the GTFS feed (example)
 curl -O https://download.gtfs.de/germany/free/latest.zip
 
-# 2. Convert via the add-on (see gtfs-sqlite-toolkit README)
-cd ~/code/gtfs-sqlite-toolkit
+# 2. Convert via the add-on (see geo-gtfs-toolkit README)
+cd ~/code/geo-gtfs-toolkit
 node convert.mjs --input=~/Downloads/latest.zip --output=~/.flowmcp/resources/gtfs-de.db
 
 # 3. Optional: move the database to a different location
@@ -367,7 +367,7 @@ flowmcp call <tool-name>
 
 ### Pre-Push Protection
 
-The add-on repository (`gtfs-sqlite-toolkit`) ships a verification script `scripts/check-no-provider-data.sh` that detects large or provider-specific files before each commit or push and aborts the push. This policy also applies to user forks — contributors should wire the script into their own pre-push hooks.
+The add-on repository (`geo-gtfs-toolkit`) ships a verification script `scripts/check-no-provider-data.sh` that detects large or provider-specific files before each commit or push and aborts the push. This policy also applies to user forks — contributors should wire the script into their own pre-push hooks.
 
 Anyone contributing a schema for a new provider supplies **only the schema and the path variable** — never the feed itself.
 

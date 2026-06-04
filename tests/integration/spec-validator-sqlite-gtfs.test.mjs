@@ -212,7 +212,7 @@ describe( 'SqliteGtfsResourceValidator — positive case (synthetic fixture sche
                 mode: 'file-based',
                 path: '${FLOWMCP_RESOURCES}/synthetic-gtfs.db',
                 addon: 'geo-gtfs-toolkit',
-                addonSource: 'github:FlowMCP/gtfs-sqlite-toolkit'
+                addonSource: 'github:FlowMCP/geo-gtfs-toolkit'
             }
         ]
 

@@ -34,9 +34,9 @@
         "figlet": "^1.10.0",
         "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#de3a08888fa3945a284203d3c6ecd1419caab2bc",
         "flowmcp-grading": "github:FlowMCP/flowmcp-grading#v2.2.0",
-        "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/csv-tsv-sqlite-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
-        "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geojson-sqlite-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
-        "geo-gtfs-toolkit": "git+https://github.com/FlowMCP/gtfs-sqlite-toolkit.git#b868e612dc74c70e6401c9568a044f61ce80cede",
+        "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
+        "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
+        "geo-gtfs-toolkit": "git+https://github.com/FlowMCP/geo-gtfs-toolkit.git#b868e612dc74c70e6401c9568a044f61ce80cede",
         "geo-overpass-toolkit": "git+https://github.com/FlowMCP/geo-overpass-toolkit.git#708ce2ac4e7a59123bb8863ec4f236f562a011e5",
         "inquirer": "^12.3.0"
     },
