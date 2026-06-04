@@ -462,7 +462,7 @@ const runCommand = async () => {
         const dryRun = values[ 'no-save' ] === true
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
             output( { result } )
 
             return true

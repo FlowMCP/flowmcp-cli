@@ -2,6 +2,27 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.4.0 — 2026-06-04 (Memo 107)
+
+### Added
+
+- `grading deterministic <namespace>` (bare namespace) — runs the deterministic grade
+  over every schema of the namespace ("one command per namespace") and produces one
+  namespace `index.json` rollup + the committable provider-proof `grade.json`.
+- The deterministic path is no longer a summary-only sweep: after the data-pretest it
+  now writes the full spec structure — the deterministic Area `_gradings/` (via the new
+  `DeterministicAreaMapper` + `AreaScorer.writeEntry`, timestamped-additive / NO-OVERWRITE),
+  rebuilds the namespace `index.json` (`RebuildIndex`), and projects the provider-proof
+  `grade.json` (`ProviderProof`). `--no-save` skips all island writes.
+- A tool-addressed grade (`<namespace>/tool/<name>`) writes only that tool's `_gradings/`
+  entry; sibling tools are left untouched. Stale `test-N.json` from a higher-count run is
+  moved to a reversible `.trash/` (never hard-deleted).
+
+### Dependency
+
+- Pins `flowmcp-grading#v2.3.0` (DeterministicAreaMapper / AreaScorer export, stale-test
+  cleanup). Requires the grading tag `v2.3.0` to be published.
+
 ## 4.3.0 — 2026-06-04 (Memo 102 / Memo 105)
 
 ### Changed

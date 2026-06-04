@@ -100,15 +100,21 @@ describe( 'PRD-009 — grading doctor <ns> (defects + tips + nextLoop, read-only
         expect( dpt005.message ).toContain( 'DEMO_API_KEY' )
     } )
 
-    it( 'NO SILENT DEFAULT: no prompts.json -> WL-001 coded error (no empty fabrication)', async () => {
+    it( 'no prompts.json -> deterministic-only soft state (defects [] WITH explicit note, NOT a hard WL-001 error)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingDoctor( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', json: true } )
 
-        expect( result.status ).toBe( false )
-        expect( result.error ).toContain( 'WL-001' )
-        expect( result.fix ).toContain( '--emit-prompts' )
+        // A deterministic-only island (migrated / det-graded, no LLM emit round) has no
+        // prompts.json. doctor must still report — but never silently fabricate: defects
+        // is [] WITH an explicit defectsNote surfacing the missing prompts.json, and the
+        // conformance block is present.
+        expect( result.status ).toBe( true )
+        expect( result.defects ).toEqual( [] )
+        expect( typeof result.defectsNote ).toBe( 'string' )
+        expect( result.defectsNote ).toContain( 'prompts.json' )
+        expect( result.conformance ).toBeDefined()
     } )
 
     it( 'no grading entries -> tips:[] WITH an explicit note (never silently dropped)', async () => {
