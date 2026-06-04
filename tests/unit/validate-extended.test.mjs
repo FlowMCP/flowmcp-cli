@@ -179,22 +179,9 @@ describe( 'FlowMcpCli.validate extended', () => {
 } )
 
 
-describe( 'FlowMcpCli.test extended', () => {
-    it( 'returns validation error for non-string schemaPath', async () => {
-        const { result } = await FlowMcpCli.test( { schemaPath: 42, route: undefined, cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-
-
-    it( 'returns validation error for null schemaPath', async () => {
-        const { result } = await FlowMcpCli.test( { schemaPath: null, route: undefined, cwd: undefined } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-} )
+// Memo 102 / PRD-002 — "FlowMcpCli.test extended" describe block removed with
+// FlowMcpCli.test (schemaPath input validation now N/A — schema checking is
+// addressed by Spec-ID through grading deterministic).
 
 
 describe( 'FlowMcpCli.validationImportRegistry', () => {

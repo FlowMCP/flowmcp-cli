@@ -96,9 +96,9 @@ Every tool in every folder is now callable — no `add`. `path` may be `~`- or a
 | `flowmcp validate [path]` | Validate schema structure against FlowMCP spec |
 | `flowmcp validate` (no path) | Validate all schemas in the default group |
 | `flowmcp validate-catalog <dir>` | Validate a catalog directory (registry, schemas, agents) |
-| `flowmcp test project [--route name] [--group name]` | Test default group with live API calls |
-| `flowmcp test user [--route name]` | Test all user schemas with live API calls |
-| `flowmcp test single <path> [--route name]` | Test a single schema file |
+| `flowmcp grading deterministic <namespace>/<schema>` | Structural validate + deterministic data pretest (HTTP 200 + non-empty data), no scoring (alias: `det`) |
+| `flowmcp grading deterministic <namespace>/tool/<name>` | Restrict the pretest to one tool |
+| `flowmcp grading deterministic <id> --only=<csv>` | v4-primitive view: `tools \| resources \| skills \| prompts \| selections` |
 
 ### Grading
 
@@ -108,9 +108,8 @@ workbench island. They are reachable both as `flowmcp grading ...` and
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp grading import <provider-path>` | Import a provider folder into the island (Stage 0) |
-| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff) |
-| `flowmcp grading run <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
+| `flowmcp grading non-deterministic <ns\|selection> --emit-prompts` | Stage 1 (alias `nondet`): deterministic pretest + emit grading prompts (handoff). The schema is read live from `schemaFolders[]`; the island is built on first run — no separate import step |
+| `flowmcp grading non-deterministic <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
 | `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
 | `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
 
@@ -140,15 +139,17 @@ A relative value is resolved against `~/.flowmcp`; an absolute value is used as-
 
 #### Stage model
 
-Grading runs in four stages. The CLI owns Stages 0, 1 and 3; the **harness**
-(your Claude Code agent loop) owns Stage 2.
+Grading runs in three stages. The CLI owns Stages 1 and 3; the **harness**
+(your Claude Code agent loop) owns Stage 2. The schema source is read live from
+`schemaFolders[]` on every run — there is no separate intake/import step, and the
+island (`index.json`/`prompts.json`/`state.json`/grade snapshots) is built on the
+first run.
 
 | Stage | Owner | What happens |
 |-------|-------|--------------|
-| 0 — Intake | CLI | `grading import` validates the provider schemas, snapshots them into the island and normalizes resources/skills |
-| 1 — Deterministic | CLI | `grading run --emit-prompts` runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
+| 1 — Deterministic | CLI | `grading non-deterministic --emit-prompts` reads the schema live from `schemaFolders[]`, builds the island on first run, runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
 | 2 — Non-deterministic | Harness | The agent loop reads `prompts.json`/`state.json` and grades each area (`start-grade → evaluate → apply-improvement`) — this is the only stage outside the CLI |
-| 3 — Finalize | CLI | `grading run --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
+| 3 — Finalize | CLI | `grading non-deterministic --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
 
 #### Flow auto-detection
 
@@ -161,8 +162,8 @@ The target's path decides the test flow, the tier, and the maximum reachable gra
 
 #### Handoff to the harness
 
-`grading run --emit-prompts` does not grade non-deterministically itself. It
-writes:
+`grading non-deterministic --emit-prompts` does not grade non-deterministically
+itself. It writes:
 
 - `prompts.json` — one grading prompt per area, each carrying a Goal-Block.
 - `state.json` — the run baton (which areas are pending/done), updated atomically
@@ -184,12 +185,12 @@ When the goal is reached, hand the scores back to the CLI:
 
 ```bash
 # Stage 1 — deterministic pretest + emit prompts (provider test)
-flowmcp grading run providers/defillama --emit-prompts
+flowmcp grading non-deterministic providers/defillama --emit-prompts
 
 # Stage 2 — harness grades each area (outside the CLI), writing scores
 
 # Stage 3 — consume the harness scores, rebuild the index, finalize
-flowmcp grading run providers/defillama --consume-scores scores.json
+flowmcp grading non-deterministic providers/defillama --consume-scores scores.json
 
 # Inspect the rollup, then export the graded state back to the source
 flowmcp grading state providers/defillama
@@ -451,61 +452,57 @@ flowmcp validate ./my-schema.mjs
 # Validate an entire directory
 flowmcp validate ./schemas/my-provider/
 
-# Test with live API calls
-flowmcp test single ./my-schema.mjs
+# Deterministic validation (structural validate + data pretest) for one schema
+flowmcp grading deterministic my-namespace/my-schema
 
-# Test a specific route only
-flowmcp test single ./my-schema.mjs --route getBalance
+# Restrict the pretest to one tool
+flowmcp grading deterministic my-namespace/tool/getBalance
 ```
 
 ## Testing
 
-`flowmcp dev test single <path>` validates all five v4 primitives declared in a
-single schema file and prints a consolidated summary:
+> **Memo 102:** `flowmcp dev test` (`project` / `user` / `single`) was **removed**.
+> Its PASS criterion (HTTP 200 only) was a strict subset of the deterministic
+> grading pretest, which additionally requires non-empty data (HTTP 200 **and**
+> real data). Schema checking now has **one** path: `grading`.
+
+`flowmcp grading deterministic <id>` runs a structural validation **plus** the
+deterministic data pretest for a single schema (`<namespace>/<schema>`) or a
+single tool (`<namespace>/tool/<name>`). It does **not** emit prompts and does
+**not** run the non-deterministic LLM scoring. The `--only` flag carries the
+v4-primitive view that used to live in `dev test`:
 
 | Primitive  | Source in Schema                       | Test Strategy                                  |
 |------------|-----------------------------------------|------------------------------------------------|
-| Tools      | `main.tools[*].tests`                   | HTTP fetch via `FlowMCP.fetch`                 |
-| Resources  | `main.resources[*].queries[*].tests`    | `FlowMCP.executeResource` (SQLite readonly)    |
+| Tools      | `main.tools[*].tests`                   | Data pretest (HTTP 200 + non-empty data)       |
+| Resources  | `main.resources[*].queries[*].tests`    | Data pretest (SQLite readonly)                 |
 | Skills     | `main.skills[*].tests`                  | Structural (placeholder + prefill resolution)  |
 | Prompts    | `main.prompts[*].tests`                 | Placeholder resolution                          |
 | Selections | Selection file (transitive)             | Member iteration + aggregate                   |
 
-Example output:
-
-```
-Tools:       0/0 (none declared)
-Resources:   6/6 PASS (3 queries × 2 tests each)
-Skills:      1/1 PASS (structural)
-Prompts:     none
-Selections:  4/4 Members PASS
-
-Overall: PASS
-```
-
 ### Filtering with `--only`
 
-Use `--only=<csv>` to restrict a run to selected primitives. Allowed values:
-`tools`, `resources`, `skills`, `prompts`, `selections` (comma-separated for
-multiple).
+Use `--only=<csv>` to restrict the v4-primitive view to selected primitives.
+Allowed values: `tools`, `resources`, `skills`, `prompts`, `selections`
+(comma-separated for multiple).
 
 ```bash
-# Only run Resource tests
-flowmcp dev test single ./schema.mjs --only=resources
+# Only the Resource primitive view
+flowmcp grading deterministic my-namespace/my-schema --only=resources
 
-# Run Resources and Skills only
-flowmcp dev test single ./schema.mjs --only=resources,skills
+# Resources and Skills only
+flowmcp grading deterministic my-namespace/my-schema --only=resources,skills
 ```
 
 ### Structured Output with `--json`
 
-Add `--json` to emit a machine-readable summary. The JSON object contains
-`overall`, `primitives` (per-primitive counts), and `tests` (per-test detail).
-This format is consumed by downstream tooling such as conformance and grade
-reports.
+Add `--json` to emit a machine-readable result. The JSON object contains
+`status`, `mode`, `target`, the `validate` block, the `pretest` block
+(`ok`, `passedDownloadable`, `required`, `results`), `hints`, and (with
+`--only`) a `primitives` block.
 
 ```bash
-flowmcp dev test single ./schema.mjs --json
+flowmcp grading deterministic my-namespace/my-schema --json
 ```
 
 One-shot LLM tests for Skills are intentionally not a CLI feature; they run in

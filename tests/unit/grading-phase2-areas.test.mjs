@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from '@jest/globals'
+import { describe, it, expect, afterEach, beforeAll } from '@jest/globals'
 import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -7,10 +7,19 @@ import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import * as realGrading from 'flowmcp-grading'
+import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
 
 const here = dirname( fileURLToPath( import.meta.url ) )
 const providerFixture = join( here, '..', 'integration', 'fixtures', 'grading-provider' )
+
+
+// Memo 102 Phase 2 / PRD-003 (B2): emit-prompts reads the schema LIVE from
+// schemaFolders[]. Register the provider fixture so #resolveSchemasForTarget
+// finds the `demoapi` namespace.
+beforeAll( async () => {
+    await seedGradingSchemaFolder( { providerFixture, namespace: 'demoapi' } )
+} )
 
 
 // Wrap the real grading module but stub DataPretest.run so emit-prompts never
@@ -57,7 +66,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'default (no --phase) resolves mode=default and emits all applicable areas', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -68,7 +76,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'single token resolves mode=single', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: 'single-test' } )
         expect( result.status ).toBe( true )
@@ -79,7 +86,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'comma-set resolves mode=subset and emits both named areas', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
         expect( result.status ).toBe( true )
@@ -90,7 +96,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'rejects an unknown area token (lists allowed areas, no partial emit)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: 'not-a-real-area' } )
         expect( result.status ).toBe( false )
@@ -101,7 +106,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'rejects a duplicate token (no silent dedupe)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: 'single-test,single-test' } )
         expect( result.status ).toBe( false )
@@ -111,7 +115,6 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
     it( 'rejects an empty member (a,,b or a,)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: 'single-test,' } )
         expect( result.status ).toBe( false )
@@ -127,7 +130,6 @@ describe( 'PRD-005 — emit-time About applicability skip', () => {
     it( 'About absent -> about-namespace skipped (out-of-scope-resource), not a blocker', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -144,7 +146,6 @@ describe( 'PRD-005 — emit-time About applicability skip', () => {
     it( 'About present -> about-namespace emitted normally', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         // Create the About resource at the source level for the single schema.
         await mkdir( join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'demoapi', 'resources', 'about' ), { recursive: true } )
@@ -164,7 +165,6 @@ describe( 'PRD-006 — Provider-Namespace-Gate at emit', () => {
     it( 'schema below deterministic-green gates the non-det namespace areas', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: false } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -183,7 +183,6 @@ describe( 'PRD-006 — Provider-Namespace-Gate at emit', () => {
     it( 'all schemas deterministic-green -> namespace areas emitted (gate open)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -201,7 +200,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'emit writes taskId + payloadSkeleton (prompts.json) and taskId + emittedAreaSet (state.json)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( typeof result.taskId ).toBe( 'string' )
@@ -225,8 +223,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
         const a = await freshCwd()
         const b = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd: a, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
-        await FlowMcpCli.gradingImport( { cwd: b, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const r1 = await emit( { cwd: a, phase: 'single-test,tools-aggregate-schema' } )
         const r2 = await emit( { cwd: b, phase: 'tools-aggregate-schema,single-test' } )
@@ -236,7 +232,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'consume with the full emitted set marks taskComplete', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -257,7 +252,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'consume with a subset accepts per-area, leaves the rest pending, not complete', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         const e = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -278,7 +272,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'consume rejects an unknown taskId', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -295,7 +288,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'consume rejects an area outside the emitted set', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -312,7 +304,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'consume rejects a per-area question-count mismatch', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         // The emit recorded a per-area asked count (>0) for single-test; an answered
@@ -336,7 +327,6 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'legacy scores without a taskId still consume (backward-compatible)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
         await emit( { cwd, phase: null } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -371,7 +361,6 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
     it( 'writes exactly one grade.json under <exportRoot>/providers/<ns>/ with the proof shape', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         const { result } = await emitThenConsume( { cwd, exportDir: 'out/exports' } )
         expect( result.status ).toBe( true )
@@ -390,7 +379,6 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
     it( 'a re-run preserves a non-null monitoring.githubIssue (idempotent)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
         await emitThenConsume( { cwd, exportDir: 'out/exports' } )
         const gradeJsonPath = join( cwd, 'out', 'exports', 'providers', 'demoapi', 'grade.json' )

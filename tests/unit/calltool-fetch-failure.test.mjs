@@ -176,60 +176,9 @@ describe( 'FlowMcpCli.callTool fetch failure — auth error with requiredServerP
 } )
 
 
-describe( 'FlowMcpCli.test with group and route filter', () => {
-    it( 'filters tests by route name returning only matching route', async () => {
-        const { result } = await FlowMcpCli.test( {
-            'group': 'fail-test',
-            'route': 'withTests',
-            'cwd': TEST_CWD
-        } )
-
-        expect( result[ 'status' ] ).toBeDefined()
-        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 0 )
-    }, 30000 )
-
-
-    it( 'returns zero results for nonexistent route filter', async () => {
-        const { result } = await FlowMcpCli.test( {
-            'group': 'fail-test',
-            'route': 'nonexistent_route_xyz',
-            'cwd': TEST_CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'total' ] ).toBe( 0 )
-    }, 30000 )
-} )
-
-
-describe( 'FlowMcpCli.test with schemaPath and route filter', () => {
-    it( 'filters tests by route for schema path', async () => {
-        const schemaPath = join( SOURCE_DIR, 'auth.mjs' )
-
-        const { result } = await FlowMcpCli.test( {
-            'schemaPath': schemaPath,
-            'route': 'withTests',
-            'cwd': TEST_CWD
-        } )
-
-        expect( result[ 'status' ] ).toBeDefined()
-        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 0 )
-    }, 30000 )
-
-
-    it( 'returns zero results for nonexistent route with schemaPath', async () => {
-        const schemaPath = join( SOURCE_DIR, 'auth.mjs' )
-
-        const { result } = await FlowMcpCli.test( {
-            'schemaPath': schemaPath,
-            'route': 'totally_fake_route',
-            'cwd': TEST_CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'total' ] ).toBe( 0 )
-    }, 30000 )
-} )
+// Memo 102 / PRD-002 — the two "FlowMcpCli.test ... route filter" describe blocks
+// were removed with FlowMcpCli.test. Route filtering now maps onto
+// "grading deterministic <namespace>/tool/<name>" (grading-deterministic.test.mjs).
 
 
 describe( 'FlowMcpCli.callTool — cached route with params triggers buildCacheKey hash path', () => {

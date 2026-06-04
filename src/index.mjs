@@ -38,6 +38,7 @@ const args = parseArgs( {
         'emit-prompts': { type: 'boolean' },
         'consume-scores': { type: 'string' },
         'on-conflict': { type: 'string' },
+        'no-save': { type: 'boolean' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
         'fix-template': { type: 'boolean' },
@@ -417,14 +418,26 @@ const runCommand = async () => {
     }
 
     if( command === 'grading' ) {
-        const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        // PRD-001 / PRD-010 — normalize the short aliases to their full command
+        // names BEFORE the allowlist check (no silent default: an unknown
+        // sub-command still errors). `det` -> deterministic, `nondet` ->
+        // non-deterministic.
+        const rawSubCommand = positionals[ 1 ]
+        const aliasMap = { 'det': 'deterministic', 'nondet': 'non-deterministic' }
+        const subCommand = aliasMap[ rawSubCommand ] !== undefined ? aliasMap[ rawSubCommand ] : rawSubCommand
+        // Memo 102 Phase 2 / PRD-006 — `import` removed: the grading run reads the
+        // schema live from schemaFolders[] (no internal importer left).
+        // Memo 102 Phase 3 / PRD-010 — `non-deterministic` (alias `nondet`) is the
+        // non-deterministic LLM-scoring path (emit + consume), formerly only reached
+        // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
+        // internal mechanic (Never-delete-legacy).
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -441,10 +454,15 @@ const runCommand = async () => {
         const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const maxIterations = values[ 'max-iterations' ] === undefined ? null : values[ 'max-iterations' ]
         const withKeys = values[ 'with-keys' ] === true
+        const only = values[ 'only' ] === undefined ? null : values[ 'only' ]
         const json = values[ 'json' ] === true
+        // PRD-012 (Memo 102 Phase 4): the single opt-out flag --no-save maps to the
+        // single internal switch dryRun. When set, grading performs but writes
+        // NOTHING to the island (no pretest persist, no index/grade/state).
+        const dryRun = values[ 'no-save' ] === true
 
-        if( subCommand === 'import' ) {
-            const { result } = await FlowMcpCli.gradingImport( { cwd, 'path': target, onConflict, gradingDataDir, json } )
+        if( subCommand === 'deterministic' ) {
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, dryRun, json } )
             output( { result } )
 
             return true
@@ -457,8 +475,13 @@ const runCommand = async () => {
             return true
         }
 
-        if( subCommand === 'run' ) {
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } )
+        if( subCommand === 'run' || subCommand === 'non-deterministic' ) {
+            // PRD-010 — `non-deterministic` (alias `nondet`) is the user-facing name
+            // for the non-deterministic LLM-scoring path; `run` stays as the internal
+            // mechanic. Both share the exact same gradingRun() implementation (no
+            // code drift). The mode (--emit-prompts | --consume-scores) is still
+            // explicit — no silent default.
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun, json } )
             output( { result } )
 
             return true
@@ -625,45 +648,10 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'test' ) {
-        const subCommand = positionals[ 1 ]
-        const route = values[ 'route' ]
-        const group = values[ 'group' ]
-        const only = values[ 'only' ]
-        const json = values[ 'json' ] === true
-
-        if( subCommand === 'project' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        if( subCommand === 'user' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        if( subCommand === 'single' ) {
-            const filePath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        await FlowMcpCli.help( { cwd } )
-
-        return true
-    }
+    // Memo 102 / PRD-002 — `dev test` (project/user/single) removed. Its PASS
+    // criterion (HTTP 200 only) is a strict subset of the deterministic grading
+    // pretest (HTTP 200 + non-empty data). Use `grading deterministic <id>`
+    // instead; the v4-primitive view lives on its --only flag.
 
     return false
 }
