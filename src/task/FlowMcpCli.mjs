@@ -8011,6 +8011,7 @@ Grading (v2 — experimental; CLI surface may change):
                                              Stage 3: consume ONE scores payload back; verifies the Task-ID + area-set + per-area question-count (partial-set supported), rebuilds the index, finalizes
     --phase <area[,area...]>                 Restrict grading to an area set: no flag = all applicable areas; one area = single mode; comma-set = subset mode (named-but-not-emittable areas are reported, never silently dropped)
     --on-conflict <abort|skip|overwrite>     Write-conflict policy (default: no-overwrite)
+    --no-save                                Run grading without writing to the island (no index.json/grade.json/state.json, no pretest persist); orthogonal to --on-conflict
     --grading-data <path>                    Override the island location for this call
     --export-dir <path>                      Override the export destination root for this call
   grading export <ns|selection>              Export graded state (index.json) back to the source
@@ -12237,10 +12238,37 @@ allowlist, migrate-config, etc.).
     //   (c) source missing                -> hard abort
     // Downgrade only happens on explicit opt-in (not implemented as silent path).
     // Returns { status, chain[], ... } — the chain is always logged into the result.
-    static async #resolveGradingDependencies( { gradingDataRoot, flow, target, targetDir, providerPath } ) {
+    static async #resolveGradingDependencies( { gradingDataRoot, flow, target, targetDir, providerPath, dryRun = false } ) {
         const chain = []
         const indexPath = join( targetDir, 'index.json' )
         const hasIndex = existsSync( indexPath )
+
+        // PRD-012 — --no-save (dryRun): the on-first-run island skeleton build
+        // (folders + index.json via RebuildIndex) is itself an island WRITE. Under
+        // dryRun it must NOT happen — the island stays byte-identical. The emit path
+        // reads its schemas LIVE from schemaFolders[] and never consults this
+        // index.json, so skipping the build does not break the run. NO SILENT
+        // DEFAULT: the skip is recorded as an explicit chain step, and an unknown
+        // namespace still hard-aborts (the live resolve below runs first).
+        if( hasIndex === false && dryRun === true ) {
+            if( flow === 'provider' ) {
+                const namespace = basename( targetDir )
+                const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+                if( resolvedSchemas.status === false ) {
+                    return { 'status': false, chain, 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix }
+                }
+                chain.push( { 'step': 'auto-build-namespace-index', 'status': 'skipped (dry-run, no island write)' } )
+                return { 'status': true, chain }
+            }
+            // Selection dry-run: an index must already exist (no in-island authoring
+            // write under dry-run). Without one, abort honestly rather than write.
+            return {
+                'status': false,
+                chain,
+                'error': `--no-save: no index.json at ${indexPath} and the selection skeleton cannot be built without an island write.`,
+                'fix': 'Run the selection grading once without --no-save to author the island, then re-run with --no-save.'
+            }
+        }
 
         // (c) source missing — for a provider the source is the live schemaFolders[]
         // namespace; for a selection the source is the selection folder itself. A
@@ -12488,7 +12516,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12542,7 +12570,8 @@ allowlist, migrate-config, etc.).
             'flow': detected.flow,
             target,
             'targetDir': detected.targetDir,
-            'providerPath': null
+            'providerPath': null,
+            dryRun
         } )
         if( deps.status !== true ) {
             return { 'result': { 'status': false, 'error': deps.error, 'fix': deps.fix, 'dependencyChain': deps.chain } }
@@ -12579,10 +12608,10 @@ allowlist, migrate-config, etc.).
             // deterministic pretest fires authenticated requests with live keys.
             const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, useKeys, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, useKeys, dryRun, 'dependencyChain': deps.chain } )
         }
 
-        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, 'dependencyChain': deps.chain } )
+        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun, 'dependencyChain': deps.chain } )
     }
 
 
@@ -12600,7 +12629,7 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, json } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, dryRun = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12674,6 +12703,9 @@ allowlist, migrate-config, etc.).
             : {}
         const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': sourcePath } )
 
+        // PRD-012 — --no-save (dryRun) runs the pretest in full but persists NOTHING
+        // to the island (no summary.json / test-N.json). The deterministic path has
+        // no Stage-3 writes, so dryRun here only gates the DataPretest persist.
         const pretestRaw = await grading[ 'DataPretest' ].run( {
             namespace,
             'toolName': schemaName,
@@ -12682,7 +12714,8 @@ allowlist, migrate-config, etc.).
             'schemaSnapshotPath': sourcePath,
             serverParams,
             sharedLists,
-            'gradingDataDir': gradingDataRoot
+            'gradingDataDir': gradingDataRoot,
+            dryRun
         } )
 
         // Tool-ID: restrict the pretest view to the one addressed tool. The gate is
@@ -12707,6 +12740,7 @@ allowlist, migrate-config, etc.).
             status,
             'mode': 'deterministic',
             target,
+            'saved': dryRun !== true,
             'validate': validate,
             pretest,
             hints
@@ -12958,15 +12992,19 @@ allowlist, migrate-config, etc.).
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, useKeys, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, useKeys, dryRun = false, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
 
-        if( existsSync( promptsPath ) === true && conflict === 'abort' ) {
+        // PRD-012 — --no-save (dryRun) means NO write happens. The --on-conflict
+        // policy is ORTHOGONAL (it only decides HOW an actual write resolves a
+        // collision), so when dryRun is set we never consult it: there is no write
+        // that could collide. The conflict-gate below runs only for real writes.
+        if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'abort' ) {
             return { 'result': FlowMcpCli.#error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
         }
-        if( existsSync( promptsPath ) === true && conflict === 'skip' ) {
+        if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'skip' ) {
             return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, dependencyChain } }
         }
 
@@ -13032,7 +13070,8 @@ allowlist, migrate-config, etc.).
                     'schemaSnapshotPath': sourcePath,
                     serverParams,
                     sharedLists,
-                    'gradingDataDir': gradingDataRoot
+                    'gradingDataDir': gradingDataRoot,
+                    dryRun
                 } )
 
                 // F26: never persist serverParams or request payloads — only the
@@ -13130,6 +13169,37 @@ allowlist, migrate-config, etc.).
             dependencyChain
         }
 
+        // PRD-012 — --no-save (dryRun): the deterministic pretest already skipped its
+        // own persist; here we ALSO skip the prompts.json/state.json handoff. Skipping
+        // only one would leave a half-updated island (handoff present, pretest gone),
+        // which is exactly the forbidden state. The result still carries the Task-ID,
+        // emitted area-set and pretest summary so the caller can inspect them.
+        if( dryRun === true ) {
+            return {
+                'result': {
+                    'status': true,
+                    'stage': 1,
+                    'mode': 'emit-prompts',
+                    'saved': false,
+                    'skipped': false,
+                    flow,
+                    tier,
+                    maxGrade,
+                    target,
+                    'useKeys': useKeys === true,
+                    'promptsPath': null,
+                    'statePath': null,
+                    'pretestCount': pretests.length,
+                    taskId,
+                    'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
+                    'emittedAreaSet': emittedAreaSet,
+                    skippedAreas,
+                    gatedAreas,
+                    dependencyChain
+                }
+            }
+        }
+
         // Write-safety: atomic + No-Overwrite. prompts respects the explicit
         // conflict policy; state is a one-time baton (skip if present).
         const promptsWrite = await FlowMcpCli.#writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), 'onConflict': conflict } )
@@ -13140,6 +13210,7 @@ allowlist, migrate-config, etc.).
                 'status': true,
                 'stage': 1,
                 'mode': 'emit-prompts',
+                'saved': true,
                 'skipped': promptsWrite.skipped === true,
                 flow,
                 tier,
@@ -13419,7 +13490,7 @@ allowlist, migrate-config, etc.).
 
     // Stage 3 — consume the harness scores -> verify (PRD-007) -> grade ->
     // rebuild*Index (5-status) -> write Provider-Proof (PRD-008) -> finalize baton.
-    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dependencyChain } ) {
+    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
         const scoresPath = resolve( cwd, consumeScores )
         if( existsSync( scoresPath ) === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
@@ -13441,6 +13512,36 @@ allowlist, migrate-config, etc.).
         const verify = FlowMcpCli.#verifyConsumePayload( { grading, scoresDoc, 'state': prevState } )
         if( verify.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area question counts.' } ) }
+        }
+
+        // PRD-012 — --no-save (dryRun): the scores file was read and the Task-ID
+        // payload verified (pure reads, no island mutation), but Stage-3 writes ALL
+        // get skipped: NO RebuildIndex (its contract writes index.json — an
+        // "in-memory rebuild for output only" is impossible), NO Provider-Proof
+        // grade.json, NO state.json. The island stays byte-identical. NO SILENT
+        // DEFAULT: the rollup fields are honestly null/'not-saved', never a guessed
+        // status. --on-conflict is ORTHOGONAL and never consulted (no write to
+        // collide), and --export-dir / FLOWMCP_GRADING_EXPORT lose to --no-save.
+        if( dryRun === true ) {
+            return {
+                'result': {
+                    'status': true,
+                    'stage': 3,
+                    'mode': 'consume-scores',
+                    'saved': false,
+                    flow,
+                    target,
+                    'rollupStatus': 'not-saved',
+                    'rollupGrade': null,
+                    'indexPath': null,
+                    'proofPath': null,
+                    'acceptedAreas': verify.verified === true ? verify.acceptedAreas : null,
+                    'missingAreas': verify.verified === true ? verify.missingAreas : null,
+                    'taskComplete': verify.verified === true ? verify.complete : null,
+                    'scoreCount': scoresDoc[ 'scores' ].length,
+                    dependencyChain
+                }
+            }
         }
 
         // Rebuild the 5-status index from the resolved grade snapshots on disk.
@@ -13507,6 +13608,7 @@ allowlist, migrate-config, etc.).
                 'status': true,
                 'stage': 3,
                 'mode': 'consume-scores',
+                'saved': true,
                 flow,
                 target,
                 'rollupStatus': rebuilt.index[ 'status' ],

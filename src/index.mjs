@@ -38,6 +38,7 @@ const args = parseArgs( {
         'emit-prompts': { type: 'boolean' },
         'consume-scores': { type: 'string' },
         'on-conflict': { type: 'string' },
+        'no-save': { type: 'boolean' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
         'fix-template': { type: 'boolean' },
@@ -455,9 +456,13 @@ const runCommand = async () => {
         const withKeys = values[ 'with-keys' ] === true
         const only = values[ 'only' ] === undefined ? null : values[ 'only' ]
         const json = values[ 'json' ] === true
+        // PRD-012 (Memo 102 Phase 4): the single opt-out flag --no-save maps to the
+        // single internal switch dryRun. When set, grading performs but writes
+        // NOTHING to the island (no pretest persist, no index/grade/state).
+        const dryRun = values[ 'no-save' ] === true
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, dryRun, json } )
             output( { result } )
 
             return true
@@ -476,7 +481,7 @@ const runCommand = async () => {
             // mechanic. Both share the exact same gradingRun() implementation (no
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun, json } )
             output( { result } )
 
             return true
