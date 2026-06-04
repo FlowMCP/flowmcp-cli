@@ -12731,8 +12731,11 @@ allowlist, migrate-config, etc.).
             primitives = view
         }
 
-        // Hints derived ONLY from the existing DataPretest errors[] (no new error
-        // classes in this PRD — parameterless/key-gated stay Phase 5).
+        // Hints derived from the DataPretest errors[]. Phase 5 surfaces the new
+        // classes: DPT-006 (parameterless, Bar=1), DPT-007 (key-gated — not evaluable
+        // without key, NOT a FAIL), DPT-008 (duplicate test). The pretest object
+        // carries keyGated/perTool/stopReason so callers can tell "not evaluable"
+        // from a genuine FAIL.
         const { hints } = FlowMcpCli.#deterministicHints( { 'validate': validate, pretest } )
         const status = validate[ 'status' ] === true && pretest.ok === true
 
@@ -12803,10 +12806,19 @@ allowlist, migrate-config, etc.).
     static #scopeDeterministicPretest( { pretestRaw, toolFilter } ) {
         const baseResults = Array.isArray( pretestRaw.results ) ? pretestRaw.results : []
         if( toolFilter === null ) {
+            // Phase 5 surfacing: carry the deterministic SURFACING classes through to
+            // the CLI output so they are visible (never silent) — keyGated (PRD-014),
+            // the per-tool classes incl. parameterless/needs-tests (PRD-013), the FAIL
+            // set and the explicit stopReason. No silent default: absent fields stay
+            // absent rather than being fabricated.
             const pretest = {
                 'ok': pretestRaw.ok,
+                'keyGated': pretestRaw.keyGated === true,
                 'passedDownloadable': pretestRaw.passedDownloadable,
                 'required': pretestRaw.required,
+                'toolsBelowThreshold': Array.isArray( pretestRaw.toolsBelowThreshold ) ? pretestRaw.toolsBelowThreshold : [],
+                'perTool': pretestRaw.perTool === undefined || pretestRaw.perTool === null ? {} : pretestRaw.perTool,
+                'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
                 'results': baseResults,
                 'errors': Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : []
             }
@@ -12825,24 +12837,40 @@ allowlist, migrate-config, etc.).
             .filter( ( r ) => downloadablePrimitives.includes( r[ 'primitive' ] ) )
             .length
 
-        // Re-derive the gate for the single tool: it must be downloadable AND meet
-        // the working-test threshold on its own.
-        const ok = downloadableInTool > 0 && passedDownloadable >= required
+        // Phase 5 surfacing: take the authoritative per-tool class from the raw
+        // pretest (DataPretest computed it against the per-tool EFFECTIVE bar, incl.
+        // parameterless Bar=1 / key-gated). A key-gated schema is NOT a FAIL for the
+        // single tool either. No silent default — an absent per-tool node degrades
+        // to the legacy global-bar gate.
+        const rawPerTool = pretestRaw.perTool === undefined || pretestRaw.perTool === null ? {} : pretestRaw.perTool
+        const toolNode = rawPerTool[ toolFilter ] === undefined ? null : rawPerTool[ toolFilter ]
+        const keyGated = pretestRaw.keyGated === true
+        const toolBar = toolNode !== null && typeof toolNode.bar === 'number' ? toolNode.bar : required
+
+        // Re-derive the gate for the single tool: not key-gated AND downloadable AND
+        // meeting its own effective bar.
+        const ok = keyGated === false && downloadableInTool > 0 && passedDownloadable >= toolBar
         const errors = []
-        if( filtered.length === 0 ) {
+        if( keyGated === false && filtered.length === 0 && ( toolNode === null || toolNode.total !== 0 ) ) {
             errors.push( `DPT-004: Tool "${toolFilter}" produced no test results in the pretest.` )
         }
-        if( ok === false && filtered.length > 0 ) {
-            errors.push( `DPT-003: Tool "${toolFilter}" below ${required} working downloadable tests (${passedDownloadable}/${required}).` )
+        if( keyGated === false && ok === false && filtered.length > 0 ) {
+            errors.push( `DPT-003: Tool "${toolFilter}" below ${toolBar} working downloadable tests (${passedDownloadable}/${toolBar}).` )
         }
-        // Preserve the per-tool DPT-004 detail lines that already mention this tool.
+        // Preserve the per-tool DPT-004/006/007/008 detail lines that mention this tool.
         const carried = ( Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : [] )
-            .filter( ( e ) => typeof e === 'string' && e.includes( `${toolFilter}:` ) )
+            .filter( ( e ) => typeof e === 'string' && ( e.includes( `${toolFilter}:` ) || ( keyGated && e.includes( 'DPT-007' ) ) ) )
 
         const pretest = {
             ok,
+            keyGated,
             passedDownloadable,
             required,
+            'toolsBelowThreshold': ok === false && keyGated === false && toolNode !== null
+                ? [ `${toolFilter} (${passedDownloadable}/${toolBar})` ]
+                : [],
+            'perTool': toolNode === null ? {} : { [ toolFilter ]: toolNode },
+            'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
             'results': filtered,
             'errors': [ ...errors, ...carried ]
         }

@@ -211,6 +211,97 @@ describe( 'gradingDeterministic — red pretest yields hints', () => {
 } )
 
 
+// Memo 102 Phase 5 — the deterministic output must SURFACE the new classes:
+// key-gated (PRD-014, not a FAIL), parameterless Bar=1 + needs-tests (PRD-013),
+// and broken tests with their real HTTP status (PRD-015). The CLI is the surfacing
+// layer: it carries keyGated / perTool / toolsBelowThreshold through result.pretest.
+function gradingWithRawPretest( { raw } ) {
+    const stub = {
+        run: async ( params ) => ( { ...raw, summaryPath: join( params.gradingDataDir, 'providers', params.namespace, params.toolName, 'summary.json' ), schemaDir: null } ),
+        getVersion: () => ( { version: 'stub' } )
+    }
+    return { ...realGrading, DataPretest: stub }
+}
+
+
+describe( 'gradingDeterministic — Phase 5 surfacing (key-gated / parameterless / broken)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'PRD-014: a key-gated schema surfaces its own class (keyGated) — NOT a generic FAIL', async () => {
+        const cwd = await freshCwd()
+        const raw = {
+            ok: false,
+            keyGated: true,
+            passedDownloadable: 0,
+            required: 2,
+            toolsBelowThreshold: [],
+            perTool: { getThing: { working: 0, total: 3, bar: 2, parameterless: false, class: 'key-gated', level: 'unavailable' } },
+            results: [],
+            stopReason: 'key-gated-not-evaluable-without-key',
+            errors: [ 'DPT-007: Key-gated — not evaluable without key (missing requiredServerParam): DEMO_API_KEY' ]
+        }
+        await importFixture( { cwd, grading: gradingWithRawPretest( { raw } ) } )
+
+        const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+
+        expect( result.pretest.keyGated ).toBe( true )
+        expect( result.pretest.stopReason ).toBe( 'key-gated-not-evaluable-without-key' )
+        expect( result.pretest.perTool.getThing.class ).toBe( 'key-gated' )
+        // The diagnostic key name is visible in hints; no DPT-003/DPT-004 from key-gating.
+        expect( result.hints.some( ( h ) => h.includes( 'DPT-007' ) && h.includes( 'DEMO_API_KEY' ) ) ).toBe( true )
+        expect( result.hints.some( ( h ) => h.includes( 'DPT-003' ) || h.includes( 'DPT-004' ) ) ).toBe( false )
+    } )
+
+    it( 'PRD-013: a parameterless tool (Bar=1) and a 0-test tool (needs-tests) are both visible in perTool', async () => {
+        const cwd = await freshCwd()
+        const raw = {
+            ok: true,
+            keyGated: false,
+            passedDownloadable: 1,
+            required: 2,
+            toolsBelowThreshold: [],
+            perTool: {
+                getStations: { working: 1, total: 1, bar: 1, parameterless: true, class: 'parameterless', level: 'reachable' },
+                noTests: { working: 0, total: 0, bar: 2, parameterless: false, class: 'needs-tests', level: 'unavailable' }
+            },
+            results: [ { primitive: 'tool', name: 'getStations', status: true, hasData: true, working: true, error: null } ],
+            stopReason: null,
+            errors: [ 'DPT-006: Parameterless tool (no user-input vector) — own class, Bar=1: getStations (1/1)' ]
+        }
+        await importFixture( { cwd, grading: gradingWithRawPretest( { raw } ) } )
+
+        const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+
+        // The parameterless tool is its own Bar=1 class.
+        expect( result.pretest.perTool.getStations ).toMatchObject( { class: 'parameterless', bar: 1, parameterless: true } )
+        // The 0-test tool is VISIBLE (not invisible) as needs-tests.
+        expect( result.pretest.perTool.noTests ).toMatchObject( { class: 'needs-tests', total: 0 } )
+    } )
+
+    it( 'PRD-015: a broken test surfaces DPT-004 carrying the real HTTP status', async () => {
+        const cwd = await freshCwd()
+        const raw = {
+            ok: false,
+            keyGated: false,
+            passedDownloadable: 0,
+            required: 2,
+            toolsBelowThreshold: [ 'getThing (0/2)' ],
+            perTool: { getThing: { working: 0, total: 2, bar: 2, parameterless: false, class: 'normal', level: 'unavailable' } },
+            results: [ { primitive: 'tool', name: 'getThing', status: false, hasData: false, working: false, httpStatus: 400, error: 'HTTP 400: Bad Request' } ],
+            stopReason: 'tools-below-2-working-downloadable-tests',
+            errors: [ 'DPT-004: Test failed (not counted as a working download): getThing: HTTP 400: Bad Request (HTTP 400)' ]
+        }
+        await importFixture( { cwd, grading: gradingWithRawPretest( { raw } ) } )
+
+        const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+
+        expect( result.pretest.ok ).toBe( false )
+        expect( result.hints.some( ( h ) => h.includes( 'DPT-004' ) && h.includes( 'HTTP 400' ) ) ).toBe( true )
+        expect( result.pretest.results.some( ( r ) => r.httpStatus === 400 ) ).toBe( true )
+    } )
+} )
+
+
 describe( 'gradingDeterministic — det alias parity (dispatch level)', () => {
     afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
 
