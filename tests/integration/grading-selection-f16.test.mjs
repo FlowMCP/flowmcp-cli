@@ -7,10 +7,11 @@ import { tmpdir } from 'node:os'
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 
 
-// Selection-flow F16 dependency resolver (case a: missing member -> auto-chain
-// import from --member-source; report-only without it). Uses the real grading
-// module; import is structural (no HTTP) and the Pre-Condition gate blocks before
-// Stage 1, so no live API call is made.
+// Selection-flow F16 dependency resolver, PRD-004 (B3): a missing member is
+// resolved LIVE — from the explicit --member-source override when given, else from
+// schemaFolders[]. There is no gradingImport anymore; the member's island skeleton
+// folder is materialised and the selection index rebuilt. Uses the real grading
+// module; the Pre-Condition gate blocks before Stage 1, so no live API call is made.
 
 let root = null
 let cwd = null
@@ -73,18 +74,18 @@ describe( 'grading run <selection> — F16 case (a) member auto-chain', () => {
         expect( result.error ).toContain( 'PRE-004' )
     } )
 
-    it( 'reports the missing member (no silent import) when --member-source is absent', async () => {
+    it( 'hard-errors (coded, no silent skip) when the member is in neither --member-source nor schemaFolders[]', async () => {
+        // No --member-source and demo.thing is not registered in this test home's
+        // schemaFolders[] -> the live resolver surfaces a coded error (SRC-001/002),
+        // never a silent report-and-pass.
         const { result } = await FlowMcpCli.gradingRun( {
             cwd, gradingDataDir: '.flowmcp/grading', target: 'cryptotest', phase: null, emitPrompts: true,
             consumeScores: null, onConflict: null, memberSource: null, json: true
         } )
 
-        const chain = result.dependencyChain || []
-        const report = chain.find( ( s ) => s.step === 'member-report' )
-        expect( report ).toBeDefined()
-        expect( report.missingMembers ).toContain( 'demo.thing' )
-        // No source -> the member was NOT imported.
-        expect( existsSync( join( root, '.flowmcp', 'grading','providers', 'demo' ) ) ).toBe( false )
         expect( result.status ).toBe( false )
+        expect( result.error ).toMatch( /SRC-00[12]|not found in (any )?schemaFolders/ )
+        // No source resolved -> the member was NOT materialised.
+        expect( existsSync( join( root, '.flowmcp', 'grading','providers', 'demo' ) ) ).toBe( false )
     } )
 } )

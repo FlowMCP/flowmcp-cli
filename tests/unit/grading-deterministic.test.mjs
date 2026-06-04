@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from '@jest/globals'
+import { describe, it, expect, afterEach, beforeAll } from '@jest/globals'
 import { mkdtemp } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -7,15 +7,25 @@ import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import * as realGrading from 'flowmcp-grading'
+import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
 
 const here = dirname( fileURLToPath( import.meta.url ) )
 const providerFixture = join( here, '..', 'integration', 'fixtures', 'grading-provider' )
 
 
+// Memo 102 Phase 2 / PRD-003 (B2): grading deterministic reads the schema LIVE
+// from schemaFolders[]. Register the provider fixture so #resolveSchemasForTarget
+// finds the `demoapi` namespace.
+beforeAll( async () => {
+    await seedGradingSchemaFolder( { providerFixture, namespace: 'demoapi' } )
+} )
+
+
 // Wrap the real grading module but stub DataPretest.run so the deterministic
-// single-mode never makes a live API call. RebuildIndex/GradingImport stay real
-// so the import-snapshot resolver (#resolveLatestSchemaSnapshot) works.
+// single-mode never makes a live API call. The schema source comes LIVE from
+// schemaFolders[] (PRD-003 B2); RebuildIndex/GradingImport stay real so the
+// island OUTPUT store still builds.
 function gradingWithStubbedPretest( { ok = true, results = null } = {} ) {
     let lastCall = null
     const defaultResults = ok
@@ -56,11 +66,13 @@ async function freshCwd() {
 }
 
 
+// Memo 102 Phase 2 / PRD-006: the `grading import` step is gone. The schema is
+// read live from schemaFolders[] (seeded in beforeAll); this helper now only
+// injects the stubbed grading module. The island is built on first run.
 async function importFixture( { cwd, grading } ) {
     FlowMcpCli.__testInjectGrading( { grading } )
-    const { result } = await FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
 
-    return result
+    return { status: true }
 }
 
 
@@ -91,14 +103,15 @@ describe( 'gradingDeterministic — module + input guards', () => {
         expect( result.error ).toContain( 'not supported' )
     } )
 
-    it( 'reports a namespace that is not in the island', async () => {
+    it( 'reports a namespace that is not in any schemaFolders[] source (SRC-001)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'ghost/ghost', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: false } )
 
         expect( result.status ).toBe( false )
-        expect( result.error ).toContain( 'not found under' )
-        expect( result.fix ).toContain( 'grading import' )
+        expect( result.error ).toContain( 'SRC-001' )
+        expect( result.error ).toContain( 'not found in any schemaFolders[]' )
+        expect( result.fix ).toContain( 'schemaFolders[]' )
     } )
 } )
 
@@ -136,7 +149,7 @@ describe( 'gradingDeterministic — schema-ID flow (validate + pretest, no emit)
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/does-not-exist', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
 
         expect( result.status ).toBe( false )
-        expect( result.error ).toContain( 'not found in the island' )
+        expect( result.error ).toContain( 'not found in schemaFolders[]' )
     } )
 } )
 
@@ -172,7 +185,7 @@ describe( 'gradingDeterministic — tool-ID flow (restricted to one tool)', () =
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/tool/ghostTool', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
 
         expect( result.status ).toBe( false )
-        expect( result.error ).toContain( 'not found in any island schema' )
+        expect( result.error ).toContain( 'not found in any schema' )
     } )
 } )
 

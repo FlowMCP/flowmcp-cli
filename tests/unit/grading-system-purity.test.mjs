@@ -25,7 +25,7 @@
  * folder; the cli path-guard hard-blocks the real ~/.flowmcp.
  */
 
-import { describe, it, expect, afterEach } from '@jest/globals'
+import { describe, it, expect, afterEach, beforeAll } from '@jest/globals'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -34,11 +34,20 @@ import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 import * as realGrading from 'flowmcp-grading'
+import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
 
 const here = dirname( fileURLToPath( import.meta.url ) )
 const providerFixture = join( here, '..', 'integration', 'fixtures', 'grading-provider' )
 const kanbanSkillPath = join( here, '..', '..', '..', '..', '.claude', 'skills', 'kanban-readonly', 'SKILL.md' )
+
+
+// Memo 102 Phase 2 / PRD-003 (B2): emit-prompts reads the schema LIVE from
+// schemaFolders[]. Register the provider fixture so #resolveSchemasForTarget
+// finds the `demoapi` namespace.
+beforeAll( async () => {
+    await seedGradingSchemaFolder( { providerFixture, namespace: 'demoapi' } )
+} )
 
 
 // Wrap the real grading module but stub DataPretest.run so emit-prompts never
@@ -68,8 +77,11 @@ async function freshCwd() {
 }
 
 
+// Memo 102 Phase 2 / PRD-006: the `grading import` step is gone. The schema is
+// read live from schemaFolders[] (seeded in beforeAll) and the island is built on
+// first run, so this seed is a no-op kept only for call-site readability.
 async function importFixture( { cwd } ) {
-    return FlowMcpCli.gradingImport( { cwd, gradingDataDir: '.flowmcp/grading', path: providerFixture, onConflict: null, json: false } )
+    return { status: true }
 }
 
 

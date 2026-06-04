@@ -26,7 +26,9 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
 
         expect( parsed[ 'status' ] ).toBe( false )
         expect( parsed[ 'error' ] ).toBe( 'Missing or unknown grading sub-command.' )
-        expect( parsed[ 'fix' ] ).toContain( 'import' )
+        // PRD-006: `import` is no longer a grading sub-command.
+        expect( parsed[ 'fix' ] ).not.toContain( 'import' )
+        expect( parsed[ 'fix' ] ).toContain( 'deterministic' )
         expect( parsed[ 'fix' ] ).toContain( 'export' )
         expect( parsed[ 'fix' ] ).toContain( 'run' )
         expect( parsed[ 'fix' ] ).toContain( 'state' )
@@ -40,13 +42,23 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
         expect( parsed[ 'error' ] ).toBe( 'Missing or unknown grading sub-command.' )
     } )
 
+    it( 'PRD-006: `grading import` is now an unknown sub-command (removed)', async () => {
+        const { stdout } = await runCli( { 'args': [ 'grading', 'import', 'some/path' ] } )
+        const parsed = JSON.parse( stdout )
+
+        expect( parsed[ 'status' ] ).toBe( false )
+        expect( parsed[ 'error' ] ).toBe( 'Missing or unknown grading sub-command.' )
+        expect( parsed[ 'fix' ] ).not.toContain( 'import' )
+    } )
+
     it( 'reuses the same block via the dev-prefix-strip (flowmcp dev grading)', async () => {
         const { stdout } = await runCli( { 'args': [ 'dev', 'grading' ] } )
         const parsed = JSON.parse( stdout )
 
         expect( parsed[ 'status' ] ).toBe( false )
         expect( parsed[ 'error' ] ).toBe( 'Missing or unknown grading sub-command.' )
-        expect( parsed[ 'fix' ] ).toContain( 'import' )
+        // PRD-006: `import` removed; the allowlist now leads with `deterministic`.
+        expect( parsed[ 'fix' ] ).toContain( 'deterministic' )
     } )
 
     it( 'does not fall through to the unknown-command fallback for grading', async () => {
@@ -105,21 +117,9 @@ describe( 'grading methods — module guard + input validation', () => {
         FlowMcpCli.__testInjectGrading( { 'grading': null } )
     } )
 
-    it( 'gradingImport aborts when the grading module is unavailable', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'NotGradingImport': {} } } )
-        const { result } = await FlowMcpCli.gradingImport( { 'cwd': '/tmp', 'path': 'x', 'onConflict': null, 'json': false } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBe( 'grading module unavailable' )
-    } )
-
-    it( 'gradingImport reports a missing provider path', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingImport': { 'run': async () => ( {} ) } } } )
-        const { result } = await FlowMcpCli.gradingImport( { 'cwd': '/tmp', 'path': '', 'onConflict': null, 'json': false } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'Missing provider path' )
-    } )
+    // PRD-006: the gradingImport method was removed (no `grading import` command);
+    // its module-guard / input-validation tests are dropped here. The GradingImport
+    // machinery is covered by flowmcp-grading's own tests.
 
     it( 'gradingExport reports a missing target', async () => {
         FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingExport': { 'run': async () => ( {} ) } } } )

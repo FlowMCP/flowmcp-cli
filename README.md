@@ -108,8 +108,7 @@ workbench island. They are reachable both as `flowmcp grading ...` and
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp grading import <provider-path>` | Import a provider folder into the island (Stage 0) |
-| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff) |
+| `flowmcp grading run <ns\|selection> --emit-prompts` | Stage 1: deterministic pretest + emit grading prompts (handoff). The schema is read live from `schemaFolders[]`; the island is built on first run — no separate import step |
 | `flowmcp grading run <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
 | `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
 | `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
@@ -140,13 +139,15 @@ A relative value is resolved against `~/.flowmcp`; an absolute value is used as-
 
 #### Stage model
 
-Grading runs in four stages. The CLI owns Stages 0, 1 and 3; the **harness**
-(your Claude Code agent loop) owns Stage 2.
+Grading runs in three stages. The CLI owns Stages 1 and 3; the **harness**
+(your Claude Code agent loop) owns Stage 2. The schema source is read live from
+`schemaFolders[]` on every run — there is no separate intake/import step, and the
+island (`index.json`/`prompts.json`/`state.json`/grade snapshots) is built on the
+first run.
 
 | Stage | Owner | What happens |
 |-------|-------|--------------|
-| 0 — Intake | CLI | `grading import` validates the provider schemas, snapshots them into the island and normalizes resources/skills |
-| 1 — Deterministic | CLI | `grading run --emit-prompts` runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
+| 1 — Deterministic | CLI | `grading run --emit-prompts` reads the schema live from `schemaFolders[]`, builds the island on first run, runs the deterministic pretest (live HTTP checks — the request is never persisted) and the deterministic graders, then emits `prompts.json` + `state.json` for the handoff |
 | 2 — Non-deterministic | Harness | The agent loop reads `prompts.json`/`state.json` and grades each area (`start-grade → evaluate → apply-improvement`) — this is the only stage outside the CLI |
 | 3 — Finalize | CLI | `grading run --consume-scores <path>` reads the harness scores, computes grades, rebuilds `index.json` (5-status rollup) and finalizes the state for `export` |
 

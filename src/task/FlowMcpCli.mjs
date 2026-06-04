@@ -7845,8 +7845,7 @@ Selection Management (v4):
 Grading (v2 — experimental; CLI surface may change):
   grading deterministic <id>                 Structural validate + deterministic data pretest, no scoring (alias: "det"). <id> = <namespace>/<schema> or <namespace>/tool/<name>
     --only=<csv>                             Restrict to v4 primitives. Allowed: tools | resources | skills | prompts | selections
-  grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
-  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent
+  grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent (schema read live from schemaFolders[]; the island is built on first run — no separate import step)
   grading run <ns|selection> --consume-scores <path>
                                              Stage 3: consume ONE scores payload back; verifies the Task-ID + area-set + per-area question-count (partial-set supported), rebuilds the index, finalizes
     --phase <area[,area...]>                 Restrict grading to an area set: no flag = all applicable areas; one area = single mode; comma-set = subset mode (named-but-not-emittable areas are reported, never silently dropped)
@@ -11830,27 +11829,6 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // Build the live validate gate the grading module calls per schema during
-    // import. Reuses the CLI's structural validator (v4-aware). Signature:
-    //   ( { schema, sourcePath } ) -> { valid, errors }
-    // If the v4 module is unavailable we return null so the caller passes
-    // `undefined` to GradingImport.run — the module then falls back to its own
-    // in-module structural gate (no silent skip, an explicit fallback).
-    static async #buildGradingValidateGate() {
-        const v4 = await FlowMcpCli.#loadV4Module()
-        if( !v4 || !v4[ 'MainValidator' ] ) { return { gate: null } }
-
-        const gate = ( { schema, sourcePath } ) => {
-            const file = sourcePath === undefined ? 'unknown' : basename( sourcePath )
-            const checked = FlowMcpCli.#validateSingleSchema( { 'main': schema, file, v4 } )
-
-            return { 'valid': checked.status === true, 'errors': checked.messages === undefined ? [] : checked.messages }
-        }
-
-        return { gate }
-    }
-
-
     // F29 flow detection — provider vs selection by which island tree holds the
     // target. Ambiguity (in both / in neither) is a hard error with a copyable
     // fix (an explicit path). No silent default.
@@ -11869,10 +11847,20 @@ allowlist, migrate-config, etc.).
         }
 
         if( inProvider === false && inSelection === false ) {
+            // PRD-004 (B3): a provider no longer needs a pre-existing island folder.
+            // If the target is a namespace registered in schemaFolders[], it is a
+            // fresh provider flow — the dependency resolver builds the island
+            // skeleton from the live read. No silent default: a target that is in
+            // NEITHER the island NOR schemaFolders[] is a hard abort.
+            const resolved = await FlowMcpCli.#resolveSchemasForTarget( { 'namespace': target } )
+            if( resolved.status === true ) {
+                return { 'status': true, 'flow': 'provider', 'tier': 'autonomous', 'maxGrade': 'B', 'targetDir': providerDir }
+            }
+
             return {
                 'status': false,
-                'error': `Target "${target}" found in neither providers/ nor selections/.`,
-                'fix': `Run "grading import <provider-path>" first, or pass an explicit path under ${gradingDataRoot}.`
+                'error': `Target "${target}" found in neither the grading island nor schemaFolders[].`,
+                'fix': `Register the provider in schemaFolders[] (a namespace under <path>/providers/), or author a selection under selections/${target}/.`
             }
         }
 
@@ -11886,7 +11874,8 @@ allowlist, migrate-config, etc.).
 
     // F16 Dependency-Resolver decision tree (implementation-plan N1, owned by
     // the CLI). Branches:
-    //   (a) data missing + source exists  -> auto-chain Bereich 1 (import), then back
+    //   (a) data missing + provider in schemaFolders[] -> build the island
+    //       index.json skeleton DIRECTLY from the live read (PRD-004 B3), no import
     //   (b) quality < stable              -> report only (no silent downgrade)
     //   (c) source missing                -> hard abort
     // Downgrade only happens on explicit opt-in (not implemented as silent path).
@@ -11896,24 +11885,51 @@ allowlist, migrate-config, etc.).
         const indexPath = join( targetDir, 'index.json' )
         const hasIndex = existsSync( indexPath )
 
-        // (c) source missing — for a provider the source is the providerPath the
-        // user wants imported; for a selection the source is the selection folder
-        // itself. A missing targetDir is a hard abort (caught by F29 already), so
-        // here we only need the missing-source-for-auto-chain branch.
+        // (c) source missing — for a provider the source is the live schemaFolders[]
+        // namespace; for a selection the source is the selection folder itself. A
+        // missing targetDir for a selection is a hard abort (caught by F29 already).
         if( hasIndex === false ) {
-            if( flow === 'provider' && providerPath !== null && existsSync( providerPath ) === true ) {
-                // (a) data missing + source exists -> auto-chain Bereich 1 (import).
-                chain.push( { 'step': 'auto-chain-import', 'reason': 'index.json missing, provider source present', providerPath } )
-                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': providerPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
-                if( imported.result.status !== true ) {
+            if( flow === 'provider' ) {
+                // (a) PRD-004 (B3): the island skeleton is built from the LIVE read
+                // (schemaFolders[]) + RebuildIndex.rebuildNamespaceIndex — never via
+                // an internal importer. The namespace folder is materialised (one
+                // folder per live schema) so the rebuild walks a real tree; no
+                // snapshot files are written (RebuildIndex resolves a null snapshot
+                // to `pending`).
+                const namespace = basename( targetDir )
+                const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+                if( resolvedSchemas.status === false ) {
+                    // NO SILENT DEFAULT: an unknown namespace stays a hard abort.
                     return {
                         'status': false,
                         chain,
-                        'error': `Auto-chain import failed for ${providerPath}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}`,
-                        'fix': 'Fix the provider schemas, then re-run grading.'
+                        'error': resolvedSchemas.error,
+                        'fix': resolvedSchemas.fix
                     }
                 }
-                chain.push( { 'step': 'auto-chain-import', 'status': 'done' } )
+
+                chain.push( { 'step': 'auto-build-namespace-index', 'reason': 'index.json missing, provider in schemaFolders[]', namespace } )
+                const grading = await FlowMcpCli.#loadGradingModule()
+                if( grading === null || grading[ 'RebuildIndex' ] === undefined ) {
+                    return { 'status': false, chain, 'error': 'grading module unavailable for namespace index build', 'fix': 'npm install / update the flowmcp-grading dependency' }
+                }
+
+                await mkdir( targetDir, { 'recursive': true } )
+                await resolvedSchemas.schemas
+                    .reduce( ( promise, s ) => promise.then( async () => {
+                        await mkdir( join( targetDir, s.schemaName ), { 'recursive': true } )
+                    } ), Promise.resolve() )
+
+                const built = await grading[ 'RebuildIndex' ].rebuildNamespaceIndex( { 'namespaceDir': targetDir } )
+                if( built.status !== true ) {
+                    return {
+                        'status': false,
+                        chain,
+                        'error': `Namespace index build failed: ${( built.errors || [] ).join( '; ' )}`,
+                        'fix': 'Resolve the namespace-index errors above and re-run grading.'
+                    }
+                }
+                chain.push( { 'step': 'auto-build-namespace-index', 'status': 'done' } )
                 return { 'status': true, chain }
             }
 
@@ -11939,12 +11955,14 @@ allowlist, migrate-config, etc.).
                 return { 'status': true, chain }
             }
 
-            // (c) source missing — hard abort.
+            // (c) source missing — hard abort. (Providers build their skeleton
+            // above from schemaFolders[]; this remains reachable only for a
+            // selection whose folder is absent — F29 already guards that case.)
             return {
                 'status': false,
                 chain,
-                'error': `No index.json at ${indexPath} and no importable source available.`,
-                'fix': 'Run "grading import <provider-path>" to build the island before grading.'
+                'error': `No index.json at ${indexPath} and no resolvable source available.`,
+                'fix': 'Author the selection folder (selections/<id>/selection/) or register the provider in schemaFolders[], then re-run grading.'
             }
         }
 
@@ -11961,11 +11979,18 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // F16 case (a) for selection members: a member referenced by the selection but
-    // not yet imported into the island is auto-chained — its namespace is imported
-    // from the explicit `memberSource` providers root, then the selection index is
-    // rebuilt so the member resolves. No hidden default: without `memberSource` the
-    // missing members are only reported (the Pre-Condition gate then blocks).
+    // F16 case (a) for selection members, PRD-004 (B3): a member referenced by the
+    // selection but not yet materialised in the island is resolved LIVE from
+    // schemaFolders[] (never imported). For each missing member the island skeleton
+    // folder providers/<ns>/<schema>/ is created from the live read, then the
+    // selection index is rebuilt so the member resolves. No snapshot files are
+    // written — RebuildIndex resolves the null snapshot to `pending`.
+    //
+    // `--member-source` (`memberSource`) is retained as an OPTIONAL override: when
+    // given it pins the providers-root the member namespaces are resolved from
+    // (a flat <root>/<ns>/<schema>.mjs tree) instead of schemaFolders[]. It is no
+    // longer required (the live read is the default), but kept — not silently
+    // dropped — so a caller can grade against an out-of-config source on purpose.
     static async #resolveMissingSelectionMembers( { cwd, grading, gradingDataRoot, targetDir, target, memberSource, chain } ) {
         const indexPath = join( targetDir, 'index.json' )
         const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
@@ -11976,93 +12001,72 @@ allowlist, migrate-config, etc.).
             .map( ( entry ) => entry[ 0 ] )
         if( missing.length === 0 ) { return { 'status': true } }
 
-        if( typeof memberSource !== 'string' || memberSource.length === 0 ) {
-            chain.push( { 'step': 'member-report', 'missingMembers': missing, 'note': 'members not imported; pass --member-source <providers-root> to auto-chain (no silent import)' } )
-            return { 'status': true }
-        }
+        const providersRoot = join( gradingDataRoot, 'providers' )
+        const hasOverride = typeof memberSource === 'string' && memberSource.length > 0
+        const overrideRoot = hasOverride === true ? resolve( cwd, memberSource ) : null
 
-        const sourceRoot = resolve( cwd, memberSource )
-        const namespaces = [ ...new Set( missing.map( ( schemaId ) => schemaId.split( '.' )[ 0 ] ) ) ]
-
-        const importErrors = []
-        await namespaces
-            .reduce( ( promise, namespace ) => promise.then( async () => {
-                const nsPath = join( sourceRoot, namespace )
-                if( existsSync( nsPath ) === false ) {
-                    importErrors.push( `F16 case (c): source for namespace '${namespace}' not found under ${sourceRoot}` )
+        const resolveErrors = []
+        await missing
+            .reduce( ( promise, schemaId ) => promise.then( async () => {
+                const parts = schemaId.split( '.' )
+                if( parts.length !== 2 ) {
+                    resolveErrors.push( `malformed selection member id "${schemaId}" (expected <namespace>.<schema>)` )
                     return
                 }
-                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'reason': 'referenced selection member not imported, source present' } )
-                const imported = await FlowMcpCli.gradingImport( { 'cwd': dirname( gradingDataRoot ), 'path': nsPath, 'onConflict': null, 'gradingDataDir': basename( gradingDataRoot ), 'json': true } )
-                if( imported.result.status !== true ) {
-                    importErrors.push( `member auto-chain import failed for ${namespace}: ${( imported.result.errors || [ imported.result.error ] ).join( '; ' )}` )
-                    return
+                const memberNamespace = parts[ 0 ]
+                const memberSchema = parts[ 1 ]
+
+                // Resolve the member's live source path. Override (flat
+                // <root>/<ns>/<schema>.mjs) or schemaFolders[] live read.
+                let sourcePath = null
+                if( hasOverride === true ) {
+                    const candidate = join( overrideRoot, memberNamespace, `${memberSchema}.mjs` )
+                    if( existsSync( candidate ) === false ) {
+                        resolveErrors.push( `member "${schemaId}" not found under --member-source ${overrideRoot}` )
+                        return
+                    }
+                    sourcePath = candidate
+                } else {
+                    const resolved = await FlowMcpCli.#resolveSchemasForTarget( { 'namespace': memberNamespace } )
+                    if( resolved.status === false ) {
+                        resolveErrors.push( resolved.error )
+                        return
+                    }
+                    const hit = resolved.schemas
+                        .find( ( s ) => s.schemaName === memberSchema )
+                    if( hit === undefined ) {
+                        resolveErrors.push( `SRC-002: selection member "${schemaId}" not found in schemaFolders[] (namespace "${memberNamespace}" has: ${resolved.schemas.map( ( s ) => s.schemaName ).join( ', ' ) || 'none'})` )
+                        return
+                    }
+                    sourcePath = hit.sourcePath
                 }
-                chain.push( { 'step': 'member-auto-chain', 'namespace': namespace, 'status': 'done' } )
+
+                // Materialise the island skeleton folder so rebuildSelectionIndex
+                // resolves the member. No snapshot file is written (B2 live read).
+                chain.push( { 'step': 'member-auto-chain', 'schemaId': schemaId, 'reason': 'referenced selection member not materialised, live source present', sourcePath } )
+                await mkdir( join( providersRoot, memberNamespace, memberSchema ), { 'recursive': true } )
+                chain.push( { 'step': 'member-auto-chain', 'schemaId': schemaId, 'status': 'done' } )
             } ), Promise.resolve() )
 
-        if( importErrors.length > 0 ) {
-            return { 'status': false, 'error': importErrors.join( '; ' ), 'fix': 'Provide a --member-source root containing the missing member namespaces, or import them manually.' }
+        if( resolveErrors.length > 0 ) {
+            return { 'status': false, 'error': resolveErrors.join( '; ' ), 'fix': 'Register the missing member provider(s) in schemaFolders[], pass --member-source <providers-root>, or fix the selection member ids.' }
         }
 
-        // Rebuild the selection index so the freshly-imported members resolve.
-        const rebuilt = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': join( gradingDataRoot, 'providers' ) } )
+        // Rebuild the selection index so the freshly-materialised members resolve.
+        const rebuilt = await grading[ 'RebuildIndex' ].rebuildSelectionIndex( { 'selectionDir': targetDir, 'providersRoot': providersRoot } )
         if( rebuilt.status !== true ) {
-            return { 'status': false, 'error': `Selection index rebuild after member auto-chain failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Inspect the imported members and re-run.' }
+            return { 'status': false, 'error': `Selection index rebuild after member resolution failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Inspect the resolved members and re-run.' }
         }
         return { 'status': true }
     }
 
 
-    static async gradingImport( { cwd, path, onConflict, gradingDataDir, json } ) {
-        const grading = await FlowMcpCli.#loadGradingModule()
-        if( grading === null || grading[ 'GradingImport' ] === undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
-        }
-
-        if( typeof path !== 'string' || path.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing provider path.', 'fix': 'Usage: flowmcp grading import <provider-path>' } ) }
-        }
-
-        const providerPath = resolve( cwd, path )
-        if( existsSync( providerPath ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Provider path not found: ${providerPath}`, 'fix': 'Pass an existing provider folder containing schema .mjs files.' } ) }
-        }
-
-        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const { gate } = await FlowMcpCli.#buildGradingValidateGate()
-
-        const run = await grading[ 'GradingImport' ].run( {
-            providerPath,
-            gradingDataRoot,
-            'validateGate': gate === null ? undefined : gate
-        } )
-
-        if( run.status !== true ) {
-            return {
-                'result': {
-                    'status': false,
-                    'error': `Import failed: ${( run.errors || [] ).join( '; ' )}`,
-                    'fix': 'Fix the schema(s) reported above and re-run grading import.',
-                    'namespace': run.namespace,
-                    'errors': run.errors || []
-                }
-            }
-        }
-
-        return {
-            'result': {
-                'status': true,
-                'stage': 0,
-                'namespace': run.namespace,
-                'imported': run.imported,
-                'skipped': run.skipped,
-                'normalizedSkills': run.normalizedSkills,
-                'indexPath': run.indexPath,
-                'gateUsed': gate === null ? 'structural' : 'live-validate'
-            }
-        }
-    }
+    // Memo 102 Phase 2 / PRD-006 — the grading-intake sub-command and its
+    // FlowMcpCli intake method were removed: the grading run reads the schema live
+    // from schemaFolders[] (B2) and builds the island skeleton from that live read
+    // (B3), so no internal importer remains. The GradingImport class in
+    // flowmcp-grading is KEPT (still exported + consumed by that module's own
+    // tests) — see PRD-006 keep-decision.
 
 
     static async gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } ) {
@@ -12085,10 +12089,15 @@ allowlist, migrate-config, etc.).
         const stamp = new Date().toISOString().replace( /[:.]/g, '-' )
         const exportDir = join( exportRoot, `${target.replace( /\//g, '_' )}--${stamp}` )
 
+        // Memo 102 Phase 2 (B2/B3): the island no longer holds schema snapshot
+        // files — the schema source is live in schemaFolders[]. The export therefore
+        // ships the grade index (the proof) only; stripped schema copies are not
+        // pulled from the island anymore (includeSchemas=false). The schemas are
+        // referenced live, not duplicated into the export.
         const run = await grading[ 'GradingExport' ].run( {
             'target': detected.targetDir,
             exportDir,
-            'includeSchemas': true
+            'includeSchemas': false
         } )
 
         if( run.status !== true ) {
@@ -12265,45 +12274,38 @@ allowlist, migrate-config, etc.).
         const namespace = parsed.namespace
         const toolFilter = parsed.type === 'tool' ? parsed.name : null
 
-        // Resolve the island root and the namespace's provider folder. Selection
-        // flow is out of scope for the single-mode (PRD-001); deterministic single
-        // targets are addressed by namespace, which lives under providers/.
+        // PRD-003 (B2): the deterministic single-mode reads the schema LIVE from
+        // schemaFolders[], not from the island import snapshot. The island root is
+        // still the OUTPUT store (DataPretest.#persist writes the summary there).
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
-        const providerDir = join( gradingDataRoot, 'providers', namespace )
-        if( existsSync( providerDir ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Namespace "${namespace}" not found under ${join( gradingDataRoot, 'providers' )}.`, 'fix': `Run "${appConfig[ 'cliCommand' ]} grading import <provider-path>" first to populate the island.` } ) }
-        }
 
-        // Determine the addressed schema folder(s). A tool-ID needs a Tool->Schema
-        // lookup; a schema-ID names the folder directly. No silent first-wins: an
-        // ambiguous tool match is surfaced with a visible note.
-        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { 'targetDir': providerDir } )
-        const resolved = await FlowMcpCli.#resolveDeterministicSchema( { cwd, providerDir, schemaDirs, parsed, namespace, grading } )
+        // Resolve the schemas for this namespace live. A namespace absent from every
+        // schemaFolders[] source is a coded hard error (SRC-001) — never silent.
+        const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolvedSchemas.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+        }
+        const liveSchemas = resolvedSchemas.schemas
+
+        // Determine the addressed schema. A schema-ID names the folder directly; a
+        // tool-ID needs a Tool->Schema lookup. No silent first-wins: an ambiguous
+        // tool match is surfaced with a visible note.
+        const resolved = FlowMcpCli.#resolveDeterministicSchemaLive( { liveSchemas, parsed, namespace } )
         if( resolved.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
         }
         const schemaName = resolved.schemaName
+        const sourcePath = resolved.sourcePath
+        const main = resolved.main
+        const handlersFn = resolved.handlersFn
 
         // PA-5: key-injection opt-in (default OFF) — same gate as emit-prompts.
         const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-        // Resolve the schema source snapshot (B2: import-snapshot resolver). PRD-001
-        // explicitly MAY keep using this resolver — the live-read decoupling is
-        // Phase 2. A null snapshot is a HARD error (no silent default).
-        const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, 'targetDir': providerDir, schemaName } )
-        if( snapshot === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `No resolvable schema snapshot for "${namespace}/${schemaName}".`, 'fix': `Re-import the provider so a schema snapshot exists under ${join( providerDir, schemaName, 'schema' )}.` } ) }
-        }
-
-        const { main, handlersFn } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
-        if( !main ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Cannot load schema snapshot: ${snapshot.path}`, 'fix': 'The import snapshot is unreadable — re-import the provider.' } ) }
-        }
-
         // Step 1 — structural validation (Memo REV-08 Kap. 1: structural validate
         // FIRST, then the deterministic data-pretest = "the validation").
         const v4 = await FlowMcpCli.#loadV4Module()
-        const validate = FlowMcpCli.#validateSingleSchema( { main, 'file': basename( snapshot.path ), v4 } )
+        const validate = FlowMcpCli.#validateSingleSchema( { main, 'file': basename( sourcePath ), v4 } )
 
         // Step 2 — the deterministic data-pretest (status === true AND #hasData),
         // a strict superset of `dev test`. Same Phase-0/1 wiring as emit-prompts:
@@ -12313,14 +12315,14 @@ allowlist, migrate-config, etc.).
         const serverParams = useKeys === true
             ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
             : {}
-        const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': snapshot.path } )
+        const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': sourcePath } )
 
         const pretestRaw = await grading[ 'DataPretest' ].run( {
             namespace,
             'toolName': schemaName,
             main,
             handlersFn,
-            'schemaSnapshotPath': snapshot.path,
+            'schemaSnapshotPath': sourcePath,
             serverParams,
             sharedLists,
             'gradingDataDir': gradingDataRoot
@@ -12335,7 +12337,7 @@ allowlist, migrate-config, etc.).
         // prompt/selection-member from the structural #runTypedTests path.
         let primitives = null
         if( onlyFilter !== null ) {
-            const { view } = await FlowMcpCli.#deterministicPrimitiveView( { main, handlersFn, snapshot, serverParams, sharedLists, onlyFilter, toolFilter, pretest } )
+            const { view } = await FlowMcpCli.#deterministicPrimitiveView( { main, handlersFn, 'schemaSource': sourcePath, serverParams, sharedLists, onlyFilter, toolFilter, pretest } )
             primitives = view
         }
 
@@ -12363,42 +12365,42 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // PRD-001 — resolve the addressed schema folder. A schema-ID names the folder
-    // directly (must exist). A tool-ID needs a Tool->Schema lookup over the island
-    // snapshots; a tool present in several schema folders is reported (visible
-    // note), never silently first-won. No silent default.
-    static async #resolveDeterministicSchema( { cwd, providerDir, schemaDirs, parsed, namespace, grading } ) {
+    // PRD-001 + PRD-003 (B2) — resolve the addressed schema from the LIVE
+    // schemaFolders[] read (liveSchemas = { schemaName, main, handlersFn,
+    // sourcePath }[]). A schema-ID names the folder directly (must exist). A
+    // tool-ID needs a Tool->Schema lookup over the live main exports; a tool
+    // present in several schema files is reported (visible note), never silently
+    // first-won. No silent default.
+    static #resolveDeterministicSchemaLive( { liveSchemas, parsed, namespace } ) {
+        const schemaNames = liveSchemas.map( ( s ) => s.schemaName )
+
         if( parsed.type === 'schema' ) {
-            if( schemaDirs.includes( parsed.name ) === false ) {
-                return { 'status': false, 'error': `Schema "${namespace}/${parsed.name}" not found in the island (folders: ${schemaDirs.join( ', ' ) || 'none'}).`, 'fix': 'Re-import the provider, or address an existing schema folder.' }
+            const hit = liveSchemas
+                .find( ( s ) => s.schemaName === parsed.name )
+            if( hit === undefined ) {
+                return { 'status': false, 'error': `Schema "${namespace}/${parsed.name}" not found in schemaFolders[] (schemas: ${schemaNames.join( ', ' ) || 'none'}).`, 'fix': 'Register the provider in schemaFolders[], or address an existing schema.' }
             }
 
-            return { 'status': true, 'schemaName': parsed.name, 'note': null }
+            return { 'status': true, 'schemaName': hit.schemaName, 'sourcePath': hit.sourcePath, 'main': hit.main, 'handlersFn': hit.handlersFn, 'note': null }
         }
 
-        // Tool-ID — find which schema folder declares this tool by loading each
-        // snapshot's main and scanning its tools/routes.
-        const matches = await schemaDirs
-            .reduce( ( promise, schemaName ) => promise.then( async ( acc ) => {
-                const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, 'targetDir': providerDir, schemaName } )
-                if( snapshot === null ) { return acc }
-                const { main } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
-                if( !main ) { return acc }
-                const tools = main[ 'tools' ] || main[ 'routes' ] || {}
-                if( Object.keys( tools ).includes( parsed.name ) === true ) { acc.push( schemaName ) }
-
-                return acc
-            } ), Promise.resolve( [] ) )
+        // Tool-ID — find which live schema declares this tool by scanning its
+        // tools/routes.
+        const matches = liveSchemas
+            .filter( ( s ) => {
+                const tools = s.main[ 'tools' ] || s.main[ 'routes' ] || {}
+                return Object.keys( tools ).includes( parsed.name ) === true
+            } )
 
         if( matches.length === 0 ) {
-            return { 'status': false, 'error': `Tool "${namespace}/tool/${parsed.name}" not found in any island schema (folders: ${schemaDirs.join( ', ' ) || 'none'}).`, 'fix': 'Re-import the provider, or address an existing tool.' }
+            return { 'status': false, 'error': `Tool "${namespace}/tool/${parsed.name}" not found in any schema (schemas: ${schemaNames.join( ', ' ) || 'none'}).`, 'fix': 'Register the provider in schemaFolders[], or address an existing tool.' }
         }
 
         const note = matches.length > 1
-            ? `Tool "${parsed.name}" found in ${matches.length} schemas (${matches.join( ', ' )}); using "${matches[ 0 ]}" (first match — multi-folder collision handling is Phase 3).`
+            ? `Tool "${parsed.name}" found in ${matches.length} schemas (${matches.map( ( m ) => m.schemaName ).join( ', ' )}); using "${matches[ 0 ].schemaName}" (first match — multi-folder collision handling is Phase 3).`
             : null
 
-        return { 'status': true, 'schemaName': matches[ 0 ], note }
+        return { 'status': true, 'schemaName': matches[ 0 ].schemaName, 'sourcePath': matches[ 0 ].sourcePath, 'main': matches[ 0 ].main, 'handlersFn': matches[ 0 ].handlersFn, note }
     }
 
 
@@ -12462,14 +12464,14 @@ allowlist, migrate-config, etc.).
     // are sourced from the DataPretest results (PRD-001); skill/prompt/
     // selection-member from the structural #runTypedTests path. Aggregated per
     // primitive via #aggregateByPrimitive (the exact shape `dev test` produced).
-    static async #deterministicPrimitiveView( { main, handlersFn, snapshot, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
-        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': snapshot.path } )
+    static async #deterministicPrimitiveView( { main, handlersFn, schemaSource, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
+        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaSource } )
 
         let typedResults = []
         try {
             const typedRun = await FlowMcpCli.#runTypedTests( {
                 main,
-                'schemaSource': snapshot.path,
+                schemaSource,
                 handlerMap,
                 'resourceHandlerMap': resourceHandlerMap || {},
                 serverParams,
@@ -12615,23 +12617,42 @@ allowlist, migrate-config, etc.).
         // loadSchema -> resolveSharedLists -> DataPretest.run directly. The CLI is
         // the only component with .env access; serverParams are flat { KEY:value }.
         const pretests = []
-        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { targetDir } )
+
+        // PRD-003 (B2): the schemas to grade come LIVE from schemaFolders[], not
+        // from the island import snapshot. For a provider the live read is keyed by
+        // namespace; for a selection each member (<ns>.<schema>) is resolved live
+        // from its declaring provider in schemaFolders[].
+        let liveSchemas = null
+        let schemaDirs = null
+        if( flow === 'provider' ) {
+            const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+            if( resolvedSchemas.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+            }
+            liveSchemas = resolvedSchemas.schemas
+        } else {
+            // Selection flow: the schemas to pretest are the selection members. They
+            // too are resolved LIVE from schemaFolders[] (PRD-003) via their
+            // <namespace>.<schemaName> member IDs — never from the island snapshot.
+            const resolvedMembers = await FlowMcpCli.#resolveSelectionSchemasLive( { targetDir } )
+            if( resolvedMembers.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': resolvedMembers.error, 'fix': resolvedMembers.fix } ) }
+            }
+            liveSchemas = resolvedMembers.schemas
+        }
+        schemaDirs = liveSchemas.map( ( s ) => s.schemaName )
 
         // PRD-006: the deterministic pretest runs for EVERY schema regardless of
         // the area selector — the per-schema/per-namespace requiredLevel is derived
         // from these results to gate the namespace areas. The selector filters the
         // emitted AREA prompts later, not the pretest pass.
-        await schemaDirs
-            .reduce( ( promise, schemaName ) => promise.then( async () => {
-                const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, targetDir, schemaName } )
-                if( snapshot === null ) {
-                    pretests.push( { schemaName, 'ok': false, 'errors': [ `no resolvable schema snapshot for ${schemaName}` ] } )
-                    return
-                }
+        const pretestUnits = liveSchemas
 
-                const { main, handlersFn } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
-                if( !main ) {
-                    pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema snapshot: ${snapshot.path}` ] } )
+        await pretestUnits
+            .reduce( ( promise, unit ) => promise.then( async () => {
+                const { schemaName, main, handlersFn, sourcePath } = unit
+                if( main === null || main === undefined ) {
+                    pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema source for ${schemaName}` ] } )
                     return
                 }
 
@@ -12644,14 +12665,14 @@ allowlist, migrate-config, etc.).
                 const serverParams = useKeys === true
                     ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
                     : {}
-                const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': snapshot.path } )
+                const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': sourcePath } )
 
                 const pretest = await grading[ 'DataPretest' ].run( {
                     namespace,
                     'toolName': schemaName,
                     main,
                     handlersFn,
-                    'schemaSnapshotPath': snapshot.path,
+                    'schemaSnapshotPath': sourcePath,
                     serverParams,
                     sharedLists,
                     'gradingDataDir': gradingDataRoot
@@ -13194,14 +13215,116 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // Resolve the newest schema snapshot for one island schema folder. The B2
-    // grammar puts the snapshot under <schemaName>/schema/<name>--<ts>--<hash>.mjs.
-    static async #resolveLatestSchemaSnapshot( { grading, targetDir, schemaName } ) {
-        const snapshotDir = join( targetDir, schemaName, 'schema' )
-        const resolved = await grading[ 'RebuildIndex' ].resolveLatest( { 'dir': snapshotDir, 'logicalName': schemaName } )
-        if( resolved.status !== true ) { return null }
+    // Memo 102 Phase 2 / PRD-003 (B2) — resolve the schemas to be graded for a
+    // provider namespace LIVE from schemaFolders[], NOT from the island import
+    // snapshot. Returns { schemaName, main, handlersFn, sourcePath }[]: the island
+    // folder name (schemaName = source file basename, matching GradingImport's
+    // schemaSlug) plus the live source path so DataPretest resolves _lists/_shared
+    // and requiredLibraries from the real provider folder.
+    //
+    // NO SILENT DEFAULT: a namespace that is present in NO schemaFolders[] source
+    // is a coded hard error (SRC-001) — never an empty list that reads as
+    // "0 schemas = ok".
+    static async #resolveSchemasForTarget( { namespace } ) {
+        const { sources } = await FlowMcpCli.#listSources()
+        const matched = []
+        const loadErrors = []
 
-        return { 'path': resolved.path, 'file': resolved.file }
+        await sources
+            .reduce( ( promise, source ) => promise.then( async () => {
+                await source[ 'schemas' ]
+                    .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
+                        const { file } = schemaInfo
+                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${file}` } )
+                        const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                        if( main === null || main === undefined ) {
+                            // A load failure is only relevant if the file might belong to
+                            // the target namespace; we cannot know without main.namespace,
+                            // so record it for diagnostics without aborting the scan.
+                            loadErrors.push( `${source[ 'name' ]}/${file}: ${error}` )
+                            return
+                        }
+                        if( main[ 'namespace' ] !== namespace ) { return }
+
+                        const schemaName = basename( file, '.mjs' )
+                        matched.push( { schemaName, main, handlersFn, 'sourcePath': filePath } )
+                    } ), Promise.resolve() )
+            } ), Promise.resolve() )
+
+        if( matched.length === 0 ) {
+            const detail = loadErrors.length > 0 ? ` (load failures during scan: ${loadErrors.join( '; ' )})` : ''
+            return {
+                'status': false,
+                'schemas': [],
+                'error': `SRC-001: namespace "${namespace}" not found in any schemaFolders[] source.${detail}`,
+                'fix': `Register the provider folder via "${appConfig[ 'cliCommand' ]} init" / schemaFolders[], or address an existing namespace.`
+            }
+        }
+
+        const sorted = matched
+            .sort( ( a, b ) => a.schemaName.localeCompare( b.schemaName ) )
+
+        return { 'status': true, 'schemas': sorted, 'error': null }
+    }
+
+
+    // PRD-003 (B2) — resolve the schemas to pretest for a SELECTION run LIVE from
+    // schemaFolders[]. The selection's island index.json lists its members as
+    // <namespace>.<schemaName> IDs; each is resolved against the live provider
+    // read (never the import snapshot). A member whose namespace is absent from
+    // schemaFolders[] surfaces the SRC-001 coded error from #resolveSchemasForTarget;
+    // a member whose schema file is missing within an existing namespace is a coded
+    // SRC-002 error — never a silent skip.
+    static async #resolveSelectionSchemasLive( { targetDir } ) {
+        const indexPath = join( targetDir, 'index.json' )
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        if( index === null || index[ 'members' ] === undefined || index[ 'members' ] === null ) {
+            return { 'status': true, 'schemas': [], 'error': null }
+        }
+
+        const schemaIds = Object.keys( index[ 'members' ] )
+        const byNamespace = {}
+        const resolvedMembers = []
+
+        const errors = []
+        await schemaIds
+            .reduce( ( promise, schemaId ) => promise.then( async () => {
+                const parts = schemaId.split( '.' )
+                if( parts.length !== 2 ) {
+                    errors.push( `SRC-002: malformed selection member id "${schemaId}" (expected <namespace>.<schema>).` )
+                    return
+                }
+                const memberNamespace = parts[ 0 ]
+                const memberSchema = parts[ 1 ]
+
+                if( byNamespace[ memberNamespace ] === undefined ) {
+                    const resolved = await FlowMcpCli.#resolveSchemasForTarget( { 'namespace': memberNamespace } )
+                    byNamespace[ memberNamespace ] = resolved
+                }
+                const nsResult = byNamespace[ memberNamespace ]
+                if( nsResult.status === false ) {
+                    errors.push( nsResult.error )
+                    return
+                }
+
+                const hit = nsResult.schemas
+                    .find( ( s ) => s.schemaName === memberSchema )
+                if( hit === undefined ) {
+                    errors.push( `SRC-002: selection member "${schemaId}" not found in schemaFolders[] (namespace "${memberNamespace}" has: ${nsResult.schemas.map( ( s ) => s.schemaName ).join( ', ' ) || 'none'}).` )
+                    return
+                }
+                resolvedMembers.push( hit )
+            } ), Promise.resolve() )
+
+        if( errors.length > 0 ) {
+            return { 'status': false, 'schemas': [], 'error': errors.join( '; ' ), 'fix': 'Register the missing member provider(s) in schemaFolders[], or fix the selection member ids.' }
+        }
+
+        const sorted = resolvedMembers
+            .sort( ( a, b ) => a.schemaName.localeCompare( b.schemaName ) )
+
+        return { 'status': true, 'schemas': sorted, 'error': null }
     }
 
 

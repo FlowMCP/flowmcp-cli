@@ -421,13 +421,15 @@ const runCommand = async () => {
         // allowlist check (no silent default: an unknown sub-command still errors).
         const rawSubCommand = positionals[ 1 ]
         const subCommand = rawSubCommand === 'det' ? 'deterministic' : rawSubCommand
-        const validSubCommands = [ 'deterministic', 'import', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        // Memo 102 Phase 2 / PRD-006 — `import` removed: the grading run reads the
+        // schema live from schemaFolders[] (no internal importer left).
+        const validSubCommands = [ 'deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -449,13 +451,6 @@ const runCommand = async () => {
 
         if( subCommand === 'deterministic' ) {
             const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, json } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'import' ) {
-            const { result } = await FlowMcpCli.gradingImport( { cwd, 'path': target, onConflict, gradingDataDir, json } )
             output( { result } )
 
             return true
