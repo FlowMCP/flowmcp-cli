@@ -2,6 +2,23 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.3.0 — 2026-06-04 (Memo 102 / Memo 105)
+
+### Changed
+
+- Version aligned to the Schemas-Spec `4.3` line for traceability — the single-path grading consolidation (Memo 102) merged after the `v4.2.0` tag without a version bump.
+- `flowmcp-grading` dependency pin moved to `v2.2.0`.
+
+### Added
+
+- `flowmcp grading deterministic <id>` — structural validate + live data pretest (HTTP 200 **and** non-empty); schema read live from `schemaFolders[]`.
+- `flowmcp grading non-deterministic <ns|selection>` — LLM scoring via `--emit-prompts` / `--consume-scores`.
+- `--no-save` dry-run for grading.
+
+### Removed
+
+- `flowmcp dev test` single-path command (replaced by `grading deterministic`).
+
 ## 4.2.0 — 2026-05-31 (Memo 086)
 
 ### Changed

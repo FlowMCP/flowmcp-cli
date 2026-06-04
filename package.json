@@ -1,6 +1,6 @@
 {
     "name": "flowmcp-cli",
-    "version": "4.2.0",
+    "version": "4.3.0",
     "description": "CLI for developing and validating FlowMCP schemas",
     "type": "module",
     "license": "MIT",
