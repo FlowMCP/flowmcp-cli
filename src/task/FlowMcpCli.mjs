@@ -10882,9 +10882,25 @@ allowlist, migrate-config, etc.).
             return { 'valid': true, source, namespace, type, name }
         }
 
+        // Per-test selector: "<namespace>/tool/<name>/tests/<N>" (4 slashes). The finest
+        // addressing granularity — one recorded test of a tool. <N> is the 1-based test
+        // index matching test-<N>.json. No silent default: a malformed sub-path or a
+        // non-positive-integer index is a hard error, never widened to the parent tool.
+        if( slashCount === 4 ) {
+            const [ namespace, kind, name, sub, indexRaw ] = parts
+            if( kind !== 'tool' || sub !== 'tests' ) {
+                return { 'valid': false, 'error': `Invalid per-test Spec-ID "${specId}": expected "<namespace>/tool/<name>/tests/<N>".` }
+            }
+            if( /^[1-9][0-9]*$/.test( indexRaw ) === false ) {
+                return { 'valid': false, 'error': `Invalid test index "${indexRaw}" in "${specId}": expected a positive 1-based integer.` }
+            }
+
+            return { 'valid': true, source, namespace, 'type': 'test', name, 'testIndex': Number( indexRaw ) }
+        }
+
         return {
             'valid': false,
-            'error': `Invalid Spec-ID format: "${specId}". Valid forms: "<namespace>" (whole provider), "<namespace>/<schema-name>" (1 slash = schema), "<namespace>/tool/<name>" (2 slashes = tool). Optional "<source>:" prefix. Example: "etherscan/tool/getBalance".`
+            'error': `Invalid Spec-ID format: "${specId}". Valid forms: "<namespace>" (whole provider), "<namespace>/<schema-name>" (1 slash = schema), "<namespace>/tool/<name>" (2 slashes = tool), "<namespace>/tool/<name>/tests/<N>" (4 slashes = one test). Optional "<source>:" prefix. Example: "etherscan/tool/getBalance".`
         }
     }
 
@@ -12635,14 +12651,14 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, dryRun = false, json } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, json, skipRollup = false } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading deterministic <namespace>/<schema> | <namespace>/tool/<name>' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading deterministic <namespace> | <namespace>/<schema> | <namespace>/tool/<name>' } ) }
         }
 
         // PRD-002 — validate the --only filter once (shared with `dev test`'s old
@@ -12657,14 +12673,25 @@ allowlist, migrate-config, etc.).
         // Spec-IDs are out of scope here (no silent acceptance).
         const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
         if( parsed.valid !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': parsed.error, 'fix': 'Use a schema-ID "<namespace>/<schema>" or a tool-ID "<namespace>/tool/<name>".' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': parsed.error, 'fix': 'Use a namespace "<namespace>", a schema-ID "<namespace>/<schema>", or a tool-ID "<namespace>/tool/<name>".' } ) }
         }
-        if( parsed.type !== 'schema' && parsed.type !== 'tool' ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only schema-ID or tool-ID).`, 'fix': 'Use "<namespace>/<schema>" or "<namespace>/tool/<name>".' } ) }
+        // Memo 107 PRD-004 — bare namespace runs the deterministic grade over every
+        // schema of the namespace ("one command per namespace") and produces ONE
+        // namespace rollup (index.json) + Provider-Proof (grade.json). Delegated so
+        // the single-schema path below stays unchanged.
+        if( parsed.type === 'namespace' ) {
+            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
+        }
+        if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
         }
 
         const namespace = parsed.namespace
-        const toolFilter = parsed.type === 'tool' ? parsed.name : null
+        // A tool-ID and a per-test selector both scope the deterministic grade to one
+        // tool (the `_gradings/` granularity is per-tool; a per-test selector addresses
+        // a single recorded test of that tool for validation/inspection).
+        const toolFilter = parsed.type === 'tool' || parsed.type === 'test' ? parsed.name : null
+        const testIndex = parsed.type === 'test' ? parsed.testIndex : null
 
         // PRD-003 (B2): the deterministic single-mode reads the schema LIVE from
         // schemaFolders[], not from the island import snapshot. The island root is
@@ -12728,6 +12755,28 @@ allowlist, migrate-config, etc.).
         // recomputed over the filtered results so `ok` reflects only that tool.
         const { pretest } = FlowMcpCli.#scopeDeterministicPretest( { pretestRaw, toolFilter } )
 
+        // Per-test selector: validate the 1-based test index is in range for the tool
+        // and surface the addressed test (no silent default — an out-of-range index is
+        // a hard error, never clamped). The `_gradings/` write stays tool-scoped.
+        let testScope = null
+        if( testIndex !== null ) {
+            const toolResults = ( Array.isArray( pretest.results ) ? pretest.results : [] )
+                .filter( ( entry ) => entry[ 'name' ] === toolFilter )
+            if( testIndex > toolResults.length ) {
+                return { 'result': FlowMcpCli.#error( { 'error': `Test index ${testIndex} is out of range for tool "${toolFilter}" (${toolResults.length} recorded test(s)).`, 'fix': `Address a test between 1 and ${toolResults.length}, or run the whole tool "${namespace}/tool/${toolFilter}".` } ) }
+            }
+            const addressed = toolResults[ testIndex - 1 ]
+            testScope = {
+                'tool': toolFilter,
+                'testIndex': testIndex,
+                'working': addressed[ 'working' ],
+                'status': addressed[ 'status' ],
+                'responseBytes': addressed[ 'responseBytes' ] === undefined ? null : addressed[ 'responseBytes' ],
+                'large': addressed[ 'large' ] === true,
+                'extreme': addressed[ 'extreme' ] === true
+            }
+        }
+
         // PRD-002 — optional v4-primitive view (the migrated `dev test --only`
         // capability). tool/resource come from the DataPretest results; skill/
         // prompt/selection-member from the structural #runTypedTests path.
@@ -12760,8 +12809,176 @@ allowlist, migrate-config, etc.).
         if( primitives !== null ) {
             result[ 'primitives' ] = primitives
         }
+        if( testScope !== null ) {
+            result[ 'testScope' ] = testScope
+        }
+
+        // Memo 107 PRD-006 — the deterministic Area grading + full-structure wiring.
+        // After the pretest, write the deterministic `_gradings/` entries for this
+        // schema (Answer-Mapper -> AreaScorer.writeEntry, NO-OVERWRITE/additive), then
+        // — unless this is a namespace sub-call (skipRollup) — rebuild the namespace
+        // index.json (RebuildIndex) and the Provider-Proof grade.json (ProviderProof).
+        // dryRun (--no-save) skips ALL island writes (PRD-012 / guard 6). This is the
+        // gap that turned `grading deterministic` from a summary-only sweep into the
+        // real deterministic grading (Memo 107 Kap. 4).
+        if( dryRun !== true ) {
+            const written = await FlowMcpCli.#deterministicWriteGradings( { grading, gradingDataRoot, namespace, schemaName, main, validate, pretest, toolFilter } )
+            result[ 'gradingsWritten' ] = written.written
+            if( written.skipped.length > 0 ) { result[ 'gradingsSkipped' ] = written.skipped }
+            if( written.errors.length > 0 ) { result[ 'gradingErrors' ] = written.errors }
+
+            if( skipRollup !== true ) {
+                const rollup = await FlowMcpCli.#deterministicRollup( { cwd, grading, gradingDataRoot, gradingExportDir, namespace } )
+                if( rollup.status !== true ) {
+                    // The deterministic GRADE already ran; a rollup/persistence failure is
+                    // surfaced (never silent) but does NOT flip the grade `status`.
+                    result[ 'rollupError' ] = rollup.error
+                } else {
+                    result[ 'indexPath' ] = rollup.indexPath
+                    result[ 'proofPath' ] = rollup.proofPath
+                    result[ 'rollupStatus' ] = rollup.rollupStatus
+                    result[ 'rollupGrade' ] = rollup.rollupGrade
+                }
+            }
+        }
 
         return { result }
+    }
+
+
+    // Memo 107 PRD-005/006 — write the deterministic Area `_gradings/` entries for one
+    // schema. The DeterministicAreaMapper turns the structural validation + DataPretest
+    // result into spec-conformant deterministic entries (single-test per tool,
+    // tools-aggregate-schema), and AreaScorer.writeEntry persists each one timestamped-
+    // additive (ASC-010 NO-OVERWRITE — a same-second collision is benign idempotency,
+    // not an error). Guard 1 (Kap. 0a.5): `_gradings/` only ever via AreaScorer.writeEntry.
+    static async #deterministicWriteGradings( { grading, gradingDataRoot, namespace, schemaName, main, validate, pretest, toolFilter = null } ) {
+        const Mapper = grading[ 'DeterministicAreaMapper' ]
+        const AreaScorer = grading[ 'AreaScorer' ]
+        if( Mapper === undefined || AreaScorer === undefined ) {
+            return { 'written': 0, 'skipped': [], 'errors': [ 'flowmcp-grading too old: DeterministicAreaMapper / AreaScorer not exported.' ] }
+        }
+
+        const recordedAt = new Date().toISOString().replace( /\.\d{3}Z$/, 'Z' ).replace( /:/g, '-' )
+        const mapped = Mapper.mapSchema( { namespace, 'schemaId': schemaName, main, validate, pretest, recordedAt } )
+        const providersRoot = join( gradingDataRoot, 'providers' )
+        const errors = [ ...mapped.errors ]
+        const writeCounter = { count: 0 }
+
+        // Memo 107 PRD-007 (E-4) — a tool-addressed grade (`<ns>/tool/<name>`) writes
+        // ONLY that tool's single-test entry; sibling tools' `_gradings/` stay
+        // untouched. The schema-level summary.json is unaffected (DataPretest always
+        // computes it over the full declared tool set, so it is never blind-replaced).
+        const entriesToWrite = toolFilter === null
+            ? mapped.entries
+            : mapped.entries.filter( ( item ) => item.area === 'single-test' && item.tool === toolFilter )
+
+        await entriesToWrite
+            .reduce( ( promise, item ) => promise.then( async () => {
+                const { dir, errors: dirErrors } = AreaScorer.resolveGradingsDir( {
+                    providersRoot, 'ns': namespace, 'schemaId': schemaName, 'tool': item.tool === null ? undefined : item.tool, 'area': item.area
+                } )
+                if( dir === null ) { errors.push( ...dirErrors ); return }
+                const res = await AreaScorer.writeEntry( { 'entry': item.entry, 'gradingsDir': dir, 'area': item.area, 'timestamp': recordedAt } )
+                if( res.written === true ) {
+                    writeCounter.count += 1
+                    return
+                }
+                const benign = res.errors.some( ( error ) => error.includes( 'ASC-010' ) === true )
+                if( benign === false ) { errors.push( ...res.errors ) }
+            } ), Promise.resolve() )
+
+        return { 'written': writeCounter.count, 'skipped': mapped.skipped, errors }
+    }
+
+
+    // Memo 107 PRD-006 — rebuild the namespace rollup (index.json) from the on-disk
+    // `_gradings/` and project the committable Provider-Proof (grade.json). Guards 2+3
+    // (Kap. 0a.5): index.json only via RebuildIndex.rebuildNamespaceIndex, grade.json
+    // only via ProviderProof.write. Reuses the exact wiring proven on consume-scores.
+    static async #deterministicRollup( { cwd, grading, gradingDataRoot, gradingExportDir, namespace } ) {
+        const RebuildIndex = grading[ 'RebuildIndex' ]
+        const ProviderProof = grading[ 'ProviderProof' ]
+        if( RebuildIndex === undefined || RebuildIndex === null || ProviderProof === undefined || ProviderProof === null ) {
+            return { 'status': false, 'error': 'flowmcp-grading too old: RebuildIndex / ProviderProof not available; the namespace index.json / grade.json were not built.', 'fix': 'Update the flowmcp-grading dependency.' }
+        }
+
+        const namespaceDir = join( gradingDataRoot, 'providers', namespace )
+        let rebuilt
+        try {
+            rebuilt = await RebuildIndex.rebuildNamespaceIndex( { namespaceDir } )
+        } catch( rebuildError ) {
+            return { 'status': false, 'error': `Index rebuild threw: ${rebuildError.message}`, 'fix': 'Resolve the island state above and re-run.' }
+        }
+        if( rebuilt.status !== true ) {
+            return { 'status': false, 'error': `Index rebuild failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Resolve the index errors above and re-run.' }
+        }
+
+        const proof = await FlowMcpCli.#writeProviderProof( {
+            cwd, grading, gradingDataRoot, gradingExportDir, 'target': namespace, 'namespaceIndex': rebuilt.index
+        } )
+        if( proof.status !== true ) {
+            return { 'status': false, 'error': proof.error, 'fix': proof.fix }
+        }
+
+        return {
+            'status': true,
+            'indexPath': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': rebuilt.indexPath } ),
+            'proofPath': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': proof.proofPath } ),
+            'rollupStatus': rebuilt.index[ 'status' ],
+            'rollupGrade': rebuilt.index[ 'grade' ]
+        }
+    }
+
+
+    // Memo 107 PRD-004 — bare-namespace deterministic grade: run every schema of the
+    // namespace (skipRollup, so each writes its own `_gradings/` but defers the rollup),
+    // then build the namespace index.json + Provider-Proof grade.json EXACTLY ONCE.
+    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } ) {
+        const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolved.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
+        }
+
+        const perSchema = []
+        await resolved.schemas
+            .reduce( ( promise, schema ) => promise.then( async () => {
+                const sub = await FlowMcpCli.gradingDeterministic( {
+                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json, 'skipRollup': true
+                } )
+                const subResult = sub.result
+                perSchema.push( {
+                    'schema': schema.schemaName,
+                    'status': subResult.status === true,
+                    'pretestOk': subResult.pretest === undefined || subResult.pretest === null ? null : subResult.pretest.ok,
+                    'gradingsWritten': subResult.gradingsWritten === undefined ? 0 : subResult.gradingsWritten
+                } )
+            } ), Promise.resolve() )
+
+        const out = {
+            'status': perSchema.length > 0 && perSchema.every( ( entry ) => entry.status === true ),
+            'mode': 'deterministic',
+            'target': namespace,
+            'saved': dryRun !== true,
+            'schemaCount': perSchema.length,
+            'schemas': perSchema
+        }
+
+        if( dryRun !== true ) {
+            const grading = await FlowMcpCli.#loadGradingModule()
+            const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+            const rollup = await FlowMcpCli.#deterministicRollup( { cwd, grading, gradingDataRoot, gradingExportDir, namespace } )
+            if( rollup.status !== true ) {
+                out[ 'rollupError' ] = rollup.error
+            } else {
+                out[ 'indexPath' ] = rollup.indexPath
+                out[ 'proofPath' ] = rollup.proofPath
+                out[ 'rollupStatus' ] = rollup.rollupStatus
+                out[ 'rollupGrade' ] = rollup.rollupGrade
+            }
+        }
+
+        return { 'result': out }
     }
 
 
@@ -13991,11 +14208,22 @@ allowlist, migrate-config, etc.).
         }
 
         // Deterministic defects (keeps WL-001/WL-002 — no empty-list fabrication).
+        // Memo 107 PRD-013 — a deterministic-only island (migrated / det-graded, no LLM
+        // emit round) has no prompts.json: WL-001 is then NOT a hard error but a soft
+        // state — defects degrade to [] with an explicit note so the conformance guard
+        // and state still surface. Any OTHER collection failure stays a hard error.
         const collected = await FlowMcpCli.#collectDeterministicDefects( { detected, target } )
+        let defects = []
+        let defectsNote = null
         if( collected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+            const noPrompts = typeof collected.error === 'string' && collected.error.includes( 'WL-001' ) === true
+            if( noPrompts === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+            }
+            defectsNote = 'No prompts.json — deterministic-only island (no LLM emit round yet). Deterministic defects not collected; conformance + state are still reported.'
+        } else {
+            defects = collected.defects
         }
-        const defects = collected.defects
 
         // Last LLM tips (read-only). An absence of grading entries is explicit: an
         // empty tips array WITH a note, never a silently dropped section.
@@ -14009,17 +14237,53 @@ allowlist, migrate-config, etc.).
         // Graph-driven next-action enumeration (PRD-010), identical on state + doctor.
         const nextAction = await FlowMcpCli.#computeNextAction( { grading, detected, target } )
 
+        // Memo 107 PRD-013 — conformance guard: a schema with summary.json (swept) but
+        // no _gradings/ (not graded) is "sweep-only" / unfinished. The deterministic
+        // path now writes the full structure by default, so this state is flagged, not
+        // produced. No silent default — the swept/graded booleans are explicit per schema.
+        const conformance = await FlowMcpCli.#collectConformance( { targetDir: detected.targetDir } )
+
         return {
             'result': {
                 'status': true,
                 'namespace': target,
                 'online': false,
                 defects,
+                'defectsNote': defectsNote,
+                conformance,
                 tips,
                 'tipsNote': tipsNote,
                 nextLoop,
                 nextAction
             }
+        }
+    }
+
+
+    // Memo 107 PRD-013 — per-schema conformance: swept (has summary.json) vs graded
+    // (has at least one _gradings/ entry, at schema or tool level). A swept-but-not-graded
+    // schema is "sweep-only" / unfinished. Read-only; never writes.
+    static async #collectConformance( { targetDir } ) {
+        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { targetDir } )
+        const schemas = []
+        await schemaDirs
+            .reduce( ( promise, schemaName ) => promise.then( async () => {
+                const schemaDir = join( targetDir, schemaName )
+                const swept = existsSync( join( schemaDir, 'summary.json' ) )
+                const schemaGradings = await FlowMcpCli.#findGradingsDirs( { root: schemaDir } )
+                const graded = schemaGradings.length > 0
+                schemas.push( { 'schema': schemaName, swept, graded, 'sweepOnly': swept === true && graded === false } )
+            } ), Promise.resolve() )
+
+        const sweepOnly = schemas
+            .filter( ( entry ) => entry.sweepOnly === true )
+            .map( ( entry ) => entry.schema )
+
+        return {
+            'conformant': sweepOnly.length === 0,
+            'sweepOnlyCount': sweepOnly.length,
+            'sweepOnlySchemas': sweepOnly,
+            schemas
         }
     }
 
