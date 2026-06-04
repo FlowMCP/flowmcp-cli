@@ -96,9 +96,9 @@ Every tool in every folder is now callable — no `add`. `path` may be `~`- or a
 | `flowmcp validate [path]` | Validate schema structure against FlowMCP spec |
 | `flowmcp validate` (no path) | Validate all schemas in the default group |
 | `flowmcp validate-catalog <dir>` | Validate a catalog directory (registry, schemas, agents) |
-| `flowmcp test project [--route name] [--group name]` | Test default group with live API calls |
-| `flowmcp test user [--route name]` | Test all user schemas with live API calls |
-| `flowmcp test single <path> [--route name]` | Test a single schema file |
+| `flowmcp grading deterministic <namespace>/<schema>` | Structural validate + deterministic data pretest (HTTP 200 + non-empty data), no scoring (alias: `det`) |
+| `flowmcp grading deterministic <namespace>/tool/<name>` | Restrict the pretest to one tool |
+| `flowmcp grading deterministic <id> --only=<csv>` | v4-primitive view: `tools \| resources \| skills \| prompts \| selections` |
 
 ### Grading
 
@@ -451,61 +451,57 @@ flowmcp validate ./my-schema.mjs
 # Validate an entire directory
 flowmcp validate ./schemas/my-provider/
 
-# Test with live API calls
-flowmcp test single ./my-schema.mjs
+# Deterministic validation (structural validate + data pretest) for one schema
+flowmcp grading deterministic my-namespace/my-schema
 
-# Test a specific route only
-flowmcp test single ./my-schema.mjs --route getBalance
+# Restrict the pretest to one tool
+flowmcp grading deterministic my-namespace/tool/getBalance
 ```
 
 ## Testing
 
-`flowmcp dev test single <path>` validates all five v4 primitives declared in a
-single schema file and prints a consolidated summary:
+> **Memo 102:** `flowmcp dev test` (`project` / `user` / `single`) was **removed**.
+> Its PASS criterion (HTTP 200 only) was a strict subset of the deterministic
+> grading pretest, which additionally requires non-empty data (HTTP 200 **and**
+> real data). Schema checking now has **one** path: `grading`.
+
+`flowmcp grading deterministic <id>` runs a structural validation **plus** the
+deterministic data pretest for a single schema (`<namespace>/<schema>`) or a
+single tool (`<namespace>/tool/<name>`). It does **not** emit prompts and does
+**not** run the non-deterministic LLM scoring. The `--only` flag carries the
+v4-primitive view that used to live in `dev test`:
 
 | Primitive  | Source in Schema                       | Test Strategy                                  |
 |------------|-----------------------------------------|------------------------------------------------|
-| Tools      | `main.tools[*].tests`                   | HTTP fetch via `FlowMCP.fetch`                 |
-| Resources  | `main.resources[*].queries[*].tests`    | `FlowMCP.executeResource` (SQLite readonly)    |
+| Tools      | `main.tools[*].tests`                   | Data pretest (HTTP 200 + non-empty data)       |
+| Resources  | `main.resources[*].queries[*].tests`    | Data pretest (SQLite readonly)                 |
 | Skills     | `main.skills[*].tests`                  | Structural (placeholder + prefill resolution)  |
 | Prompts    | `main.prompts[*].tests`                 | Placeholder resolution                          |
 | Selections | Selection file (transitive)             | Member iteration + aggregate                   |
 
-Example output:
-
-```
-Tools:       0/0 (none declared)
-Resources:   6/6 PASS (3 queries × 2 tests each)
-Skills:      1/1 PASS (structural)
-Prompts:     none
-Selections:  4/4 Members PASS
-
-Overall: PASS
-```
-
 ### Filtering with `--only`
 
-Use `--only=<csv>` to restrict a run to selected primitives. Allowed values:
-`tools`, `resources`, `skills`, `prompts`, `selections` (comma-separated for
-multiple).
+Use `--only=<csv>` to restrict the v4-primitive view to selected primitives.
+Allowed values: `tools`, `resources`, `skills`, `prompts`, `selections`
+(comma-separated for multiple).
 
 ```bash
-# Only run Resource tests
-flowmcp dev test single ./schema.mjs --only=resources
+# Only the Resource primitive view
+flowmcp grading deterministic my-namespace/my-schema --only=resources
 
-# Run Resources and Skills only
-flowmcp dev test single ./schema.mjs --only=resources,skills
+# Resources and Skills only
+flowmcp grading deterministic my-namespace/my-schema --only=resources,skills
 ```
 
 ### Structured Output with `--json`
 
-Add `--json` to emit a machine-readable summary. The JSON object contains
-`overall`, `primitives` (per-primitive counts), and `tests` (per-test detail).
-This format is consumed by downstream tooling such as conformance and grade
-reports.
+Add `--json` to emit a machine-readable result. The JSON object contains
+`status`, `mode`, `target`, the `validate` block, the `pretest` block
+(`ok`, `passedDownloadable`, `required`, `results`), `hints`, and (with
+`--only`) a `primitives` block.
 
 ```bash
-flowmcp dev test single ./schema.mjs --json
+flowmcp grading deterministic my-namespace/my-schema --json
 ```
 
 One-shot LLM tests for Skills are intentionally not a CLI feature; they run in

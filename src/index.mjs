@@ -417,14 +417,17 @@ const runCommand = async () => {
     }
 
     if( command === 'grading' ) {
-        const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'import', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        // PRD-001 — normalize the `det` alias to `deterministic` BEFORE the
+        // allowlist check (no silent default: an unknown sub-command still errors).
+        const rawSubCommand = positionals[ 1 ]
+        const subCommand = rawSubCommand === 'det' ? 'deterministic' : rawSubCommand
+        const validSubCommands = [ 'deterministic', 'import', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | import <provider-path> | export <ns|selection> | run <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -441,7 +444,15 @@ const runCommand = async () => {
         const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const maxIterations = values[ 'max-iterations' ] === undefined ? null : values[ 'max-iterations' ]
         const withKeys = values[ 'with-keys' ] === true
+        const only = values[ 'only' ] === undefined ? null : values[ 'only' ]
         const json = values[ 'json' ] === true
+
+        if( subCommand === 'deterministic' ) {
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, json } )
+            output( { result } )
+
+            return true
+        }
 
         if( subCommand === 'import' ) {
             const { result } = await FlowMcpCli.gradingImport( { cwd, 'path': target, onConflict, gradingDataDir, json } )
@@ -625,45 +636,10 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'test' ) {
-        const subCommand = positionals[ 1 ]
-        const route = values[ 'route' ]
-        const group = values[ 'group' ]
-        const only = values[ 'only' ]
-        const json = values[ 'json' ] === true
-
-        if( subCommand === 'project' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': false, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        if( subCommand === 'user' ) {
-            const { result } = await FlowMcpCli.test( { 'schemaPath': undefined, route, cwd, group, 'all': true, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        if( subCommand === 'single' ) {
-            const filePath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.test( { 'schemaPath': filePath, route, cwd, group, 'all': false, only, json } )
-            if( !json ) {
-                output( { result } )
-            }
-
-            return true
-        }
-
-        await FlowMcpCli.help( { cwd } )
-
-        return true
-    }
+    // Memo 102 / PRD-002 — `dev test` (project/user/single) removed. Its PASS
+    // criterion (HTTP 200 only) is a strict subset of the deterministic grading
+    // pretest (HTTP 200 + non-empty data). Use `grading deterministic <id>`
+    // instead; the v4-primitive view lives on its --only flag.
 
     return false
 }

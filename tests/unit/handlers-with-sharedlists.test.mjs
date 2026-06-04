@@ -133,35 +133,7 @@ describe( 'FlowMcpCli.callTool with handlers + sharedLists — exercises #resolv
 } )
 
 
-describe( 'FlowMcpCli.test with handlers + sharedLists schema via schemaPath', () => {
-    it( 'runs test on schema with handlers and shared lists', async () => {
-        const CWD = join( tmpdir(), `flowmcp-hsl-test-${Date.now()}` )
-        await mkdir( join( CWD, '.flowmcp' ), { recursive: true } )
-
-        const localConfig = {
-            'root': '~/.flowmcp',
-            'defaultGroup': 'default',
-            'groups': {
-                'default': {
-                    'tools': [ `${SOURCE_NAME}/hsl.mjs::pickColor` ]
-                }
-            }
-        }
-
-        await writeFile(
-            join( CWD, '.flowmcp', 'config.json' ),
-            JSON.stringify( localConfig, null, 4 ),
-            'utf-8'
-        )
-
-        const { result } = await FlowMcpCli.test( {
-            'schemaPath': join( SOURCE_DIR, 'hsl.mjs' ),
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBeDefined()
-        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 0 )
-
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    }, 30000 )
-} )
+// Memo 102 / PRD-002 — the "FlowMcpCli.test with handlers + sharedLists" describe
+// block was removed with FlowMcpCli.test. Handler + sharedLists resolution for
+// the data pretest is exercised via the callTool block above and via
+// grading-deterministic.test.mjs.

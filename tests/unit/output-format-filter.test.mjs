@@ -372,25 +372,23 @@ describe( 'PRD-006: #formatTestSummary — JSON output', () => {
 } )
 
 
-describe( 'PRD-006: exit code mapping', () => {
-    it( 'sets process.exitCode = 1 on invalid --only', async () => {
-        const prev = process.exitCode
-        process.exitCode = 0
-
-        const { result } = await FlowMcpCli.test( {
-            'schemaPath': '/nonexistent.mjs',
-            'route': undefined,
+// Memo 102 / PRD-002 — the invalid --only check migrated from "dev test" onto
+// "grading deterministic". The #validateOnlyFilter allowlist is reused, so the
+// same error message surfaces (no duplication). The exit-code-1 mapping was a
+// dev-test-specific detail and is not part of the deterministic single-mode.
+describe( 'PRD-002: invalid --only on grading deterministic', () => {
+    it( 'returns the #validateOnlyFilter error for an invalid --only value', async () => {
+        const { result } = await FlowMcpCli.gradingDeterministic( {
             'cwd': '/tmp',
-            'group': undefined,
-            'all': false,
+            'target': 'demoapi/demoapi',
+            'gradingDataDir': '.flowmcp/grading',
+            'withKeys': false,
             'only': 'invalidPrimitive',
             'json': false
         } )
 
         expect( result[ 'status' ] ).toBe( false )
         expect( result[ 'error' ] ).toContain( 'Invalid --only values' )
-        expect( process.exitCode ).toBe( 1 )
-
-        process.exitCode = prev
+        expect( result[ 'error' ] ).toContain( 'invalidPrimitive' )
     } )
 } )

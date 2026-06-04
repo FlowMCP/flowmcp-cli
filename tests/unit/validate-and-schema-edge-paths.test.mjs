@@ -207,21 +207,9 @@ describe( 'FlowMcpCli.validate — without schemaPath and without cwd defaults',
 } )
 
 
-describe( 'FlowMcpCli.test — schemaPath not found', () => {
-    it( 'returns error for nonexistent schemaPath', async () => {
-        const CWD = join( tmpdir(), `flowmcp-vedge-test-nopath-${Date.now()}` )
-        await mkdir( CWD, { recursive: true } )
-
-        const { result } = await FlowMcpCli.test( {
-            'schemaPath': '/tmp/nonexistent-vedge-test-path-xyz',
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( false )
-
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-} )
+// Memo 102 / PRD-002 — "FlowMcpCli.test — schemaPath not found" describe block
+// removed with FlowMcpCli.test. The not-found case for the deterministic path is
+// covered by grading-deterministic.test.mjs (namespace/schema not in island).
 
 
 describe( 'FlowMcpCli.schemas — exercises source listing', () => {

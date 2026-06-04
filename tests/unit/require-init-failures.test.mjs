@@ -122,13 +122,7 @@ describe( 'FlowMcpCli methods when not initialized', () => {
     } )
 
 
-    it( 'test returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.test( { schemaPath: '/tmp/test.mjs', route: undefined, cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
+    // Memo 102 / PRD-002 — "test returns init error" removed with FlowMcpCli.test.
 
 
     it( 'callListTools returns init error when not initialized', async () => {

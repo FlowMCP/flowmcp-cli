@@ -1747,647 +1747,14 @@ class FlowMcpCli {
     }
 
 
-    static async test( { schemaPath, route, cwd, group, all, only, json } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
-        if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
-
-            return { result }
-        }
-
-        // PRD-006: validate --only filter once for all flows
-        const { filter: onlyFilter, error: onlyError } = FlowMcpCli.#validateOnlyFilter( { only } )
-        if( onlyError ) {
-            const result = FlowMcpCli.#error( { 'error': onlyError } )
-            process.exitCode = 1
-
-            return { result }
-        }
-
-        const useJson = json === true
-
-        if( all ) {
-            const { schemas: allSchemas } = await FlowMcpCli.#loadAllSchemas()
-
-            const { config } = await FlowMcpCli.#readConfig( { cwd } )
-            const { envPath } = config || {}
-            let envObject = {}
-            if( envPath ) {
-                const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-                if( envContent ) {
-                    const parsed = FlowMcpCli.#parseEnvFile( { envContent } )
-                    envObject = parsed[ 'envObject' ]
-                }
-            }
-
-            console.log( '' )
-            console.log( `  ${chalk.cyan( `Testing all schemas (${allSchemas.length} total)...` )}` )
-            console.log( '' )
-
-            const allResults = []
-            let skippedCount = 0
-
-            await allSchemas
-                .reduce( ( promise, entry ) => promise.then( async () => {
-                    const { main, handlersFn, file, source, loadError } = entry
-
-                    if( !main ) {
-                        console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
-                        console.log( `    ${chalk.gray( loadError )}` )
-                        allResults.push( { 'namespace': 'unknown', file, source, 'status': false, 'messages': [ loadError ], 'skipped': false } )
-
-                        return
-                    }
-
-                    const namespace = main[ 'namespace' ] || 'unknown'
-                    const requiredServerParams = main[ 'requiredServerParams' ] || []
-
-                    if( requiredServerParams.length > 0 ) {
-                        const { valid } = FlowMcpCli.#validateEnvParams( { envObject, requiredServerParams, namespace, 'envPath': envPath || '' } )
-                        if( !valid ) {
-                            const missingParams = requiredServerParams
-                                .filter( ( p ) => {
-                                    const isMissing = envObject[ p ] === undefined
-
-                                    return isMissing
-                                } )
-
-                            console.log( `  ${chalk.yellow( '⚠' )} ${chalk.gray( source + '/' )}${file}` )
-                            console.log( `    ${chalk.gray( `skipped — missing env: ${missingParams.join( ', ' )}` )}` )
-                            allResults.push( { namespace, file, source, 'status': true, 'messages': [], 'skipped': true, 'skipReason': `Missing env: ${missingParams.join( ', ' )}` } )
-                            skippedCount = skippedCount + 1
-
-                            return
-                        }
-                    }
-
-                    const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-
-                    const schemasBaseDir = FlowMcpCli.#schemasDir()
-                    const schemaFilePath = join( schemasBaseDir, source, file )
-                    const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
-
-                    let typedRun
-                    try {
-                        typedRun = await FlowMcpCli.#runTypedTests( {
-                            main,
-                            'schemaSource': schemaFilePath,
-                            handlerMap,
-                            'resourceHandlerMap': resourceHandlerMap || {},
-                            serverParams,
-                            'sharedLists': {},
-                            'fullOutput': useJson
-                        } )
-                    } catch( err ) {
-                        console.log( `  ${chalk.red( '✗' )} ${chalk.gray( source + '/' )}${file}` )
-                        console.log( `    ${chalk.gray( err.message )}` )
-                        allResults.push( { namespace, file, source, 'status': false, 'messages': [ err.message ], 'skipped': false } )
-
-                        return
-                    }
-
-                    let runResults = typedRun[ 'results' ] || []
-                    if( onlyFilter ) {
-                        runResults = runResults
-                            .filter( ( r ) => {
-                                const keep = onlyFilter.includes( r[ 'primitive' ] )
-
-                                return keep
-                            } )
-                    }
-
-                    if( runResults.length === 0 ) {
-                        console.log( `  ${chalk.yellow( '⚠' )} ${chalk.gray( source + '/' )}${file}` )
-                        console.log( `    ${chalk.gray( 'no tests defined' )}` )
-                        allResults.push( { namespace, file, source, 'status': true, 'messages': [], 'skipped': true, 'skipReason': 'No tests defined' } )
-                        skippedCount = skippedCount + 1
-
-                        return
-                    }
-
-                    console.log( `  ${chalk.white( source + '/' )}${chalk.white( file )}` )
-
-                    runResults
-                        .forEach( ( r ) => {
-                            const ok = r[ 'status' ] === true
-                            const icon = ok ? chalk.green( '✓' ) : chalk.red( '✗' )
-                            const errText = r[ 'error' ] ? chalk.gray( ` — ${r[ 'error' ]}` ) : ''
-                            const label = r[ 'primitive' ] === 'tool' ? r[ 'name' ] : `${r[ 'primitive' ]}:${r[ 'name' ]}`
-                            console.log( `    ${icon} ${label}${errText}` )
-                            allResults.push( {
-                                namespace,
-                                file,
-                                source,
-                                'routeName': r[ 'name' ],
-                                'primitive': r[ 'primitive' ],
-                                'status': ok,
-                                'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
-                                'dataPreview': r[ 'output' ] || null,
-                                'skipped': false
-                            } )
-                        } )
-                } ), Promise.resolve() )
-
-            const testResults = allResults
-                .filter( ( r ) => {
-                    const isNotSkipped = !r[ 'skipped' ]
-
-                    return isNotSkipped
-                } )
-
-            const passed = testResults
-                .filter( ( r ) => {
-                    const isPassed = r[ 'status' ] === true
-
-                    return isPassed
-                } )
-                .length
-
-            const failed = testResults
-                .filter( ( r ) => {
-                    const isFailed = r[ 'status' ] === false
-
-                    return isFailed
-                } )
-                .length
-
-            if( useJson ) {
-                const declaredAll = {
-                    'tool':              allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'tool' ] ),
-                    'resource':          allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'resource' ] ),
-                    'skill':             allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'skill' ] ),
-                    'prompt':            allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'prompt' ] ),
-                    'selection-member':  allSchemas.some( ( s ) => s[ 'main' ] && FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'selection-member' ] )
-                }
-                const { summary: aggSummary } = FlowMcpCli.#aggregateByPrimitive( {
-                    'results': testResults,
-                    'declared': declaredAll,
-                    'filter': onlyFilter
-                } )
-                const { text } = FlowMcpCli.#formatTestSummary( {
-                    'summary': aggSummary,
-                    'results': testResults,
-                    'format': 'json',
-                    'overall': failed === 0
-                } )
-                console.log( text )
-            } else {
-                console.log( '' )
-                console.log( `  ${chalk.cyan( 'Summary:' )}` )
-                console.log( `    Total schemas: ${allSchemas.length}  Tests executed: ${testResults.length}` )
-                console.log( `    ${chalk.green( `Passed: ${passed}` )}  ${chalk.red( `Failed: ${failed}` )}  ${chalk.yellow( `Skipped: ${skippedCount}` )}` )
-                console.log( '' )
-            }
-
-            process.exitCode = failed === 0 ? 0 : 1
-
-            const result = {
-                'status': failed === 0,
-                'total': allSchemas.length,
-                'testsExecuted': testResults.length,
-                passed,
-                failed,
-                'skipped': skippedCount,
-                'results': allResults
-            }
-
-            return { result }
-        }
-
-        if( !schemaPath && !all && cwd ) {
-            let groupSchemas, groupError
-            if( group ) {
-                const resolved = await FlowMcpCli.#resolveGroupSchemas( { 'groupName': group, cwd } )
-                groupSchemas = resolved[ 'schemas' ]
-                groupError = resolved[ 'error' ]
-            } else {
-                const resolved = await FlowMcpCli.#resolveDefaultGroupSchemas( { cwd } )
-                groupSchemas = resolved[ 'schemas' ]
-                groupError = resolved[ 'error' ]
-            }
-
-            if( !groupError && groupSchemas ) {
-                const { config } = await FlowMcpCli.#readConfig( { cwd } )
-                if( !config ) {
-                    const result = FlowMcpCli.#error( { error: `Not initialized. Run: ${appConfig[ 'cliCommand' ]} init` } )
-
-                    return { result }
-                }
-
-                const { envPath } = config
-                const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
-                if( !envContent ) {
-                    const result = FlowMcpCli.#error( {
-                        'error': `Cannot read .env file at: ${envPath}`,
-                        'fix': `Ensure the .env file exists at ${envPath}`
-                    } )
-
-                    return { result }
-                }
-
-                const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
-
-                const envErrors = []
-                groupSchemas
-                    .forEach( ( { main } ) => {
-                        const namespace = main[ 'namespace' ] || 'unknown'
-                        const requiredServerParams = main[ 'requiredServerParams' ] || []
-                        const { valid, error: envError, fix: envFix } = FlowMcpCli.#validateEnvParams( {
-                            envObject,
-                            requiredServerParams,
-                            namespace,
-                            'envPath': envPath
-                        } )
-
-                        if( !valid ) {
-                            envErrors.push( { 'error': envError, 'fix': envFix } )
-                        }
-                    } )
-
-                if( envErrors.length > 0 ) {
-                    const errorMessages = envErrors
-                        .map( ( { error: e } ) => {
-                            return e
-                        } )
-
-                    const result = FlowMcpCli.#error( {
-                        'error': `Missing env vars: ${errorMessages.join( '; ' )}`,
-                        'fix': envErrors[ 0 ][ 'fix' ]
-                    } )
-
-                    return { result }
-                }
-
-                const allResults = []
-
-                await groupSchemas
-                    .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
-                        const namespace = main[ 'namespace' ] || 'unknown'
-                        const requiredServerParams = main[ 'requiredServerParams' ] || []
-                        const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-
-                        const schemasBaseDir = FlowMcpCli.#schemasDir()
-                        const schemaFilePath = join( schemasBaseDir, file )
-                        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
-
-                        let typedRun
-                        try {
-                            typedRun = await FlowMcpCli.#runTypedTests( {
-                                main,
-                                'schemaSource': schemaFilePath,
-                                handlerMap,
-                                'resourceHandlerMap': resourceHandlerMap || {},
-                                serverParams,
-                                'sharedLists': {},
-                                'fullOutput': useJson
-                            } )
-                        } catch( err ) {
-                            allResults.push( {
-                                namespace,
-                                'routeName': '*',
-                                'status': false,
-                                'messages': [ err.message ],
-                                'dataPreview': null
-                            } )
-
-                            return
-                        }
-
-                        let runResults = typedRun[ 'results' ] || []
-
-                        if( route ) {
-                            runResults = runResults
-                                .filter( ( r ) => {
-                                    const isMatch = r[ 'primitive' ] !== 'tool' || r[ 'name' ] === route
-
-                                    return isMatch
-                                } )
-                        }
-
-                        if( onlyFilter ) {
-                            runResults = runResults
-                                .filter( ( r ) => {
-                                    const keep = onlyFilter.includes( r[ 'primitive' ] )
-
-                                    return keep
-                                } )
-                        }
-
-                        runResults
-                            .forEach( ( r ) => {
-                                allResults.push( {
-                                    namespace,
-                                    'routeName': r[ 'name' ],
-                                    'primitive': r[ 'primitive' ],
-                                    'status': r[ 'status' ],
-                                    'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
-                                    'dataPreview': r[ 'output' ] || null
-                                } )
-                            } )
-                    } ), Promise.resolve() )
-
-                const passed = allResults
-                    .filter( ( { status } ) => {
-                        const isPassed = status === true
-
-                        return isPassed
-                    } )
-                    .length
-
-                const failed = allResults.length - passed
-
-                if( useJson ) {
-                    const { summary: aggSummary } = FlowMcpCli.#aggregateByPrimitive( {
-                        'results': allResults,
-                        'declared': {
-                            'tool':              groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'tool' ] ),
-                            'resource':          groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'resource' ] ),
-                            'skill':             groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'skill' ] ),
-                            'prompt':            groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'prompt' ] ),
-                            'selection-member':  groupSchemas.some( ( s ) => FlowMcpCli.#computeDeclared( { 'main': s[ 'main' ] } ).declared[ 'selection-member' ] )
-                        },
-                        'filter': onlyFilter
-                    } )
-                    const { text } = FlowMcpCli.#formatTestSummary( {
-                        'summary': aggSummary,
-                        'results': allResults,
-                        'format': 'json',
-                        'overall': failed === 0
-                    } )
-                    console.log( text )
-                }
-
-                process.exitCode = failed === 0 ? 0 : 1
-
-                const result = {
-                    'status': failed === 0,
-                    'total': allResults.length,
-                    passed,
-                    failed,
-                    'results': allResults
-                }
-
-                return { result }
-            }
-        }
-
-        const { status: validStatus, messages: validMessages } = FlowMcpCli.validationTest( { schemaPath } )
-        if( !validStatus ) {
-            const result = { 'status': false, 'messages': validMessages }
-
-            return { result }
-        }
-
-        const { config, error: configError } = await FlowMcpCli.#readConfig( { cwd } )
-        if( !config ) {
-            const result = FlowMcpCli.#error( { error: configError } )
-
-            return { result }
-        }
-
-        const { envPath } = config
-        const { data: envContent, error: envError } = await FlowMcpCli.#readText( { filePath: envPath } )
-        if( !envContent ) {
-            const result = FlowMcpCli.#error( {
-                'error': `Cannot read .env file at: ${envPath}`,
-                'fix': `Ensure the .env file exists at ${envPath}`
-            } )
-
-            return { result }
-        }
-
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
-
-        const { schemas, error: loadError } = await FlowMcpCli.#loadSchemasFromPath( { schemaPath } )
-        if( !schemas ) {
-            const result = FlowMcpCli.#error( {
-                'error': loadError,
-                'fix': 'Provide a valid path to a .mjs schema file or directory.'
-            } )
-
-            return { result }
-        }
-
-        const schemaEnvErrors = []
-        schemas
-            .forEach( ( { main } ) => {
-                const namespace = main[ 'namespace' ] || 'unknown'
-                const requiredServerParams = main[ 'requiredServerParams' ] || []
-                const { valid, error: envValidError, fix: envValidFix } = FlowMcpCli.#validateEnvParams( {
-                    envObject,
-                    requiredServerParams,
-                    namespace,
-                    'envPath': envPath
-                } )
-
-                if( !valid ) {
-                    schemaEnvErrors.push( { 'error': envValidError, 'fix': envValidFix } )
-                }
-            } )
-
-        if( schemaEnvErrors.length > 0 ) {
-            const errorMessages = schemaEnvErrors
-                .map( ( { error: e } ) => {
-                    return e
-                } )
-
-            const result = FlowMcpCli.#error( {
-                'error': `Missing env vars: ${errorMessages.join( '; ' )}`,
-                'fix': schemaEnvErrors[ 0 ][ 'fix' ]
-            } )
-
-            return { result }
-        }
-
-        const allResults = []
-        const perSchemaSummaries = []
-        let firstSchemaRef = null
-
-        await schemas
-            .reduce( ( promise, { main, handlersFn, file } ) => promise.then( async () => {
-                const namespace = main[ 'namespace' ] || 'unknown'
-                const requiredServerParams = main[ 'requiredServerParams' ] || []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-
-                const resolvedPath = resolve( schemaPath )
-                const schemaFilePath = ( await stat( resolvedPath ) ).isFile()
-                    ? resolvedPath
-                    : join( resolvedPath, file )
-                const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
-
-                let typedRun
-                try {
-                    typedRun = await FlowMcpCli.#runTypedTests( {
-                        main,
-                        'schemaSource': schemaFilePath,
-                        handlerMap,
-                        'resourceHandlerMap': resourceHandlerMap || {},
-                        serverParams,
-                        'sharedLists': {},
-                        'fullOutput': useJson
-                    } )
-                } catch( err ) {
-                    allResults.push( {
-                        namespace,
-                        'primitive': 'tool',
-                        'name': '*',
-                        'status': false,
-                        'error': err.message,
-                        'output': null,
-                        'durationMs': 0
-                    } )
-
-                    return
-                }
-
-                let runResults = typedRun[ 'results' ] || []
-
-                // Legacy --route filter: only applies to tool primitive
-                if( route ) {
-                    runResults = runResults
-                        .filter( ( r ) => {
-                            const isMatch = r[ 'primitive' ] !== 'tool' || r[ 'name' ] === route
-
-                            return isMatch
-                        } )
-                }
-
-                // PRD-006: apply --only filter (drop other primitives from execution view)
-                const filteredResults = onlyFilter
-                    ? runResults.filter( ( r ) => {
-                        const keep = onlyFilter.includes( r[ 'primitive' ] )
-
-                        return keep
-                    } )
-                    : runResults
-
-                filteredResults
-                    .forEach( ( r ) => {
-                        allResults.push( {
-                            namespace,
-                            'routeName': r[ 'name' ],
-                            'messages': r[ 'error' ] ? [ r[ 'error' ] ] : [],
-                            'dataPreview': r[ 'output' ] || null,
-                            ...r
-                        } )
-                    } )
-
-                const { declared } = FlowMcpCli.#computeDeclared( { main } )
-                const { summary } = FlowMcpCli.#aggregateByPrimitive( {
-                    'results': filteredResults,
-                    declared,
-                    'filter': onlyFilter
-                } )
-
-                const overallSchema = filteredResults
-                    .filter( ( r ) => {
-                        const isFail = r[ 'status' ] === false
-
-                        return isFail
-                    } )
-                    .length === 0
-
-                if( !firstSchemaRef ) {
-                    firstSchemaRef = namespace
-                }
-
-                perSchemaSummaries.push( {
-                    namespace,
-                    file,
-                    summary,
-                    'overall': overallSchema,
-                    'results': filteredResults
-                } )
-            } ), Promise.resolve() )
-
-        // Aggregate overall + per-primitive across all schemas
-        const overallAll = allResults
-            .filter( ( r ) => {
-                const isFail = r[ 'status' ] === false
-
-                return isFail
-            } )
-            .length === 0
-
-        const { declared: aggregatedDeclared } = schemas && schemas.length === 1
-            ? FlowMcpCli.#computeDeclared( { 'main': schemas[ 0 ][ 'main' ] } )
-            : { 'declared': {
-                'tool':              perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'tool' ][ 'declared' ] ),
-                'resource':          perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'resource' ][ 'declared' ] ),
-                'skill':             perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'skill' ][ 'declared' ] ),
-                'prompt':            perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'prompt' ][ 'declared' ] ),
-                'selection-member':  perSchemaSummaries.some( ( s ) => s[ 'summary' ][ 'selection-member' ][ 'declared' ] )
-            } }
-
-        const { summary: aggregatedSummary } = FlowMcpCli.#aggregateByPrimitive( {
-            'results': allResults,
-            'declared': aggregatedDeclared,
-            'filter': onlyFilter
-        } )
-
-        if( useJson ) {
-            const { text } = FlowMcpCli.#formatTestSummary( {
-                'summary': aggregatedSummary,
-                'results': allResults,
-                'format': 'json',
-                'overall': overallAll,
-                'schemaRef': firstSchemaRef
-            } )
-            console.log( text )
-        } else {
-            if( perSchemaSummaries.length > 1 ) {
-                perSchemaSummaries
-                    .forEach( ( s ) => {
-                        console.log( `${s[ 'namespace' ]}` )
-                        const { text } = FlowMcpCli.#formatTestSummary( {
-                            'summary': s[ 'summary' ],
-                            'results': s[ 'results' ],
-                            'format': 'human',
-                            'overall': s[ 'overall' ]
-                        } )
-                        text
-                            .split( '\n' )
-                            .forEach( ( line ) => {
-                                console.log( `  ${line}` )
-                            } )
-                        console.log( '' )
-                    } )
-                console.log( '──────────────────' )
-                console.log( 'Total:' )
-            }
-            const { text } = FlowMcpCli.#formatTestSummary( {
-                'summary': aggregatedSummary,
-                'results': allResults,
-                'format': 'human',
-                'overall': overallAll
-            } )
-            console.log( text )
-        }
-
-        process.exitCode = overallAll ? 0 : 1
-
-        const passedCount = allResults
-            .filter( ( r ) => {
-                const isPass = r[ 'status' ] === true
-
-                return isPass
-            } )
-            .length
-        const failedCount = allResults.length - passedCount
-
-        const result = {
-            'status': overallAll,
-            'summary': aggregatedSummary,
-            'overall': overallAll ? 'PASS' : 'FAIL',
-            'total': allResults.length,
-            'passed': passedCount,
-            'failed': failedCount,
-            'results': allResults
-        }
-
-        return { result }
-    }
-
+    // Memo 102 / PRD-002 — FlowMcpCli.test (the dev test project/user/single
+    // runner) removed. Its PASS criterion was HTTP 200 only — a strict subset of
+    // the deterministic grading pretest (HTTP 200 + non-empty data). Schema
+    // checking now has ONE path: grading deterministic <id>. The exclusive
+    // v4-primitive --only view migrated onto that command (PRD-001/002). The
+    // shared helpers (#runTypedTests, #executeTest, #validateOnlyFilter,
+    // #computeDeclared, #aggregateByPrimitive) are KEPT — they back the migrated
+    // grading deterministic --only path.
 
     static async status( { cwd } ) {
         const { checks, healthy } = await FlowMcpCli.#healthCheck( { cwd } )
@@ -8440,13 +7807,11 @@ and maintainers. AI agents typically use Tier 1 commands (${cmd} --help).
 
 Validation & Testing:
   dev validate [path]                 Validate schema(s) structurally
-  dev test project                    Test all schemas in default/specified group
-  dev test user                       Test all user schemas
-  dev test single <path>              Test a single schema file (all v4 primitives:
-                                      tools, resources, skills, prompts, selections)
-    --only=<csv>                      Restrict to selected primitives. Allowed:
-                                      tools | resources | skills | prompts | selections
-    --json                            Emit machine-readable JSON summary
+  (Memo 102: "dev test project/user/single" removed — its PASS criterion was a
+   strict subset of the deterministic grading pretest. Use:
+     grading deterministic <namespace>/<schema>        structural validate + data pretest
+     grading deterministic <namespace>/tool/<name>     restrict to one tool
+       --only=<csv>                   v4-primitive view: tools | resources | skills | prompts | selections)
 
 Configuration:
   dev allowlist --add <library>       Add library to allowlist (flowmcp.config.json)
@@ -8478,6 +7843,8 @@ Selection Management (v4):
   dev selection validate <path>              Validate a selection file
 
 Grading (v2 — experimental; CLI surface may change):
+  grading deterministic <id>                 Structural validate + deterministic data pretest, no scoring (alias: "det"). <id> = <namespace>/<schema> or <namespace>/tool/<name>
+    --only=<csv>                             Restrict to v4 primitives. Allowed: tools | resources | skills | prompts | selections
   grading import <provider-path>             Import a provider folder into the workbench island (Stage 0)
   grading run <ns|selection> --emit-prompts  Stage 1: deterministic pretest + emit ONE self-contained handoff (area-set + Task-ID) for a grading sub-agent
   grading run <ns|selection> --consume-scores <path>
@@ -12850,6 +12217,306 @@ allowlist, migrate-config, etc.).
         }
 
         return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, 'dependencyChain': deps.chain } )
+    }
+
+
+    // Memo 102 Phase 1 / PRD-001 — deterministic single-schema/-tool validation:
+    // structural validation PLUS the DataPretest data-pretest (HTTP 200 + non-empty
+    // data), WITHOUT prompt-emit and WITHOUT the non-deterministic LLM scoring.
+    // The answer to "is this schema valid?" as one structured result.
+    //
+    // Target grammar (PRD-001 scope, full 3-level addressing is Phase 3):
+    //   namespace/schema-name        (1 slash) -> all tools of one schema
+    //   namespace/tool/<name>        (2 slash) -> just the one addressed tool
+    //
+    // PRD-002 — the --only flag carries the v4-primitive view that used to live in
+    // `dev test`: tool/resource run through the DataPretest path; skill/prompt/
+    // selection-member run through the existing structural primitive check
+    // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
+    // allowlist applies (no duplication).
+    static async gradingDeterministic( { cwd, target, gradingDataDir, withKeys, only, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null || grading[ 'DataPretest' ] === undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading deterministic <namespace>/<schema> | <namespace>/tool/<name>' } ) }
+        }
+
+        // PRD-002 — validate the --only filter once (shared with `dev test`'s old
+        // path). An unknown value is a HARD error (no silent skip).
+        const { filter: onlyFilter, error: onlyError } = FlowMcpCli.#validateOnlyFilter( { only } )
+        if( onlyError !== null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': onlyError } ) }
+        }
+
+        // Parse the Spec-ID. PRD-001 only accepts a schema-ID (1 slash) or a
+        // tool-ID (2 slashes, type === 'tool'). Resource/prompt/skill/selection
+        // Spec-IDs are out of scope here (no silent acceptance).
+        const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
+        if( parsed.valid !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': parsed.error, 'fix': 'Use a schema-ID "<namespace>/<schema>" or a tool-ID "<namespace>/tool/<name>".' } ) }
+        }
+        if( parsed.type !== 'schema' && parsed.type !== 'tool' ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only schema-ID or tool-ID).`, 'fix': 'Use "<namespace>/<schema>" or "<namespace>/tool/<name>".' } ) }
+        }
+
+        const namespace = parsed.namespace
+        const toolFilter = parsed.type === 'tool' ? parsed.name : null
+
+        // Resolve the island root and the namespace's provider folder. Selection
+        // flow is out of scope for the single-mode (PRD-001); deterministic single
+        // targets are addressed by namespace, which lives under providers/.
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const providerDir = join( gradingDataRoot, 'providers', namespace )
+        if( existsSync( providerDir ) === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Namespace "${namespace}" not found under ${join( gradingDataRoot, 'providers' )}.`, 'fix': `Run "${appConfig[ 'cliCommand' ]} grading import <provider-path>" first to populate the island.` } ) }
+        }
+
+        // Determine the addressed schema folder(s). A tool-ID needs a Tool->Schema
+        // lookup; a schema-ID names the folder directly. No silent first-wins: an
+        // ambiguous tool match is surfaced with a visible note.
+        const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { 'targetDir': providerDir } )
+        const resolved = await FlowMcpCli.#resolveDeterministicSchema( { cwd, providerDir, schemaDirs, parsed, namespace, grading } )
+        if( resolved.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
+        }
+        const schemaName = resolved.schemaName
+
+        // PA-5: key-injection opt-in (default OFF) — same gate as emit-prompts.
+        const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
+
+        // Resolve the schema source snapshot (B2: import-snapshot resolver). PRD-001
+        // explicitly MAY keep using this resolver — the live-read decoupling is
+        // Phase 2. A null snapshot is a HARD error (no silent default).
+        const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, 'targetDir': providerDir, schemaName } )
+        if( snapshot === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `No resolvable schema snapshot for "${namespace}/${schemaName}".`, 'fix': `Re-import the provider so a schema snapshot exists under ${join( providerDir, schemaName, 'schema' )}.` } ) }
+        }
+
+        const { main, handlersFn } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
+        if( !main ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Cannot load schema snapshot: ${snapshot.path}`, 'fix': 'The import snapshot is unreadable — re-import the provider.' } ) }
+        }
+
+        // Step 1 — structural validation (Memo REV-08 Kap. 1: structural validate
+        // FIRST, then the deterministic data-pretest = "the validation").
+        const v4 = await FlowMcpCli.#loadV4Module()
+        const validate = FlowMcpCli.#validateSingleSchema( { main, 'file': basename( snapshot.path ), v4 } )
+
+        // Step 2 — the deterministic data-pretest (status === true AND #hasData),
+        // a strict superset of `dev test`. Same Phase-0/1 wiring as emit-prompts:
+        // resolveEnv -> buildServerParams -> resolveSharedLists -> DataPretest.run,
+        // but WITHOUT the prompt/goal emit afterwards.
+        const requiredServerParams = Array.isArray( main[ 'requiredServerParams' ] ) ? main[ 'requiredServerParams' ] : []
+        const serverParams = useKeys === true
+            ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
+            : {}
+        const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { main, 'filePath': snapshot.path } )
+
+        const pretestRaw = await grading[ 'DataPretest' ].run( {
+            namespace,
+            'toolName': schemaName,
+            main,
+            handlersFn,
+            'schemaSnapshotPath': snapshot.path,
+            serverParams,
+            sharedLists,
+            'gradingDataDir': gradingDataRoot
+        } )
+
+        // Tool-ID: restrict the pretest view to the one addressed tool. The gate is
+        // recomputed over the filtered results so `ok` reflects only that tool.
+        const { pretest } = FlowMcpCli.#scopeDeterministicPretest( { pretestRaw, toolFilter } )
+
+        // PRD-002 — optional v4-primitive view (the migrated `dev test --only`
+        // capability). tool/resource come from the DataPretest results; skill/
+        // prompt/selection-member from the structural #runTypedTests path.
+        let primitives = null
+        if( onlyFilter !== null ) {
+            const { view } = await FlowMcpCli.#deterministicPrimitiveView( { main, handlersFn, snapshot, serverParams, sharedLists, onlyFilter, toolFilter, pretest } )
+            primitives = view
+        }
+
+        // Hints derived ONLY from the existing DataPretest errors[] (no new error
+        // classes in this PRD — parameterless/key-gated stay Phase 5).
+        const { hints } = FlowMcpCli.#deterministicHints( { 'validate': validate, pretest } )
+        const status = validate[ 'status' ] === true && pretest.ok === true
+
+        const result = {
+            status,
+            'mode': 'deterministic',
+            target,
+            'validate': validate,
+            pretest,
+            hints
+        }
+        if( resolved.note !== null && resolved.note !== undefined ) {
+            result[ 'note' ] = resolved.note
+        }
+        if( primitives !== null ) {
+            result[ 'primitives' ] = primitives
+        }
+
+        return { result }
+    }
+
+
+    // PRD-001 — resolve the addressed schema folder. A schema-ID names the folder
+    // directly (must exist). A tool-ID needs a Tool->Schema lookup over the island
+    // snapshots; a tool present in several schema folders is reported (visible
+    // note), never silently first-won. No silent default.
+    static async #resolveDeterministicSchema( { cwd, providerDir, schemaDirs, parsed, namespace, grading } ) {
+        if( parsed.type === 'schema' ) {
+            if( schemaDirs.includes( parsed.name ) === false ) {
+                return { 'status': false, 'error': `Schema "${namespace}/${parsed.name}" not found in the island (folders: ${schemaDirs.join( ', ' ) || 'none'}).`, 'fix': 'Re-import the provider, or address an existing schema folder.' }
+            }
+
+            return { 'status': true, 'schemaName': parsed.name, 'note': null }
+        }
+
+        // Tool-ID — find which schema folder declares this tool by loading each
+        // snapshot's main and scanning its tools/routes.
+        const matches = await schemaDirs
+            .reduce( ( promise, schemaName ) => promise.then( async ( acc ) => {
+                const snapshot = await FlowMcpCli.#resolveLatestSchemaSnapshot( { grading, 'targetDir': providerDir, schemaName } )
+                if( snapshot === null ) { return acc }
+                const { main } = await FlowMcpCli.#loadSchema( { 'filePath': snapshot.path } )
+                if( !main ) { return acc }
+                const tools = main[ 'tools' ] || main[ 'routes' ] || {}
+                if( Object.keys( tools ).includes( parsed.name ) === true ) { acc.push( schemaName ) }
+
+                return acc
+            } ), Promise.resolve( [] ) )
+
+        if( matches.length === 0 ) {
+            return { 'status': false, 'error': `Tool "${namespace}/tool/${parsed.name}" not found in any island schema (folders: ${schemaDirs.join( ', ' ) || 'none'}).`, 'fix': 'Re-import the provider, or address an existing tool.' }
+        }
+
+        const note = matches.length > 1
+            ? `Tool "${parsed.name}" found in ${matches.length} schemas (${matches.join( ', ' )}); using "${matches[ 0 ]}" (first match — multi-folder collision handling is Phase 3).`
+            : null
+
+        return { 'status': true, 'schemaName': matches[ 0 ], note }
+    }
+
+
+    // PRD-001 — project the raw DataPretest result onto an optional single-tool
+    // filter. When a tool-ID is given, results[] is narrowed to that tool and the
+    // pass-gate (ok/passedDownloadable) is recomputed over the filtered set so the
+    // answer reflects only the addressed tool. No silent default: an empty filtered
+    // set turns into ok:false with an explicit DPT-style error string.
+    static #scopeDeterministicPretest( { pretestRaw, toolFilter } ) {
+        const baseResults = Array.isArray( pretestRaw.results ) ? pretestRaw.results : []
+        if( toolFilter === null ) {
+            const pretest = {
+                'ok': pretestRaw.ok,
+                'passedDownloadable': pretestRaw.passedDownloadable,
+                'required': pretestRaw.required,
+                'results': baseResults,
+                'errors': Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : []
+            }
+
+            return { pretest }
+        }
+
+        const downloadablePrimitives = [ 'tool', 'resource' ]
+        const filtered = baseResults
+            .filter( ( r ) => r[ 'name' ] === toolFilter )
+        const passedDownloadable = filtered
+            .filter( ( r ) => r[ 'working' ] === true )
+            .length
+        const required = pretestRaw.required
+        const downloadableInTool = filtered
+            .filter( ( r ) => downloadablePrimitives.includes( r[ 'primitive' ] ) )
+            .length
+
+        // Re-derive the gate for the single tool: it must be downloadable AND meet
+        // the working-test threshold on its own.
+        const ok = downloadableInTool > 0 && passedDownloadable >= required
+        const errors = []
+        if( filtered.length === 0 ) {
+            errors.push( `DPT-004: Tool "${toolFilter}" produced no test results in the pretest.` )
+        }
+        if( ok === false && filtered.length > 0 ) {
+            errors.push( `DPT-003: Tool "${toolFilter}" below ${required} working downloadable tests (${passedDownloadable}/${required}).` )
+        }
+        // Preserve the per-tool DPT-004 detail lines that already mention this tool.
+        const carried = ( Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : [] )
+            .filter( ( e ) => typeof e === 'string' && e.includes( `${toolFilter}:` ) )
+
+        const pretest = {
+            ok,
+            passedDownloadable,
+            required,
+            'results': filtered,
+            'errors': [ ...errors, ...carried ]
+        }
+
+        return { pretest }
+    }
+
+
+    // PRD-002 — the migrated v4-primitive view (`dev test --only`). tool/resource
+    // are sourced from the DataPretest results (PRD-001); skill/prompt/
+    // selection-member from the structural #runTypedTests path. Aggregated per
+    // primitive via #aggregateByPrimitive (the exact shape `dev test` produced).
+    static async #deterministicPrimitiveView( { main, handlersFn, snapshot, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
+        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': snapshot.path } )
+
+        let typedResults = []
+        try {
+            const typedRun = await FlowMcpCli.#runTypedTests( {
+                main,
+                'schemaSource': snapshot.path,
+                handlerMap,
+                'resourceHandlerMap': resourceHandlerMap || {},
+                serverParams,
+                sharedLists,
+                'fullOutput': false
+            } )
+            typedResults = typedRun[ 'results' ] || []
+        } catch( err ) {
+            typedResults = [ { 'primitive': 'tool', 'name': '*', 'status': false, 'error': err.message } ]
+        }
+
+        // Restrict to the requested primitives, and to the addressed tool when a
+        // tool-ID was given.
+        const scoped = typedResults
+            .filter( ( r ) => onlyFilter.includes( r[ 'primitive' ] ) )
+            .filter( ( r ) => toolFilter === null || r[ 'primitive' ] !== 'tool' || r[ 'name' ] === toolFilter )
+
+        const { declared } = FlowMcpCli.#computeDeclared( { main } )
+        const { summary } = FlowMcpCli.#aggregateByPrimitive( { 'results': scoped, declared, 'filter': onlyFilter } )
+
+        const view = {
+            'tools': summary[ 'tool' ],
+            'resources': summary[ 'resource' ],
+            'skills': summary[ 'skill' ],
+            'prompts': summary[ 'prompt' ],
+            'selections': summary[ 'selection-member' ]
+        }
+
+        return { view }
+    }
+
+
+    // PRD-001 — derive actionable hints ONLY from the existing structural-validate
+    // messages and the DataPretest errors[] (no new error classes here). A green
+    // result yields an empty hint list.
+    static #deterministicHints( { validate, pretest } ) {
+        const hints = []
+        if( validate[ 'status' ] !== true ) {
+            ( validate[ 'messages' ] || [] )
+                .forEach( ( m ) => { hints.push( `structural: ${m}` ) } )
+        }
+        if( pretest.ok !== true ) {
+            ( pretest.errors || [] )
+                .forEach( ( e ) => { hints.push( `pretest: ${e}` ) } )
+        }
+
+        return { hints }
     }
 
 
