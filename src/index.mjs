@@ -431,13 +431,13 @@ const runCommand = async () => {
         // non-deterministic LLM-scoring path (emit + consume), formerly only reached
         // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
         // internal mechanic (Never-delete-legacy).
-        const validSubCommands = [ 'deterministic', 'non-deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -460,9 +460,21 @@ const runCommand = async () => {
         // single internal switch dryRun. When set, grading performs but writes
         // NOTHING to the island (no pretest persist, no index/grade/state).
         const dryRun = values[ 'no-save' ] === true
+        // PRD-2.2 — --force bypasses the read-cache (PRD-2.1): re-fetch the test
+        // data instead of reusing the persisted test-N.json.
+        const force = values[ 'force' ] === true
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'reload' ) {
+            // PRD-2.3 — re-fetch + rewrite the persisted test-N.json only (force),
+            // decoupled from grading: no _gradings/grade.json writes.
+            const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, json } )
             output( { result } )
 
             return true

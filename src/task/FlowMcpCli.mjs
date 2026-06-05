@@ -12651,7 +12651,7 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, json, skipRollup = false } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, json, skipRollup = false } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12680,7 +12680,7 @@ allowlist, migrate-config, etc.).
         // namespace rollup (index.json) + Provider-Proof (grade.json). Delegated so
         // the single-schema path below stays unchanged.
         if( parsed.type === 'namespace' ) {
-            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
+            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json } )
         }
         if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
@@ -12739,6 +12739,12 @@ allowlist, migrate-config, etc.).
         // PRD-012 — --no-save (dryRun) runs the pretest in full but persists NOTHING
         // to the island (no summary.json / test-N.json). The deterministic path has
         // no Stage-3 writes, so dryRun here only gates the DataPretest persist.
+        // PRD-2.2 — force threads the cache bypass into the pretest. Without it the
+        // pretest reuses the persisted test-N.json (read-cache, PRD-2.1); with it the
+        // data is re-fetched. A re-fetch that flips `deterministic-green` flows
+        // straight into the _gradings rewrite + rollup below, so the affected
+        // deterministic areas are re-evaluated (the grade itself still hangs on the
+        // schemaHash — data reuse never silently invalidates it).
         const pretestRaw = await grading[ 'DataPretest' ].run( {
             namespace,
             'toolName': schemaName,
@@ -12748,7 +12754,8 @@ allowlist, migrate-config, etc.).
             serverParams,
             sharedLists,
             'gradingDataDir': gradingDataRoot,
-            dryRun
+            dryRun,
+            force
         } )
 
         // Tool-ID: restrict the pretest view to the one addressed tool. The gate is
@@ -12934,7 +12941,7 @@ allowlist, migrate-config, etc.).
     // Memo 107 PRD-004 — bare-namespace deterministic grade: run every schema of the
     // namespace (skipRollup, so each writes its own `_gradings/` but defers the rollup),
     // then build the namespace index.json + Provider-Proof grade.json EXACTLY ONCE.
-    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } ) {
+    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, json } ) {
         const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolved.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
@@ -12944,7 +12951,7 @@ allowlist, migrate-config, etc.).
         await resolved.schemas
             .reduce( ( promise, schema ) => promise.then( async () => {
                 const sub = await FlowMcpCli.gradingDeterministic( {
-                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json, 'skipRollup': true
+                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json, 'skipRollup': true
                 } )
                 const subResult = sub.result
                 perSchema.push( {
@@ -12979,6 +12986,87 @@ allowlist, migrate-config, etc.).
         }
 
         return { 'result': out }
+    }
+
+
+    // PRD-2.3 — `grading reload <ns|ns/schema>`: re-fetch + rewrite the persisted
+    // test-N.json (force semantics), DECOUPLED from grading. It runs the data
+    // pretest with force:true so the read-cache (PRD-2.1) is bypassed and the
+    // island test data is refreshed, but it writes NO `_gradings/` entries and NO
+    // grade.json/index.json — a pure data reload. Reports the per-schema rewritten
+    // test counts + the new data stamp (dataAt). NO SILENT DEFAULTS.
+    static async gradingReload( { cwd, target, gradingDataDir, withKeys, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null || grading[ 'DataPretest' ] === undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing reload target.', 'fix': 'Usage: flowmcp grading reload <namespace> | <namespace>/<schema>' } ) }
+        }
+
+        const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
+        if( parsed.valid !== true || ( parsed.type !== 'namespace' && parsed.type !== 'schema' ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `grading reload accepts a namespace or a schema-ID, got "${target}".`, 'fix': 'Use "<namespace>" or "<namespace>/<schema>".' } ) }
+        }
+
+        const namespace = parsed.namespace
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolvedSchemas.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+        }
+
+        const targetSchemas = parsed.type === 'schema'
+            ? resolvedSchemas.schemas.filter( ( s ) => s.schemaName === parsed.name )
+            : resolvedSchemas.schemas
+        if( targetSchemas.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Schema "${target}" not found in schemaFolders[].`, 'fix': 'Address an existing schema or namespace.' } ) }
+        }
+
+        const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
+        const envObject = useKeys === true ? ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject : {}
+
+        const perSchema = []
+        await targetSchemas
+            .reduce( ( promise, schema ) => promise.then( async () => {
+                const requiredServerParams = Array.isArray( schema.main[ 'requiredServerParams' ] ) ? schema.main[ 'requiredServerParams' ] : []
+                const serverParams = useKeys === true
+                    ? FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } ).serverParams
+                    : {}
+                const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': schema.main, 'filePath': schema.sourcePath } )
+                const pretest = await grading[ 'DataPretest' ].run( {
+                    namespace,
+                    'toolName': schema.schemaName,
+                    'main': schema.main,
+                    'handlersFn': schema.handlersFn,
+                    'schemaSnapshotPath': schema.sourcePath,
+                    serverParams,
+                    sharedLists,
+                    'gradingDataDir': gradingDataRoot,
+                    'force': true
+                } )
+                const testsWritten = ( Array.isArray( pretest.results ) ? pretest.results : [] )
+                    .filter( ( r ) => r[ 'primitive' ] === 'tool' || r[ 'primitive' ] === 'resource' )
+                    .length
+                perSchema.push( {
+                    'schema': schema.schemaName,
+                    'reloaded': pretest.fromCache === false,
+                    'testsWritten': testsWritten,
+                    'ok': pretest.ok === true,
+                    'keyGated': pretest.keyGated === true,
+                    'dataAt': pretest.dataAt === undefined ? null : pretest.dataAt
+                } )
+            } ), Promise.resolve() )
+
+        return {
+            'result': {
+                'status': true,
+                'mode': 'reload',
+                'target': target,
+                'schemaCount': perSchema.length,
+                'schemas': perSchema
+            }
+        }
     }
 
 
@@ -13042,6 +13130,8 @@ allowlist, migrate-config, etc.).
                 'toolsBelowThreshold': Array.isArray( pretestRaw.toolsBelowThreshold ) ? pretestRaw.toolsBelowThreshold : [],
                 'perTool': pretestRaw.perTool === undefined || pretestRaw.perTool === null ? {} : pretestRaw.perTool,
                 'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
+                'fromCache': pretestRaw.fromCache === true,
+                'dataAt': pretestRaw.dataAt === undefined ? null : pretestRaw.dataAt,
                 'results': baseResults,
                 'errors': Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : []
             }
@@ -13094,6 +13184,8 @@ allowlist, migrate-config, etc.).
                 : [],
             'perTool': toolNode === null ? {} : { [ toolFilter ]: toolNode },
             'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
+            'fromCache': pretestRaw.fromCache === true,
+            'dataAt': pretestRaw.dataAt === undefined ? null : pretestRaw.dataAt,
             'results': filtered,
             'errors': [ ...errors, ...carried ]
         }
