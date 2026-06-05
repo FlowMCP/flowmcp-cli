@@ -459,12 +459,16 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
         } )
     }
 
-    it( 'default (skip) keeps the existing prompts.json on a second emit', async () => {
+    it( 'default (skip) keeps the existing prompts.json but still hands back the skill (round-trip read-back)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await emitConflict( { cwd, onConflict: null } )
+        const first = await emitConflict( { cwd, onConflict: null } )
         const { result } = await emitConflict( { cwd, onConflict: 'skip' } )
         expect( result.skipped ).toBe( true )
+        // a second --emit-prompts must still surface the already-emitted skill, so the
+        // default skill-text stdout keeps working on re-run without a re-fetch
+        expect( typeof result.emitSkill ).toBe( 'string' )
+        expect( result.emitSkill ).toContain( first.result.taskId )
     } )
 
     it( 'overwrite rewrites the prompts.json (skipped:false) instead of keeping a stale one', async () => {
@@ -484,5 +488,36 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
         // the rewritten artifact carries the filled emit-skill (Memo 110)
         expect( typeof rewritten.emitSkill ).toBe( 'string' )
         expect( rewritten.emitSkill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
+    } )
+} )
+
+
+// ---- `grading skill <ns>` — read-only printer of the emitted Emit-Skill ---------
+describe( 'gradingSkill — print the emitted Emit-Skill text', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'returns the filled skill text after an emit', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        const emitted = await emit( { cwd, phase: null } )
+
+        const { result } = await FlowMcpCli.gradingSkill( { cwd, target: 'demoapi', gradingDataDir: '.flowmcp/grading' } )
+        expect( result.status ).toBe( true )
+        expect( typeof result.skill ).toBe( 'string' )
+        expect( result.skill ).toContain( 'Grading Emit-Skill' )
+        expect( result.skill ).toContain( emitted.result.taskId )
+        expect( result.skill ).toContain( '--consume-scores' )
+        expect( result.skill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
+        expect( result.taskId ).toBe( emitted.result.taskId )
+    } )
+
+    it( 'errors clearly when nothing was emitted yet (no prompts.json)', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+
+        const { result } = await FlowMcpCli.gradingSkill( { cwd, target: 'demoapi', gradingDataDir: '.flowmcp/grading' } )
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'No emitted skill' )
+        expect( result.fix ).toContain( '--emit-prompts' )
     } )
 } )

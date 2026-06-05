@@ -13538,7 +13538,12 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
         }
         if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'skip' ) {
-            return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, dependencyChain } }
+            // Skip the (slow) re-emit but still hand back the ALREADY-emitted skill, so
+            // a second `--emit-prompts` keeps printing the skill text (no re-fetch). The
+            // existing prompts.json is the source — read its emitSkill if present.
+            const { data: existing } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+            const existingSkill = existing !== null && typeof existing[ 'emitSkill' ] === 'string' ? existing[ 'emitSkill' ] : undefined
+            return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, 'emitSkill': existingSkill, dependencyChain } }
         }
 
         // Phase-0/1 wiring (REV-14 Kap. 15): resolveEnv -> buildServerParams ->
@@ -14390,6 +14395,51 @@ allowlist, migrate-config, etc.).
     // Memo 097 Kap. 3 (PA-3) — flat, deduplicated error/improvement worklist for
     // one namespace. A sub-agent abarbeitet this list directly. Sources merged:
     //   - prompts.json -> pretests[].errors  (DPT-003 abort, DPT-004 test-fail /
+    // `grading skill <ns|selection>` — print the emitted Emit-Skill TEXT (read-only).
+    // The non-deterministic emit writes the self-contained skill into the island
+    // prompts.json (field `emitSkill`); this command reads it back and returns the
+    // raw text so the operator never has to dig the field out of the machine JSON by
+    // hand. NO SILENT DEFAULT: a missing prompts.json (never emitted) or a stale
+    // artifact without an `emitSkill` field is a clear coded error, not empty output.
+    static async gradingSkill( { cwd, target, gradingDataDir } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing skill target.', 'fix': 'Usage: flowmcp grading skill <namespace|selection>' } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
+        if( detected.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+        }
+
+        const promptsPath = join( detected.targetDir, 'prompts.json' )
+        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        if( prompts === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `No emitted skill found for "${target}" (no prompts.json in the island).`, 'fix': `Emit it first: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts` } ) }
+        }
+
+        const skill = prompts[ 'emitSkill' ]
+        if( typeof skill !== 'string' || skill.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `The emitted prompts.json for "${target}" carries no emit-skill (stale artifact from before the self-contained Emit-Skill).`, 'fix': `Re-emit to refresh it: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --on-conflict=overwrite` } ) }
+        }
+
+        return {
+            'result': {
+                'status': true,
+                target,
+                'taskId': prompts[ 'taskId' ] === undefined ? null : prompts[ 'taskId' ],
+                'emittedAreaSet': prompts[ 'emittedAreaSet' ] === undefined ? null : prompts[ 'emittedAreaSet' ],
+                'promptsPath': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': promptsPath } ),
+                skill
+            }
+        }
+    }
+
+
     //     not-downloadable, DPT-005 missing requiredServerParam — KEY NAME only,
     //     never the value; the emit stage already strips values)
     //   - index.json   -> blockers[]         (import / rebuild errors: {node,reason})

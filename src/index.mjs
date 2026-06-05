@@ -433,13 +433,13 @@ const runCommand = async () => {
         // non-deterministic LLM-scoring path (emit + consume), formerly only reached
         // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
         // internal mechanic (Never-delete-legacy).
-        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'skill', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | skill <ns|selection> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -489,6 +489,20 @@ const runCommand = async () => {
             return true
         }
 
+        if( subCommand === 'skill' ) {
+            // Print the emitted Emit-Skill TEXT directly. Default: raw text to stdout
+            // (pipe/redirect ready). --json: the structured envelope. An error always
+            // prints the JSON envelope so failures stay machine-readable.
+            const { result } = await FlowMcpCli.gradingSkill( { cwd, target, gradingDataDir } )
+            if( result.status === true && json !== true ) {
+                process.stdout.write( result.skill + '\n' )
+            } else {
+                output( { result } )
+            }
+
+            return true
+        }
+
         if( subCommand === 'export' ) {
             const { result } = await FlowMcpCli.gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } )
             output( { result } )
@@ -503,7 +517,16 @@ const runCommand = async () => {
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
             const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
-            output( { result } )
+            // The planned round-trip: `--emit-prompts` (without --json) RETURNS the
+            // self-contained Emit-Skill TEXT directly — the thing you hand to a
+            // subagent — so no jq/field-digging is needed. The machine envelope stays
+            // available via --json (the harness already passes it). --consume-scores
+            // and every error keep the JSON envelope so failures stay machine-readable.
+            if( emitPrompts === true && json !== true && result.status === true && typeof result.emitSkill === 'string' ) {
+                process.stdout.write( result.emitSkill + '\n' )
+            } else {
+                output( { result } )
+            }
 
             return true
         }
