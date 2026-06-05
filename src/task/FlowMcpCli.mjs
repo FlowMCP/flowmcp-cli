@@ -9665,6 +9665,56 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // PRD-4.1 — progress sink. Grading runs are slow (per-schema live pretests), so
+    // by default we tick to STDERR while running (Befund B: no progress). The machine
+    // JSON stays on STDOUT untouched. --quiet (quiet === true) silences the ticks.
+    // Stderr is chosen so a piped `... | jq` on stdout is never polluted.
+    static #emitProgress( { quiet, message } ) {
+        if( quiet === true ) { return }
+        process.stderr.write( `[grading] ${message}\n` )
+    }
+
+
+    // PRD-4.2 — concise human summary for a deterministic result, to STDERR.
+    // JSON-shape audit conclusion: NO machine key is dropped/renamed (rollup +
+    // Provider-Proof consumers depend on them); this summary is ADDITIVE and lives
+    // on stderr so a piped stdout stays pure JSON. Suppressed by --quiet and by
+    // --json (pure machine mode). Handles both the single-schema and namespace shapes.
+    static printDeterministicSummary( { result, quiet, json } ) {
+        if( quiet === true || json === true || result === null || result === undefined ) { return }
+        if( result[ 'status' ] === false && result[ 'mode' ] === undefined ) {
+            process.stderr.write( `[grading] error: ${result[ 'error' ]}\n` )
+            return
+        }
+
+        const lines = []
+        const verdict = result[ 'status' ] === true ? 'PASS' : 'FAIL'
+        lines.push( `[grading] ${result[ 'target' ]} — ${verdict}` )
+
+        if( Array.isArray( result[ 'schemas' ] ) === true ) {
+            const passed = result[ 'schemas' ].filter( ( s ) => s[ 'status' ] === true ).length
+            lines.push( `[grading]   schemas: ${passed}/${result[ 'schemaCount' ]} green` )
+        } else if( result[ 'pretest' ] !== undefined && result[ 'pretest' ] !== null ) {
+            const pretest = result[ 'pretest' ]
+            const validateOk = result[ 'validate' ] !== undefined && result[ 'validate' ] !== null ? result[ 'validate' ][ 'status' ] === true : null
+            lines.push( `[grading]   validate: ${validateOk === null ? 'n/a' : ( validateOk ? 'ok' : 'fail' )}  pretest: ${pretest[ 'ok' ] === true ? 'ok' : ( pretest[ 'keyGated' ] === true ? 'key-gated' : 'fail' )}` )
+            const stamp = pretest[ 'fromCache' ] === true ? `cached (data ${pretest[ 'dataAt' ]})` : `fresh (data ${pretest[ 'dataAt' ]})`
+            lines.push( `[grading]   data: ${stamp}` )
+            const below = Array.isArray( pretest[ 'toolsBelowThreshold' ] ) ? pretest[ 'toolsBelowThreshold' ] : []
+            if( below.length > 0 ) { lines.push( `[grading]   below bar: ${below.join( ', ' )}` ) }
+        }
+
+        if( result[ 'rollupGrade' ] !== undefined ) {
+            lines.push( `[grading]   grade: ${result[ 'rollupGrade' ]} (${result[ 'rollupStatus' ]})` )
+        }
+        if( result[ 'rollupError' ] !== undefined ) {
+            lines.push( `[grading]   rollup error: ${result[ 'rollupError' ]}` )
+        }
+
+        process.stderr.write( lines.join( '\n' ) + '\n' )
+    }
+
+
     static async #requireInit() {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -12538,7 +12588,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12638,7 +12688,7 @@ allowlist, migrate-config, etc.).
             // deterministic pretest fires authenticated requests with live keys.
             const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, 'maxTurns': maxTurnsResolved, useKeys, dryRun, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, 'maxTurns': maxTurnsResolved, useKeys, dryRun, quiet, 'dependencyChain': deps.chain } )
         }
 
         return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun, 'dependencyChain': deps.chain } )
@@ -12659,7 +12709,7 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, json, skipRollup = false } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12688,7 +12738,7 @@ allowlist, migrate-config, etc.).
         // namespace rollup (index.json) + Provider-Proof (grade.json). Delegated so
         // the single-schema path below stays unchanged.
         if( parsed.type === 'namespace' ) {
-            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json } )
+            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
         }
         if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
@@ -12747,6 +12797,9 @@ allowlist, migrate-config, etc.).
         // PRD-012 — --no-save (dryRun) runs the pretest in full but persists NOTHING
         // to the island (no summary.json / test-N.json). The deterministic path has
         // no Stage-3 writes, so dryRun here only gates the DataPretest persist.
+        // PRD-4.1 — tick the slow part (live/cached pretest) to stderr.
+        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: structural validate + data pretest${force === true ? ' (--force re-fetch)' : ''}...` } )
+
         // PRD-2.2 — force threads the cache bypass into the pretest. Without it the
         // pretest reuses the persisted test-N.json (read-cache, PRD-2.1); with it the
         // data is re-fetched. A re-fetch that flips `deterministic-green` flows
@@ -12808,6 +12861,10 @@ allowlist, migrate-config, etc.).
         // from a genuine FAIL.
         const { hints } = FlowMcpCli.#deterministicHints( { 'validate': validate, pretest } )
         const status = validate[ 'status' ] === true && pretest.ok === true
+
+        // PRD-4.1 — done-tick with the data stamp (cache reuse vs re-fetch).
+        const stamp = pretest.fromCache === true ? `cached, data ${pretest.dataAt}` : `fresh, data ${pretest.dataAt}`
+        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: ${status === true ? 'PASS' : 'FAIL'} (${stamp})` } )
 
         const result = {
             status,
@@ -12949,17 +13006,21 @@ allowlist, migrate-config, etc.).
     // Memo 107 PRD-004 — bare-namespace deterministic grade: run every schema of the
     // namespace (skipRollup, so each writes its own `_gradings/` but defers the rollup),
     // then build the namespace index.json + Provider-Proof grade.json EXACTLY ONCE.
-    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, json } ) {
+    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, quiet = false, json } ) {
         const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolved.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
         }
 
+        const total = resolved.schemas.length
+        FlowMcpCli.#emitProgress( { quiet, 'message': `namespace ${namespace}: ${total} schema(s) to grade deterministically` } )
+
         const perSchema = []
         await resolved.schemas
-            .reduce( ( promise, schema ) => promise.then( async () => {
+            .reduce( ( promise, schema, index ) => promise.then( async () => {
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${total}] ${schema.schemaName}` } )
                 const sub = await FlowMcpCli.gradingDeterministic( {
-                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json, 'skipRollup': true
+                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, 'quiet': true, json, 'skipRollup': true
                 } )
                 const subResult = sub.result
                 perSchema.push( {
@@ -13003,7 +13064,7 @@ allowlist, migrate-config, etc.).
     // island test data is refreshed, but it writes NO `_gradings/` entries and NO
     // grade.json/index.json — a pure data reload. Reports the per-schema rewritten
     // test counts + the new data stamp (dataAt). NO SILENT DEFAULTS.
-    static async gradingReload( { cwd, target, gradingDataDir, withKeys, json } ) {
+    static async gradingReload( { cwd, target, gradingDataDir, withKeys, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -13035,8 +13096,11 @@ allowlist, migrate-config, etc.).
         const envObject = useKeys === true ? ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject : {}
 
         const perSchema = []
+        const reloadTotal = targetSchemas.length
+        FlowMcpCli.#emitProgress( { quiet, 'message': `reload ${target}: re-fetch ${reloadTotal} schema(s)...` } )
         await targetSchemas
-            .reduce( ( promise, schema ) => promise.then( async () => {
+            .reduce( ( promise, schema, index ) => promise.then( async () => {
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${reloadTotal}] reload ${schema.schemaName}` } )
                 const requiredServerParams = Array.isArray( schema.main[ 'requiredServerParams' ] ) ? schema.main[ 'requiredServerParams' ] : []
                 const serverParams = useKeys === true
                     ? FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } ).serverParams
@@ -13461,7 +13525,7 @@ allowlist, migrate-config, etc.).
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, maxTurns = 25, useKeys, dryRun = false, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, maxTurns = 25, useKeys, dryRun = false, quiet = false, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
@@ -13512,9 +13576,11 @@ allowlist, migrate-config, etc.).
         // emitted AREA prompts later, not the pretest pass.
         const pretestUnits = liveSchemas
 
+        FlowMcpCli.#emitProgress( { quiet, 'message': `emit ${target}: data pretest over ${pretestUnits.length} schema(s)...` } )
         await pretestUnits
-            .reduce( ( promise, unit ) => promise.then( async () => {
+            .reduce( ( promise, unit, index ) => promise.then( async () => {
                 const { schemaName, main, handlersFn, sourcePath } = unit
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${pretestUnits.length}] pretest ${schemaName}` } )
                 if( main === null || main === undefined ) {
                     pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema source for ${schemaName}` ] } )
                     return

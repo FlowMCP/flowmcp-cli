@@ -39,6 +39,7 @@ const args = parseArgs( {
         'consume-scores': { type: 'string' },
         'on-conflict': { type: 'string' },
         'no-save': { type: 'boolean' },
+        'quiet': { type: 'boolean' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
         'fix-template': { type: 'boolean' },
@@ -465,10 +466,16 @@ const runCommand = async () => {
         // PRD-2.2 — --force bypasses the read-cache (PRD-2.1): re-fetch the test
         // data instead of reusing the persisted test-N.json.
         const force = values[ 'force' ] === true
+        // PRD-4.1 — --quiet silences the stderr progress; stdout JSON is unaffected.
+        const quiet = values[ 'quiet' ] === true
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
             output( { result } )
+            // PRD-4.2 — a concise human summary to STDERR (not on stdout, so a piped
+            // `... | jq` stays pure machine JSON). Suppressed by --quiet and by --json
+            // (pure machine mode).
+            FlowMcpCli.printDeterministicSummary( { result, quiet, json } )
 
             return true
         }
@@ -476,7 +483,7 @@ const runCommand = async () => {
         if( subCommand === 'reload' ) {
             // PRD-2.3 — re-fetch + rewrite the persisted test-N.json only (force),
             // decoupled from grading: no _gradings/grade.json writes.
-            const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, json } )
+            const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, quiet, json } )
             output( { result } )
 
             return true
@@ -495,7 +502,7 @@ const runCommand = async () => {
             // mechanic. Both share the exact same gradingRun() implementation (no
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
             output( { result } )
 
             return true

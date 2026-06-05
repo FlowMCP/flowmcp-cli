@@ -408,3 +408,51 @@ describe( 'gradingReload — data reload only (Memo 110 PRD-2.3)', () => {
         expect( result.error ).toContain( 'namespace or a schema-ID' )
     } )
 } )
+
+
+describe( 'gradingDeterministic — progress + summary (Memo 110 P4)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'ticks progress to STDERR by default, suppressed by --quiet', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        const writes = []
+        const spy = ( chunk ) => { writes.push( String( chunk ) ); return true }
+        const original = process.stderr.write
+        process.stderr.write = spy
+        try {
+            await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+            const loud = writes.join( '' )
+            writes.length = 0
+            await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, quiet: true, json: true } )
+            const quiet = writes.join( '' )
+
+            expect( loud ).toContain( '[grading]' )
+            expect( loud ).toContain( 'demoapi/demoapi' )
+            expect( quiet ).toBe( '' )
+        } finally {
+            process.stderr.write = original
+        }
+    } )
+
+    it( 'printDeterministicSummary writes to stderr only when not quiet/json', () => {
+        const result = { status: true, mode: 'deterministic', target: 'demoapi/demoapi', validate: { status: true }, pretest: { ok: true, fromCache: true, dataAt: '2026-06-05T10:00:00.000Z', toolsBelowThreshold: [] } }
+        const writes = []
+        const original = process.stderr.write
+        process.stderr.write = ( chunk ) => { writes.push( String( chunk ) ); return true }
+        try {
+            FlowMcpCli.printDeterministicSummary( { result, quiet: false, json: false } )
+            FlowMcpCli.printDeterministicSummary( { result, quiet: true, json: false } )
+            FlowMcpCli.printDeterministicSummary( { result, quiet: false, json: true } )
+        } finally {
+            process.stderr.write = original
+        }
+        const out = writes.join( '' )
+        expect( out ).toContain( 'demoapi/demoapi — PASS' )
+        expect( out ).toContain( 'cached' )
+        // only the first call (not quiet, not json) emitted -> exactly one summary block
+        expect( out.match( /— PASS/g ).length ).toBe( 1 )
+    } )
+} )
