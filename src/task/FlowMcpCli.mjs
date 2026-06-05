@@ -14806,12 +14806,18 @@ allowlist, migrate-config, etc.).
             .filter( ( name ) => inFlowScope( name ) === true )
             .filter( ( name ) => isApplicable( name ) === true )
 
-        // Split ready areas by their data-driven classification.
+        // Split ready areas by their data-driven classification. Befund I-4: a
+        // `both`-classified area carries a deterministic gate (done for free by the
+        // CLI) AND a non-deterministic LLM round, so it appears in BOTH buckets — the
+        // free det part is surfaced as deterministicNow, the descriptive questions
+        // bundle into the non-det emit. `deterministic` -> det only, `non-deterministic`
+        // -> nonDet only.
         const classified = readyAreas
             .reduce( ( acc, name ) => {
                 const c = AreaDependencyGraph.classifyArea( { 'graph': loaded.graph, 'area': name } )
                 if( c.errors.length > 0 ) { acc.errors.push( c.errors.join( '; ' ) ); return acc }
-                if( c.classification === 'deterministic' ) { acc.det.push( name ) } else { acc.nonDet.push( name ) }
+                if( c.classification === 'deterministic' || c.classification === 'both' ) { acc.det.push( name ) }
+                if( c.classification === 'non-deterministic' || c.classification === 'both' ) { acc.nonDet.push( name ) }
                 return acc
             }, { 'det': [], 'nonDet': [], 'errors': [] } )
         if( classified.errors.length > 0 ) {

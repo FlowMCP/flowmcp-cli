@@ -200,17 +200,23 @@ describe( 'PRD-009 — worklist is a thin wrapper over the shared collector', ()
 describe( 'PRD-010 — nextAction split (graph-driven, read-only, no emission)', () => {
     afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
 
-    it( 'below deterministic-green: namespace areas are gated (cost guard), nonDeterministic is null', async () => {
+    it( 'below deterministic-green: namespace areas stay gated; the schema-areas form the ready non-det set (Befund I-4)', async () => {
         const cwd = await freshCwd()
         await importAndEmit( { cwd, ok: false } )
 
         const { result } = await FlowMcpCli.gradingState( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', json: true } )
         const na = result.nextAction
         expect( na.status ).toBe( true )
-        expect( na.nonDeterministic ).toBeNull()
+        // single-test / tools-aggregate-schema are `both` (deterministic gate + LLM
+        // round) and only need structural-valid, so even below deterministic-green
+        // they are the ready non-det set (this is exactly what --emit-prompts emits).
+        expect( na.nonDeterministic ).not.toBeNull()
+        expect( na.nonDeterministic.areaSet ).toContain( 'single-test' )
+        // the gated NAMESPACE areas (requiredLevel deterministic-green) are still held.
         const gatedAreas = na.gated.map( ( g ) => g.area )
         expect( gatedAreas ).toContain( 'namespace-description' )
         expect( gatedAreas ).toContain( 'namespace-skills' )
+        expect( na.nonDeterministic.areaSet ).not.toContain( 'namespace-description' )
         na.gated.forEach( ( g ) => { expect( typeof g.reason ).toBe( 'string' ); expect( g.reason.length ).toBeGreaterThan( 0 ) } )
     } )
 
