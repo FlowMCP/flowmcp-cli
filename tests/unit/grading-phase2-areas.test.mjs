@@ -459,12 +459,16 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
         } )
     }
 
-    it( 'default (skip) keeps the existing prompts.json on a second emit', async () => {
+    it( 'default (skip) keeps the existing prompts.json but still hands back the skill (round-trip read-back)', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
-        await emitConflict( { cwd, onConflict: null } )
+        const first = await emitConflict( { cwd, onConflict: null } )
         const { result } = await emitConflict( { cwd, onConflict: 'skip' } )
         expect( result.skipped ).toBe( true )
+        // a second --emit-prompts must still surface the already-emitted skill, so the
+        // default skill-text stdout keeps working on re-run without a re-fetch
+        expect( typeof result.emitSkill ).toBe( 'string' )
+        expect( result.emitSkill ).toContain( first.result.taskId )
     } )
 
     it( 'overwrite rewrites the prompts.json (skipped:false) instead of keeping a stale one', async () => {

@@ -13538,7 +13538,12 @@ allowlist, migrate-config, etc.).
             return { 'result': FlowMcpCli.#error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
         }
         if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'skip' ) {
-            return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, dependencyChain } }
+            // Skip the (slow) re-emit but still hand back the ALREADY-emitted skill, so
+            // a second `--emit-prompts` keeps printing the skill text (no re-fetch). The
+            // existing prompts.json is the source — read its emitSkill if present.
+            const { data: existing } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+            const existingSkill = existing !== null && typeof existing[ 'emitSkill' ] === 'string' ? existing[ 'emitSkill' ] : undefined
+            return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, 'emitSkill': existingSkill, dependencyChain } }
         }
 
         // Phase-0/1 wiring (REV-14 Kap. 15): resolveEnv -> buildServerParams ->

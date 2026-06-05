@@ -517,7 +517,16 @@ const runCommand = async () => {
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
             const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
-            output( { result } )
+            // The planned round-trip: `--emit-prompts` (without --json) RETURNS the
+            // self-contained Emit-Skill TEXT directly — the thing you hand to a
+            // subagent — so no jq/field-digging is needed. The machine envelope stays
+            // available via --json (the harness already passes it). --consume-scores
+            // and every error keep the JSON envelope so failures stay machine-readable.
+            if( emitPrompts === true && json !== true && result.status === true && typeof result.emitSkill === 'string' ) {
+                process.stdout.write( result.emitSkill + '\n' )
+            } else {
+                output( { result } )
+            }
 
             return true
         }
