@@ -54,6 +54,7 @@ const args = parseArgs( {
         'grading-data': { type: 'string' },
         'export-dir': { type: 'string' },
         'max-iterations': { type: 'string' },
+        'max-turns': { type: 'string' },
         'with-keys': { type: 'boolean' },
         'set-data-dir': { type: 'string' },
         'set-export-dir': { type: 'string' }
@@ -453,6 +454,7 @@ const runCommand = async () => {
         const gradingDataDir = values[ 'grading-data' ] === undefined ? null : values[ 'grading-data' ]
         const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const maxIterations = values[ 'max-iterations' ] === undefined ? null : values[ 'max-iterations' ]
+        const maxTurns = values[ 'max-turns' ] === undefined ? null : values[ 'max-turns' ]
         const withKeys = values[ 'with-keys' ] === true
         const only = values[ 'only' ] === undefined ? null : values[ 'only' ]
         const json = values[ 'json' ] === true
@@ -493,7 +495,7 @@ const runCommand = async () => {
             // mechanic. Both share the exact same gradingRun() implementation (no
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, json } )
             output( { result } )
 
             return true
