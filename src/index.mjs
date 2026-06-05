@@ -39,6 +39,7 @@ const args = parseArgs( {
         'consume-scores': { type: 'string' },
         'on-conflict': { type: 'string' },
         'no-save': { type: 'boolean' },
+        'quiet': { type: 'boolean' },
         'help': { type: 'boolean', short: 'h' },
         'strict': { type: 'boolean' },
         'fix-template': { type: 'boolean' },
@@ -54,6 +55,7 @@ const args = parseArgs( {
         'grading-data': { type: 'string' },
         'export-dir': { type: 'string' },
         'max-iterations': { type: 'string' },
+        'max-turns': { type: 'string' },
         'with-keys': { type: 'boolean' },
         'set-data-dir': { type: 'string' },
         'set-export-dir': { type: 'string' }
@@ -431,13 +433,13 @@ const runCommand = async () => {
         // non-deterministic LLM-scoring path (emit + consume), formerly only reached
         // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
         // internal mechanic (Never-delete-legacy).
-        const validSubCommands = [ 'deterministic', 'non-deterministic', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -453,6 +455,7 @@ const runCommand = async () => {
         const gradingDataDir = values[ 'grading-data' ] === undefined ? null : values[ 'grading-data' ]
         const gradingExportDir = values[ 'export-dir' ] === undefined ? null : values[ 'export-dir' ]
         const maxIterations = values[ 'max-iterations' ] === undefined ? null : values[ 'max-iterations' ]
+        const maxTurns = values[ 'max-turns' ] === undefined ? null : values[ 'max-turns' ]
         const withKeys = values[ 'with-keys' ] === true
         const only = values[ 'only' ] === undefined ? null : values[ 'only' ]
         const json = values[ 'json' ] === true
@@ -460,9 +463,27 @@ const runCommand = async () => {
         // single internal switch dryRun. When set, grading performs but writes
         // NOTHING to the island (no pretest persist, no index/grade/state).
         const dryRun = values[ 'no-save' ] === true
+        // PRD-2.2 — --force bypasses the read-cache (PRD-2.1): re-fetch the test
+        // data instead of reusing the persisted test-N.json.
+        const force = values[ 'force' ] === true
+        // PRD-4.1 — --quiet silences the stderr progress; stdout JSON is unaffected.
+        const quiet = values[ 'quiet' ] === true
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
+            output( { result } )
+            // PRD-4.2 — a concise human summary to STDERR (not on stdout, so a piped
+            // `... | jq` stays pure machine JSON). Suppressed by --quiet and by --json
+            // (pure machine mode).
+            FlowMcpCli.printDeterministicSummary( { result, quiet, json } )
+
+            return true
+        }
+
+        if( subCommand === 'reload' ) {
+            // PRD-2.3 — re-fetch + rewrite the persisted test-N.json only (force),
+            // decoupled from grading: no _gradings/grade.json writes.
+            const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, quiet, json } )
             output( { result } )
 
             return true
@@ -481,7 +502,7 @@ const runCommand = async () => {
             // mechanic. Both share the exact same gradingRun() implementation (no
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
             output( { result } )
 
             return true

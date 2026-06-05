@@ -9665,6 +9665,56 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // PRD-4.1 — progress sink. Grading runs are slow (per-schema live pretests), so
+    // by default we tick to STDERR while running (Befund B: no progress). The machine
+    // JSON stays on STDOUT untouched. --quiet (quiet === true) silences the ticks.
+    // Stderr is chosen so a piped `... | jq` on stdout is never polluted.
+    static #emitProgress( { quiet, message } ) {
+        if( quiet === true ) { return }
+        process.stderr.write( `[grading] ${message}\n` )
+    }
+
+
+    // PRD-4.2 — concise human summary for a deterministic result, to STDERR.
+    // JSON-shape audit conclusion: NO machine key is dropped/renamed (rollup +
+    // Provider-Proof consumers depend on them); this summary is ADDITIVE and lives
+    // on stderr so a piped stdout stays pure JSON. Suppressed by --quiet and by
+    // --json (pure machine mode). Handles both the single-schema and namespace shapes.
+    static printDeterministicSummary( { result, quiet, json } ) {
+        if( quiet === true || json === true || result === null || result === undefined ) { return }
+        if( result[ 'status' ] === false && result[ 'mode' ] === undefined ) {
+            process.stderr.write( `[grading] error: ${result[ 'error' ]}\n` )
+            return
+        }
+
+        const lines = []
+        const verdict = result[ 'status' ] === true ? 'PASS' : 'FAIL'
+        lines.push( `[grading] ${result[ 'target' ]} — ${verdict}` )
+
+        if( Array.isArray( result[ 'schemas' ] ) === true ) {
+            const passed = result[ 'schemas' ].filter( ( s ) => s[ 'status' ] === true ).length
+            lines.push( `[grading]   schemas: ${passed}/${result[ 'schemaCount' ]} green` )
+        } else if( result[ 'pretest' ] !== undefined && result[ 'pretest' ] !== null ) {
+            const pretest = result[ 'pretest' ]
+            const validateOk = result[ 'validate' ] !== undefined && result[ 'validate' ] !== null ? result[ 'validate' ][ 'status' ] === true : null
+            lines.push( `[grading]   validate: ${validateOk === null ? 'n/a' : ( validateOk ? 'ok' : 'fail' )}  pretest: ${pretest[ 'ok' ] === true ? 'ok' : ( pretest[ 'keyGated' ] === true ? 'key-gated' : 'fail' )}` )
+            const stamp = pretest[ 'fromCache' ] === true ? `cached (data ${pretest[ 'dataAt' ]})` : `fresh (data ${pretest[ 'dataAt' ]})`
+            lines.push( `[grading]   data: ${stamp}` )
+            const below = Array.isArray( pretest[ 'toolsBelowThreshold' ] ) ? pretest[ 'toolsBelowThreshold' ] : []
+            if( below.length > 0 ) { lines.push( `[grading]   below bar: ${below.join( ', ' )}` ) }
+        }
+
+        if( result[ 'rollupGrade' ] !== undefined ) {
+            lines.push( `[grading]   grade: ${result[ 'rollupGrade' ]} (${result[ 'rollupStatus' ]})` )
+        }
+        if( result[ 'rollupError' ] !== undefined ) {
+            lines.push( `[grading]   rollup error: ${result[ 'rollupError' ]}` )
+        }
+
+        process.stderr.write( lines.join( '\n' ) + '\n' )
+    }
+
+
     static async #requireInit() {
         const globalConfigPath = FlowMcpCli.#globalConfigPath()
         const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
@@ -12538,7 +12588,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, withKeys, dryRun = false, json } ) {
+    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12549,6 +12599,14 @@ allowlist, migrate-config, etc.).
         const { maxIterations: maxIterationsResolved, error: maxIterationsError } = FlowMcpCli.#resolveMaxIterations( { maxIterations } )
         if( maxIterationsError !== null ) {
             return { 'result': FlowMcpCli.#error( { 'error': maxIterationsError, 'fix': 'Pass --max-iterations as a positive integer (default 1).' } ) }
+        }
+
+        // PRD-3.5 — the Goal-Block turn bound is configurable (was hardcoded 25). NO
+        // SILENT DEFAULT: absent -> 25 (the documented default); a supplied value must
+        // parse to a positive integer.
+        const { maxTurns: maxTurnsResolved, error: maxTurnsError } = FlowMcpCli.#resolveMaxTurns( { maxTurns } )
+        if( maxTurnsError !== null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': maxTurnsError, 'fix': 'Pass --max-turns as a positive integer (default 25).' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
@@ -12630,7 +12688,7 @@ allowlist, migrate-config, etc.).
             // deterministic pretest fires authenticated requests with live keys.
             const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, useKeys, dryRun, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, 'maxTurns': maxTurnsResolved, useKeys, dryRun, quiet, 'dependencyChain': deps.chain } )
         }
 
         return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun, 'dependencyChain': deps.chain } )
@@ -12651,7 +12709,7 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, json, skipRollup = false } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12680,7 +12738,7 @@ allowlist, migrate-config, etc.).
         // namespace rollup (index.json) + Provider-Proof (grade.json). Delegated so
         // the single-schema path below stays unchanged.
         if( parsed.type === 'namespace' ) {
-            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } )
+            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
         }
         if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
@@ -12739,6 +12797,15 @@ allowlist, migrate-config, etc.).
         // PRD-012 — --no-save (dryRun) runs the pretest in full but persists NOTHING
         // to the island (no summary.json / test-N.json). The deterministic path has
         // no Stage-3 writes, so dryRun here only gates the DataPretest persist.
+        // PRD-4.1 — tick the slow part (live/cached pretest) to stderr.
+        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: structural validate + data pretest${force === true ? ' (--force re-fetch)' : ''}...` } )
+
+        // PRD-2.2 — force threads the cache bypass into the pretest. Without it the
+        // pretest reuses the persisted test-N.json (read-cache, PRD-2.1); with it the
+        // data is re-fetched. A re-fetch that flips `deterministic-green` flows
+        // straight into the _gradings rewrite + rollup below, so the affected
+        // deterministic areas are re-evaluated (the grade itself still hangs on the
+        // schemaHash — data reuse never silently invalidates it).
         const pretestRaw = await grading[ 'DataPretest' ].run( {
             namespace,
             'toolName': schemaName,
@@ -12748,7 +12815,8 @@ allowlist, migrate-config, etc.).
             serverParams,
             sharedLists,
             'gradingDataDir': gradingDataRoot,
-            dryRun
+            dryRun,
+            force
         } )
 
         // Tool-ID: restrict the pretest view to the one addressed tool. The gate is
@@ -12793,6 +12861,10 @@ allowlist, migrate-config, etc.).
         // from a genuine FAIL.
         const { hints } = FlowMcpCli.#deterministicHints( { 'validate': validate, pretest } )
         const status = validate[ 'status' ] === true && pretest.ok === true
+
+        // PRD-4.1 — done-tick with the data stamp (cache reuse vs re-fetch).
+        const stamp = pretest.fromCache === true ? `cached, data ${pretest.dataAt}` : `fresh, data ${pretest.dataAt}`
+        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: ${status === true ? 'PASS' : 'FAIL'} (${stamp})` } )
 
         const result = {
             status,
@@ -12934,17 +13006,21 @@ allowlist, migrate-config, etc.).
     // Memo 107 PRD-004 — bare-namespace deterministic grade: run every schema of the
     // namespace (skipRollup, so each writes its own `_gradings/` but defers the rollup),
     // then build the namespace index.json + Provider-Proof grade.json EXACTLY ONCE.
-    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json } ) {
+    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, quiet = false, json } ) {
         const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolved.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
         }
 
+        const total = resolved.schemas.length
+        FlowMcpCli.#emitProgress( { quiet, 'message': `namespace ${namespace}: ${total} schema(s) to grade deterministically` } )
+
         const perSchema = []
         await resolved.schemas
-            .reduce( ( promise, schema ) => promise.then( async () => {
+            .reduce( ( promise, schema, index ) => promise.then( async () => {
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${total}] ${schema.schemaName}` } )
                 const sub = await FlowMcpCli.gradingDeterministic( {
-                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, json, 'skipRollup': true
+                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, 'quiet': true, json, 'skipRollup': true
                 } )
                 const subResult = sub.result
                 perSchema.push( {
@@ -12979,6 +13055,90 @@ allowlist, migrate-config, etc.).
         }
 
         return { 'result': out }
+    }
+
+
+    // PRD-2.3 — `grading reload <ns|ns/schema>`: re-fetch + rewrite the persisted
+    // test-N.json (force semantics), DECOUPLED from grading. It runs the data
+    // pretest with force:true so the read-cache (PRD-2.1) is bypassed and the
+    // island test data is refreshed, but it writes NO `_gradings/` entries and NO
+    // grade.json/index.json — a pure data reload. Reports the per-schema rewritten
+    // test counts + the new data stamp (dataAt). NO SILENT DEFAULTS.
+    static async gradingReload( { cwd, target, gradingDataDir, withKeys, quiet = false, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null || grading[ 'DataPretest' ] === undefined ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing reload target.', 'fix': 'Usage: flowmcp grading reload <namespace> | <namespace>/<schema>' } ) }
+        }
+
+        const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
+        if( parsed.valid !== true || ( parsed.type !== 'namespace' && parsed.type !== 'schema' ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `grading reload accepts a namespace or a schema-ID, got "${target}".`, 'fix': 'Use "<namespace>" or "<namespace>/<schema>".' } ) }
+        }
+
+        const namespace = parsed.namespace
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolvedSchemas.status === false ) {
+            return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+        }
+
+        const targetSchemas = parsed.type === 'schema'
+            ? resolvedSchemas.schemas.filter( ( s ) => s.schemaName === parsed.name )
+            : resolvedSchemas.schemas
+        if( targetSchemas.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `Schema "${target}" not found in schemaFolders[].`, 'fix': 'Address an existing schema or namespace.' } ) }
+        }
+
+        const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
+        const envObject = useKeys === true ? ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject : {}
+
+        const perSchema = []
+        const reloadTotal = targetSchemas.length
+        FlowMcpCli.#emitProgress( { quiet, 'message': `reload ${target}: re-fetch ${reloadTotal} schema(s)...` } )
+        await targetSchemas
+            .reduce( ( promise, schema, index ) => promise.then( async () => {
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${reloadTotal}] reload ${schema.schemaName}` } )
+                const requiredServerParams = Array.isArray( schema.main[ 'requiredServerParams' ] ) ? schema.main[ 'requiredServerParams' ] : []
+                const serverParams = useKeys === true
+                    ? FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } ).serverParams
+                    : {}
+                const { sharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': schema.main, 'filePath': schema.sourcePath } )
+                const pretest = await grading[ 'DataPretest' ].run( {
+                    namespace,
+                    'toolName': schema.schemaName,
+                    'main': schema.main,
+                    'handlersFn': schema.handlersFn,
+                    'schemaSnapshotPath': schema.sourcePath,
+                    serverParams,
+                    sharedLists,
+                    'gradingDataDir': gradingDataRoot,
+                    'force': true
+                } )
+                const testsWritten = ( Array.isArray( pretest.results ) ? pretest.results : [] )
+                    .filter( ( r ) => r[ 'primitive' ] === 'tool' || r[ 'primitive' ] === 'resource' )
+                    .length
+                perSchema.push( {
+                    'schema': schema.schemaName,
+                    'reloaded': pretest.fromCache === false,
+                    'testsWritten': testsWritten,
+                    'ok': pretest.ok === true,
+                    'keyGated': pretest.keyGated === true,
+                    'dataAt': pretest.dataAt === undefined ? null : pretest.dataAt
+                } )
+            } ), Promise.resolve() )
+
+        return {
+            'result': {
+                'status': true,
+                'mode': 'reload',
+                'target': target,
+                'schemaCount': perSchema.length,
+                'schemas': perSchema
+            }
+        }
     }
 
 
@@ -13042,6 +13202,8 @@ allowlist, migrate-config, etc.).
                 'toolsBelowThreshold': Array.isArray( pretestRaw.toolsBelowThreshold ) ? pretestRaw.toolsBelowThreshold : [],
                 'perTool': pretestRaw.perTool === undefined || pretestRaw.perTool === null ? {} : pretestRaw.perTool,
                 'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
+                'fromCache': pretestRaw.fromCache === true,
+                'dataAt': pretestRaw.dataAt === undefined ? null : pretestRaw.dataAt,
                 'results': baseResults,
                 'errors': Array.isArray( pretestRaw.errors ) ? pretestRaw.errors : []
             }
@@ -13094,6 +13256,8 @@ allowlist, migrate-config, etc.).
                 : [],
             'perTool': toolNode === null ? {} : { [ toolFilter ]: toolNode },
             'stopReason': pretestRaw.stopReason === undefined ? null : pretestRaw.stopReason,
+            'fromCache': pretestRaw.fromCache === true,
+            'dataAt': pretestRaw.dataAt === undefined ? null : pretestRaw.dataAt,
             'results': filtered,
             'errors': [ ...errors, ...carried ]
         }
@@ -13180,6 +13344,22 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // PRD-3.5 — resolve the configurable Goal-Block turn bound. Absent -> 25 (the
+    // documented default); a supplied value must be a positive integer. NO SILENT
+    // DEFAULT for a malformed value (it errors rather than falling back to 25).
+    static #resolveMaxTurns( { maxTurns } ) {
+        if( maxTurns === null || maxTurns === undefined ) {
+            return { 'maxTurns': 25, 'error': null }
+        }
+        const parsed = Number( maxTurns )
+        if( Number.isInteger( parsed ) === false || parsed < 1 ) {
+            return { 'maxTurns': null, 'error': `Invalid --max-turns value: ${maxTurns}` }
+        }
+
+        return { 'maxTurns': parsed, 'error': null }
+    }
+
+
     // PRD-004 — resolve the --phase flag into a multi-area selector. Three explicit
     // modes, no silent default:
     //   absent          -> { mode: 'default', areas: null } (all applicable)
@@ -13228,22 +13408,124 @@ allowlist, migrate-config, etc.).
     // Compose one prompt per grading area via the AreaPromptLoader (Memo 097
     // Kap. 9.0). The loader reuses PromptBuilder.build and resolves the package-
     // local prompts/ tree itself, so the CLI does not guess paths.
-    static async #composeGradingAreas( { grading, flow } ) {
+    static async #composeGradingAreas( { grading, flow, substitutions = null } ) {
         const AreaPromptLoader = grading[ 'AreaPromptLoader' ]
         if( AreaPromptLoader === undefined || AreaPromptLoader === null ) {
             throw new Error( 'AreaPromptLoader unavailable from flowmcp-grading — update the dependency.' )
         }
         const { promptsRoot } = AreaPromptLoader.getPromptsRoot()
-        const { areas } = await AreaPromptLoader.loadAllAreas( { promptsRoot, flow } )
+        // PRD-3.2: pass the substitution context so the composed prompts carry real
+        // schema paths + tool/namespace names (no torso). A null context keeps the
+        // legacy placeholder behaviour (back-compat for callers without schema data).
+        const { areas } = await AreaPromptLoader.loadAllAreas( { promptsRoot, flow, substitutions } )
 
         return { areas }
+    }
+
+
+    // PRD-3.2 — build the emit substitution context for a provider. Paths are
+    // REPO-RELATIVE (git-security: never leak an absolute path into the emitted
+    // artifact). The single-test/tools-aggregate areas are bundled across the
+    // namespace, so {{TOOL_NAME}} resolves to the joined declared tool list and
+    // {{SCHEMA_NAME}} to the schema name (single schema) or the namespace.
+    static #buildEmitSubstitutions( { cwd, namespace, liveSchemas, pretests } ) {
+        const allTools = liveSchemas
+            .flatMap( ( s ) => {
+                const tools = s.main[ 'tools' ] || s.main[ 'routes' ] || {}
+                return Object.keys( tools )
+            } )
+        const toolName = allTools.length > 0 ? allTools.join( ', ' ) : namespace
+        const schemaName = liveSchemas.length === 1 ? liveSchemas[ 0 ].schemaName : namespace
+        const firstSchema = liveSchemas[ 0 ]
+        const schemaPath = firstSchema !== undefined && typeof firstSchema.sourcePath === 'string'
+            ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': firstSchema.sourcePath } )
+            : `providers/${namespace}`
+        const firstPretest = pretests.find( ( p ) => typeof p.summaryPath === 'string' )
+        const responseFixturePath = firstPretest !== undefined
+            ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': firstPretest.summaryPath } )
+            : `providers/${namespace}`
+
+        return { namespace, schemaName, toolName, schemaPath, responseFixturePath }
+    }
+
+
+    // PRD-3.3/3.4 — assemble the ONE self-contained Emit-Skill text. Bundles every
+    // READY area (non-null prompt = the currently-emittable stage) into a single
+    // instruction a subagent works in one pass, and writes the Task-ID + the exact
+    // --consume-scores return command INTO the text (Kap 10.1). Hard-gated stage-2
+    // areas are named so the operator knows a follow-up emit is due once every
+    // schema is deterministic-green.
+    static #buildEmitSkill( { target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton } ) {
+        const ready = emittedAreas
+            .filter( ( a ) => typeof a.prompt === 'string' && a.prompt.length > 0 )
+        const deferred = emittedAreas
+            .filter( ( a ) => a.prompt === null || a.prompt === undefined )
+            .map( ( a ) => a.area )
+
+        const header = [
+            '# Grading Emit-Skill',
+            '',
+            'This is a grading skill. Hand it to a subagent and follow the steps in',
+            'order. Work the bundled areas below in a SINGLE pass, then return your',
+            'results via the command at the end. Answer only from the files you read —',
+            'no web research, no assumptions.',
+            '',
+            `- Target: \`${target}\` (flow: ${flow}, namespace: ${namespace})`,
+            `- Task-ID: \`${taskId}\``,
+            `- Ready areas this pass: ${ready.map( ( a ) => a.area ).join( ', ' ) || '(none)'}`
+        ].join( '\n' )
+
+        const gatedNote = ( Array.isArray( gatedAreas ) ? gatedAreas : [] ).length > 0
+            ? [
+                '',
+                '## Gated areas (NOT in this pass)',
+                '',
+                'These stage-2 areas are emitted in a FOLLOW-UP skill once every schema',
+                'of the namespace is deterministic-green — do not attempt them now:',
+                ...( gatedAreas.map( ( g ) => `- ${typeof g === 'string' ? g : ( g.area === undefined ? JSON.stringify( g ) : `${g.area} (${g.reason === undefined ? 'gated' : g.reason})` )}` ) )
+            ].join( '\n' )
+            : ''
+
+        const deferredNote = deferred.length > 0
+            ? `\n\n## Deferred areas\n\nComposed by the harness with the resolved persona (not in this text): ${deferred.join( ', ' )}.`
+            : ''
+
+        const areaBlocks = ready
+            .map( ( a ) => `\n\n---\n\n## Area: ${a.area}\n\n${a.prompt}` )
+            .join( '' )
+
+        const returnContract = [
+            '',
+            '',
+            '---',
+            '',
+            '## Return your results',
+            '',
+            'Produce ONE result object per area in this pass. Shape:',
+            '',
+            '```json',
+            JSON.stringify( payloadSkeleton, null, 2 ),
+            '```',
+            '',
+            'When finished, return the filled array by running:',
+            '',
+            '```bash',
+            `flowmcp grading non-deterministic ${namespace} --consume-scores <your-results-file.json>`,
+            '```',
+            '',
+            `The results file MUST carry this Task-ID (\`${taskId}\`) so consume-scores can`,
+            'match your answers to this emit. Provide exactly the asked number of results',
+            'per area — no more, no fewer.'
+        ].join( '\n' )
+
+        return `${header}${gatedNote}${deferredNote}${areaBlocks}${returnContract}\n`
     }
 
 
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, useKeys, dryRun = false, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, maxTurns = 25, useKeys, dryRun = false, quiet = false, dependencyChain } ) {
         const namespace = basename( targetDir )
         const promptsPath = join( targetDir, 'prompts.json' )
         const statePath = join( targetDir, 'state.json' )
@@ -13294,9 +13576,11 @@ allowlist, migrate-config, etc.).
         // emitted AREA prompts later, not the pretest pass.
         const pretestUnits = liveSchemas
 
+        FlowMcpCli.#emitProgress( { quiet, 'message': `emit ${target}: data pretest over ${pretestUnits.length} schema(s)...` } )
         await pretestUnits
-            .reduce( ( promise, unit ) => promise.then( async () => {
+            .reduce( ( promise, unit, index ) => promise.then( async () => {
                 const { schemaName, main, handlersFn, sourcePath } = unit
+                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${pretestUnits.length}] pretest ${schemaName}` } )
                 if( main === null || main === undefined ) {
                     pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema source for ${schemaName}` ] } )
                     return
@@ -13340,9 +13624,11 @@ allowlist, migrate-config, etc.).
 
         // Goal-Block (PromptBuilder) — the completion condition + surfacing
         // convention that drives the harness /goal loop (Stage 2).
-        const { goalBlock, condition, maxTurns } = grading[ 'PromptBuilder' ].buildGoalBlock( {
+        // PRD-3.5 — maxTurns is the configurable Goal-Block turn bound (default 25,
+        // resolved by the caller). buildGoalBlock echoes it back in `condition`.
+        const { goalBlock, condition } = grading[ 'PromptBuilder' ].buildGoalBlock( {
             'condition': `Grade the ${flow} "${target}" (tier ${tier}, max grade ${maxGrade}) across all required areas until every area reaches a stable grade`,
-            'maxTurns': 25
+            'maxTurns': maxTurns
         } )
 
         // Memo 097 Kap. 9.0 fix #1: compose ONE prompt per area via the
@@ -13350,7 +13636,13 @@ allowlist, migrate-config, etc.).
         // goalBlock. Neutral areas are composed deterministically here; persona-
         // required areas are surfaced as deferred entries (harness composes them
         // with the resolved domain/selection persona — no invented persona).
-        const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow } )
+        // PRD-3.2: a substitution context fills the real schema path + tool/namespace
+        // names into the neutral composed prompts (no {{…}} torso). Repo-relative
+        // paths only — never leak an absolute path into the emitted artifact.
+        const substitutions = flow === 'provider'
+            ? FlowMcpCli.#buildEmitSubstitutions( { cwd, namespace, liveSchemas, pretests } )
+            : null
+        const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow, substitutions } )
 
         // PRD-005/006/004 — derive the FINAL emitted area set from the composed
         // areas: applicability pre-filter (optional-area precondition absent ->
@@ -13378,6 +13670,15 @@ allowlist, migrate-config, etc.).
         const taskId = taskResult.taskId
         const payloadSkeleton = { taskId, 'areas': emittedAreas.map( ( a ) => ( { 'area': a.area, 'results': [] } ) ) }
 
+        // PRD-3.3/3.4 — assemble ONE self-contained Emit-Skill text: a self-describing
+        // header, the bundled READY (non-null prompt) areas, and the Task-ID +
+        // --consume-scores return contract IN THE TEXT (not only as JSON siblings).
+        // Hard-gated stage-2 areas are named so the operator knows a follow-up emit
+        // is needed once every schema is deterministic-green.
+        const emitSkill = FlowMcpCli.#buildEmitSkill( {
+            target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton
+        } )
+
         const now = new Date().toISOString()
         const promptsDoc = {
             target,
@@ -13389,6 +13690,7 @@ allowlist, migrate-config, etc.).
             maxIterations,
             taskId,
             'goal': { condition, maxTurns, goalBlock },
+            emitSkill,
             'areas': emittedAreas,
             skippedAreas,
             gatedAreas,
@@ -13442,6 +13744,7 @@ allowlist, migrate-config, etc.).
                     'statePath': null,
                     'pretestCount': pretests.length,
                     taskId,
+                    emitSkill,
                     'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
                     'emittedAreaSet': emittedAreaSet,
                     skippedAreas,
@@ -13472,6 +13775,7 @@ allowlist, migrate-config, etc.).
                 statePath,
                 'pretestCount': pretests.length,
                 taskId,
+                emitSkill,
                 'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
                 'emittedAreaSet': emittedAreaSet,
                 skippedAreas,
@@ -14502,12 +14806,18 @@ allowlist, migrate-config, etc.).
             .filter( ( name ) => inFlowScope( name ) === true )
             .filter( ( name ) => isApplicable( name ) === true )
 
-        // Split ready areas by their data-driven classification.
+        // Split ready areas by their data-driven classification. Befund I-4: a
+        // `both`-classified area carries a deterministic gate (done for free by the
+        // CLI) AND a non-deterministic LLM round, so it appears in BOTH buckets — the
+        // free det part is surfaced as deterministicNow, the descriptive questions
+        // bundle into the non-det emit. `deterministic` -> det only, `non-deterministic`
+        // -> nonDet only.
         const classified = readyAreas
             .reduce( ( acc, name ) => {
                 const c = AreaDependencyGraph.classifyArea( { 'graph': loaded.graph, 'area': name } )
                 if( c.errors.length > 0 ) { acc.errors.push( c.errors.join( '; ' ) ); return acc }
-                if( c.classification === 'deterministic' ) { acc.det.push( name ) } else { acc.nonDet.push( name ) }
+                if( c.classification === 'deterministic' || c.classification === 'both' ) { acc.det.push( name ) }
+                if( c.classification === 'non-deterministic' || c.classification === 'both' ) { acc.nonDet.push( name ) }
                 return acc
             }, { 'det': [], 'nonDet': [], 'errors': [] } )
         if( classified.errors.length > 0 ) {

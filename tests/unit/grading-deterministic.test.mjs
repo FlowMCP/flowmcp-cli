@@ -326,3 +326,133 @@ describe( 'gradingDeterministic — det alias parity (dispatch level)', () => {
         expect( parsedAlias.error ).toBe( parsedFull.error )
     } )
 } )
+
+
+describe( 'gradingDeterministic — force / read-cache surfacing (Memo 110 P2)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'threads --force into DataPretest.run (cache bypass)', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, force: true, json: true } )
+        expect( grading.__stub.lastCall.force ).toBe( true )
+    } )
+
+    it( 'defaults force to false (read-cache reuse is the default)', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+        expect( grading.__stub.lastCall.force ).toBe( false )
+    } )
+
+    it( 'surfaces the data stamp (fromCache + dataAt) from the pretest', async () => {
+        const cwd = await freshCwd()
+        const grading = { ...realGrading, DataPretest: {
+            getVersion: () => ( { version: 'stub' } ),
+            run: async ( params ) => ( {
+                ok: true,
+                passedDownloadable: 3,
+                required: 2,
+                toolsBelowThreshold: [],
+                perTool: {},
+                fromCache: true,
+                dataAt: '2026-06-05T10:00:00.000Z',
+                schemaDir: null,
+                summaryPath: join( params.gradingDataDir, 'providers', params.namespace, params.toolName, 'summary.json' ),
+                results: [
+                    { primitive: 'tool', name: 'getThing', status: true, hasData: true, working: true, error: null },
+                    { primitive: 'tool', name: 'getThing', status: true, hasData: true, working: true, error: null }
+                ],
+                stopReason: null,
+                errors: []
+            } )
+        } }
+        await importFixture( { cwd, grading } )
+
+        const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+        expect( result.pretest.fromCache ).toBe( true )
+        expect( result.pretest.dataAt ).toBe( '2026-06-05T10:00:00.000Z' )
+    } )
+} )
+
+
+describe( 'gradingReload — data reload only (Memo 110 PRD-2.3)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'reloads a schema with force:true and writes no grade.json', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        const { result } = await FlowMcpCli.gradingReload( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, json: true } )
+        expect( result.status ).toBe( true )
+        expect( result.mode ).toBe( 'reload' )
+        expect( result.schemaCount ).toBeGreaterThanOrEqual( 1 )
+        expect( grading.__stub.lastCall.force ).toBe( true )
+        // reload never writes grade.json / index.json (no rollup fields)
+        expect( result.indexPath ).toBeUndefined()
+        expect( result.proofPath ).toBeUndefined()
+    } )
+
+    it( 'rejects a tool-ID target (namespace or schema only)', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        const { result } = await FlowMcpCli.gradingReload( { cwd, target: 'demoapi/tool/getThing', gradingDataDir: '.flowmcp/grading', withKeys: false, json: true } )
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'namespace or a schema-ID' )
+    } )
+} )
+
+
+describe( 'gradingDeterministic — progress + summary (Memo 110 P4)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'ticks progress to STDERR by default, suppressed by --quiet', async () => {
+        const cwd = await freshCwd()
+        const grading = gradingWithStubbedPretest( { ok: true } )
+        await importFixture( { cwd, grading } )
+
+        const writes = []
+        const spy = ( chunk ) => { writes.push( String( chunk ) ); return true }
+        const original = process.stderr.write
+        process.stderr.write = spy
+        try {
+            await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+            const loud = writes.join( '' )
+            writes.length = 0
+            await FlowMcpCli.gradingDeterministic( { cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, quiet: true, json: true } )
+            const quiet = writes.join( '' )
+
+            expect( loud ).toContain( '[grading]' )
+            expect( loud ).toContain( 'demoapi/demoapi' )
+            expect( quiet ).toBe( '' )
+        } finally {
+            process.stderr.write = original
+        }
+    } )
+
+    it( 'printDeterministicSummary writes to stderr only when not quiet/json', () => {
+        const result = { status: true, mode: 'deterministic', target: 'demoapi/demoapi', validate: { status: true }, pretest: { ok: true, fromCache: true, dataAt: '2026-06-05T10:00:00.000Z', toolsBelowThreshold: [] } }
+        const writes = []
+        const original = process.stderr.write
+        process.stderr.write = ( chunk ) => { writes.push( String( chunk ) ); return true }
+        try {
+            FlowMcpCli.printDeterministicSummary( { result, quiet: false, json: false } )
+            FlowMcpCli.printDeterministicSummary( { result, quiet: true, json: false } )
+            FlowMcpCli.printDeterministicSummary( { result, quiet: false, json: true } )
+        } finally {
+            process.stderr.write = original
+        }
+        const out = writes.join( '' )
+        expect( out ).toContain( 'demoapi/demoapi — PASS' )
+        expect( out ).toContain( 'cached' )
+        // only the first call (not quiet, not json) emitted -> exactly one summary block
+        expect( out.match( /— PASS/g ).length ).toBe( 1 )
+    } )
+} )

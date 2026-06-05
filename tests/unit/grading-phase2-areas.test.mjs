@@ -394,3 +394,54 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
         expect( after.monitoring.githubIssue ).toBe( 4242 )
     } )
 } )
+
+
+// ---- Memo 110 P3: self-contained Emit-Skill + configurable maxTurns ------------
+describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'emits ONE self-contained emit-skill with Task-ID + consume command in the text', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+
+        const { result } = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
+        expect( result.status ).toBe( true )
+        expect( typeof result.emitSkill ).toBe( 'string' )
+        // self-describing header + Task-ID in the text
+        expect( result.emitSkill ).toContain( 'Grading Emit-Skill' )
+        expect( result.emitSkill ).toContain( result.taskId )
+        // the return contract names the exact consume command in the text
+        expect( result.emitSkill ).toContain( 'grading non-deterministic demoapi --consume-scores' )
+        // the ready-area prompts are filled — no NAME torso survives
+        expect( result.emitSkill.includes( '{{NAMESPACE}}' ) ).toBe( false )
+        expect( result.emitSkill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
+        expect( result.emitSkill.includes( '{{OUTPUT_SCHEMA_REF}}' ) ).toBe( false )
+    } )
+
+    it( 'maxTurns is configurable (flows into the Goal-Block condition)', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+
+        await FlowMcpCli.gradingRun( {
+            cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi',
+            phase: 'single-test', emitPrompts: true, consumeScores: null, onConflict: null,
+            maxIterations: null, maxTurns: '7', json: false
+        } )
+        const prompts = JSON.parse( await readFile( join( cwd, '.flowmcp/grading/providers/demoapi/prompts.json' ), 'utf-8' ) )
+        expect( prompts.goal.maxTurns ).toBe( 7 )
+        expect( prompts.goal.condition ).toContain( 'stop after 7 turns' )
+    } )
+
+    it( 'rejects a malformed --max-turns (no silent fallback to 25)', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+
+        const { result } = await FlowMcpCli.gradingRun( {
+            cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi',
+            phase: 'single-test', emitPrompts: true, consumeScores: null, onConflict: null,
+            maxIterations: null, maxTurns: 'lots', json: false
+        } )
+        expect( result.status ).toBe( false )
+        expect( result.error ).toContain( 'Invalid --max-turns' )
+    } )
+} )
