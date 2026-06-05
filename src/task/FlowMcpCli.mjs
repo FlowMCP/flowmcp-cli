@@ -14884,11 +14884,23 @@ allowlist, migrate-config, etc.).
 
     static async #writeAtomic( { path, content, onConflict } ) {
         const absolutePath = resolve( path )
+        // NO SILENT DEFAULT: the conflict policy must be one of the three known
+        // values. An unknown value is a hard error, never a silent fall-through.
+        const validConflicts = [ 'abort', 'skip', 'overwrite' ]
+        if( validConflicts.includes( onConflict ) === false ) {
+            throw new Error( `#writeAtomic: invalid onConflict '${onConflict}' (expected one of ${validConflicts.join( ', ' )})` )
+        }
         if( existsSync( absolutePath ) ) {
             if( onConflict === 'abort' ) {
                 throw new Error( `NO-OVERWRITE conflict: ${absolutePath} already exists` )
             }
-            return { 'skipped': true, absolutePath }
+            // 'skip' keeps the existing file; 'overwrite' falls through to the atomic
+            // write below (the tmp+rename replaces the existing file). The previous
+            // code returned skipped for BOTH, so --on-conflict=overwrite never
+            // overwrote — a stale prompts.json was kept indefinitely.
+            if( onConflict === 'skip' ) {
+                return { 'skipped': true, absolutePath }
+            }
         }
         const tmp = `${absolutePath}.tmp`
         await writeFile( tmp, content, 'utf-8' )

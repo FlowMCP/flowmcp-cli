@@ -445,3 +445,44 @@ describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', 
         expect( result.error ).toContain( 'Invalid --max-turns' )
     } )
 } )
+
+
+// ---- writeAtomic overwrite fix: --on-conflict=overwrite must actually rewrite ----
+describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fix)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    async function emitConflict( { cwd, onConflict } ) {
+        return FlowMcpCli.gradingRun( {
+            cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi',
+            phase: null, emitPrompts: true, consumeScores: null, onConflict,
+            maxIterations: null, json: false
+        } )
+    }
+
+    it( 'default (skip) keeps the existing prompts.json on a second emit', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        await emitConflict( { cwd, onConflict: null } )
+        const { result } = await emitConflict( { cwd, onConflict: 'skip' } )
+        expect( result.skipped ).toBe( true )
+    } )
+
+    it( 'overwrite rewrites the prompts.json (skipped:false) instead of keeping a stale one', async () => {
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        const first = await emitConflict( { cwd, onConflict: null } )
+        const promptsPath = join( cwd, '.flowmcp/grading/providers/demoapi/prompts.json' )
+
+        // Corrupt the on-disk file to a sentinel, then overwrite-emit must replace it.
+        await writeFile( promptsPath, JSON.stringify( { sentinel: 'STALE' } ), 'utf-8' )
+        const { result } = await emitConflict( { cwd, onConflict: 'overwrite' } )
+        expect( result.skipped ).toBe( false )
+
+        const rewritten = JSON.parse( await readFile( promptsPath, 'utf-8' ) )
+        expect( rewritten.sentinel ).toBeUndefined()
+        expect( rewritten.taskId ).toBe( first.result.taskId )
+        // the rewritten artifact carries the filled emit-skill (Memo 110)
+        expect( typeof rewritten.emitSkill ).toBe( 'string' )
+        expect( rewritten.emitSkill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
+    } )
+} )
