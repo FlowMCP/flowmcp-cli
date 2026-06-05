@@ -433,13 +433,13 @@ const runCommand = async () => {
         // non-deterministic LLM-scoring path (emit + consume), formerly only reached
         // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
         // internal mechanic (Never-delete-legacy).
-        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'skill', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | skill <ns|selection> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -485,6 +485,20 @@ const runCommand = async () => {
             // decoupled from grading: no _gradings/grade.json writes.
             const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, quiet, json } )
             output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'skill' ) {
+            // Print the emitted Emit-Skill TEXT directly. Default: raw text to stdout
+            // (pipe/redirect ready). --json: the structured envelope. An error always
+            // prints the JSON envelope so failures stay machine-readable.
+            const { result } = await FlowMcpCli.gradingSkill( { cwd, target, gradingDataDir } )
+            if( result.status === true && json !== true ) {
+                process.stdout.write( result.skill + '\n' )
+            } else {
+                output( { result } )
+            }
 
             return true
         }
