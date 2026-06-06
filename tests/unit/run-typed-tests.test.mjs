@@ -172,7 +172,27 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
         } )
 
 
-        it( 'skill primitive returns stub PASS with TODO marker (PRD-005 transitional)', async () => {
+        it( 'skill primitive is validated structurally via the real v4 SkillValidator — valid passes', async () => {
+            const typedTest = {
+                'primitive': 'skill',
+                'name': 'analyze',
+                'schemaRef': 'test/ns',
+                'test': { '_description': 's', 'userParams': {} },
+                'context': { 'skill': { 'name': 'analyze', 'version': 'flowmcp/4.0.0', 'whenToUse': 'analysis', 'type': 'namespace', 'description': 'd', 'content': 'do', 'output': 'o' }, 'kind': 'structural' }
+            }
+
+            const result = await FlowMcpCli._testHook_executeTest( {
+                typedTest,
+                'schemaMain': { 'namespace': 'test/ns', 'tools': {}, 'resources': {} }
+            } )
+
+            expect( result[ 'primitive' ] ).toBe( 'skill' )
+            expect( result[ 'status' ] ).toBe( true )
+            expect( result[ 'output' ] ).toContain( 'skill-structural:analyze' )
+        } )
+
+
+        it( 'skill primitive fails structurally when required v4 fields are missing', async () => {
             const typedTest = {
                 'primitive': 'skill',
                 'name': 'analyze',
@@ -183,16 +203,16 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
 
             const result = await FlowMcpCli._testHook_executeTest( {
                 typedTest,
-                'schemaMain': { 'namespace': 'test/ns' }
+                'schemaMain': { 'namespace': 'test/ns', 'tools': {}, 'resources': {} }
             } )
 
             expect( result[ 'primitive' ] ).toBe( 'skill' )
-            expect( result[ 'status' ] ).toBe( true )
-            expect( result[ 'output' ] ).toContain( 'TODO' )
+            expect( result[ 'status' ] ).toBe( false )
+            expect( result[ 'error' ] ).not.toBeNull()
         } )
 
 
-        it( 'prompt primitive returns stub PASS with TODO marker (PRD-005 transitional)', async () => {
+        it( 'prompt primitive passes the structural field check when it carries a string name', async () => {
             const typedTest = {
                 'primitive': 'prompt',
                 'name': 'p1',
@@ -208,11 +228,30 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
 
             expect( result[ 'primitive' ] ).toBe( 'prompt' )
             expect( result[ 'status' ] ).toBe( true )
-            expect( result[ 'output' ] ).toContain( 'TODO' )
+            expect( result[ 'output' ] ).toContain( 'prompt-structural:p1' )
         } )
 
 
-        it( 'selection-member primitive returns stub PASS (transitive not yet implemented)', async () => {
+        it( 'prompt primitive fails the structural field check without a string name', async () => {
+            const typedTest = {
+                'primitive': 'prompt',
+                'name': 'p1',
+                'schemaRef': 'test/ns',
+                'test': { '_description': 'p', 'userParams': {} },
+                'context': { 'prompt': { 'name': 99 } }
+            }
+
+            const result = await FlowMcpCli._testHook_executeTest( {
+                typedTest,
+                'schemaMain': { 'namespace': 'test/ns' }
+            } )
+
+            expect( result[ 'primitive' ] ).toBe( 'prompt' )
+            expect( result[ 'status' ] ).toBe( false )
+        } )
+
+
+        it( 'selection-member primitive is validated structurally via the real v4 SelectionValidator — empty selection fails', async () => {
             const typedTest = {
                 'primitive': 'selection-member',
                 'name': 'frictiontest/tool/getThing',
@@ -227,8 +266,8 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
             } )
 
             expect( result[ 'primitive' ] ).toBe( 'selection-member' )
-            expect( result[ 'status' ] ).toBe( true )
-            expect( result[ 'output' ] ).toContain( 'transitive-not-yet-implemented' )
+            expect( result[ 'status' ] ).toBe( false )
+            expect( result[ 'output' ] ).toContain( 'selection-member:' )
         } )
 
 
@@ -347,7 +386,7 @@ describe( 'PRD-005: #executeTest dispatcher + #runTypedTests aggregator', () => 
                     }
                 },
                 'skills': [
-                    { 'name': 'sk', 'content': 'hello', 'tests': [ { '_description': 'sk-t' } ] }
+                    { 'name': 'sk', 'version': 'flowmcp/4.0.0', 'whenToUse': 'when testing', 'type': 'namespace', 'description': 'd', 'content': 'hello', 'output': 'o', 'tests': [ { '_description': 'sk-t' } ] }
                 ],
                 'prompts': [
                     { 'name': 'pr', 'tests': [ { '_description': 'pr-t' } ] }

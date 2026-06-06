@@ -22,6 +22,7 @@ import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
 import { FlowMCP } from 'flowmcp/v2'
+import { SkillValidator, SelectionValidator } from 'flowmcp/v4'
 
 import { ZodBuilder } from './ZodBuilder.mjs'
 
@@ -8859,35 +8860,55 @@ allowlist, migrate-config, etc.).
                 }
             }
 
+            // skill / prompt / selection-member carry no downloadable data. They are
+            // validated STRUCTURALLY against the real v4 modules (no longer stub-passed):
+            // SkillValidator / SelectionValidator / a prompt field check. A structurally
+            // invalid primitive returns status:false.
             if( primitive === 'skill' ) {
-                // TODO PRD-005: import SkillContentGenerator + PlaceholderResolver from flowmcp/v4 once subpath is exported
-                // Currently flowmcp package only exposes ./v2; v4 modules exist in flowmcp-core/src/v4 but no package export
+                const tools = schemaMain[ 'tools' ] || {}
+                const resources = schemaMain[ 'resources' ] || {}
+                const skill = typedTest[ 'context' ][ 'skill' ]
+                const skillName = typedTest[ 'name' ]
+                const { status, messages } = SkillValidator.validate( {
+                    'skills': { [ skillName ]: skill },
+                    tools,
+                    resources
+                } )
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'skill-structural-test (TODO: import SkillContentGenerator/PlaceholderResolver from flowmcp/v4)',
+                    status,
+                    'error': status ? null : ( ( messages || [] )[ 0 ] || 'skill structurally invalid' ),
+                    'output': `skill-structural:${skillName}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
             }
 
             if( primitive === 'prompt' ) {
-                // TODO PRD-005: import PlaceholderResolver from flowmcp/v4 once subpath is exported
+                // No dedicated v4 PromptValidator export — the honest structural check is
+                // field-level: a prompt must carry a non-empty string name.
+                const prompt = typedTest[ 'context' ][ 'prompt' ]
+                const status = prompt !== undefined && prompt !== null && typeof prompt[ 'name' ] === 'string' && prompt[ 'name' ].length > 0
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'prompt-structural-test (TODO: import PlaceholderResolver from flowmcp/v4)',
+                    status,
+                    'error': status ? null : 'prompt structurally invalid: missing string name',
+                    'output': `prompt-structural:${typedTest[ 'name' ]}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
             }
 
             if( primitive === 'selection-member' ) {
-                // TODO PRD-005: transitive resolution via IdResolver + recursive #getAllTestsTyped on sub-schema
+                // Single-schema structural validation of the selection block via the real
+                // v4 module. Catalog-resolvability (SEL003) needs cross-schema registry
+                // data not available here, so it is omitted.
+                const selection = schemaMain[ 'selection' ] || null
+                const { valid, errors } = selection === null
+                    ? { 'valid': false, 'errors': [ 'selection block missing on schema' ] }
+                    : SelectionValidator.validate( { selection, 'catalog': null } )
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'selection-member (transitive-not-yet-implemented)',
+                    'status': valid,
+                    'error': valid ? null : ( ( errors || [] )[ 0 ] || 'selection structurally invalid' ),
+                    'output': `selection-member:${typedTest[ 'name' ]}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
