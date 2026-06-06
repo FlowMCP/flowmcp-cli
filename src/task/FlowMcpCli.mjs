@@ -14,7 +14,7 @@ import { join, resolve, basename, extname, dirname, relative, isAbsolute } from 
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { constants, existsSync, readFileSync, readdirSync } from 'node:fs'
+import { constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
@@ -8018,6 +8018,8 @@ Grading (v2 — experimental; CLI surface may change):
   grading state <ns|selection>               Show current rollup status (read-only); carries the nextAction split (deterministic-now CLI work vs ONE non-deterministic area-set + Task-ID preview, plus gated areas with reasons)
   grading worklist <ns>                      Deterministic defect list only (subsumed into "doctor"; kept for back-compat)
   grading doctor <ns>                        Local, read-only "defects + last tips + next step": merges the deterministic defects, the last LLM improvement tips, a next re-entry loop, and the same nextAction split as "state" (never online, never writes grade.json)
+  grading plan <ns> [--target <grade>]       Read-only Eintritts-Worklist (Memo 112): which schemas need (re-)grading — ungraded, schemaHash-stale, or below --target — and which are fresh/skipped. Writes nothing.
+  grading finalize <ns> [--target <grade>]   Austritts-Rollup (Memo 112): rebuild the namespace index.json + grade.json from the per-schema gradings, then print the same recommendation (worklist) as "plan".
   (also available as "${cmd} grading ..." — the "dev" prefix is optional)
   Two-level handover: the CLI emits ONE self-contained artifact for a sub-agent
     and consumes ONE payload back — one area-set, one Task-ID, one round-trip.
@@ -12588,7 +12590,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, quiet = false, json } ) {
+    static async gradingRun( { cwd, target, phase, runId = null, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12688,10 +12690,10 @@ allowlist, migrate-config, etc.).
             // deterministic pretest fires authenticated requests with live keys.
             const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
 
-            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, areaSelector, conflict, 'maxIterations': maxIterationsResolved, 'maxTurns': maxTurnsResolved, useKeys, dryRun, quiet, 'dependencyChain': deps.chain } )
+            return FlowMcpCli.#gradingEmitPrompts( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'tier': detected.tier, 'maxGrade': detected.maxGrade, 'targetDir': detected.targetDir, target, 'scopeName': detected.scopeName, runId, areaSelector, conflict, 'maxIterations': maxIterationsResolved, 'maxTurns': maxTurnsResolved, useKeys, dryRun, quiet, 'dependencyChain': deps.chain } )
         }
 
-        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun, 'dependencyChain': deps.chain } )
+        return FlowMcpCli.#gradingConsumeScores( { cwd, grading, gradingDataRoot, 'flow': detected.flow, 'targetDir': detected.targetDir, target, 'scopeName': detected.scopeName, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun, 'dependencyChain': deps.chain } )
     }
 
 
@@ -12932,7 +12934,16 @@ allowlist, migrate-config, etc.).
         }
 
         const recordedAt = new Date().toISOString().replace( /\.\d{3}Z$/, 'Z' ).replace( /:/g, '-' )
-        const mapped = Mapper.mapSchema( { namespace, 'schemaId': schemaName, main, validate, pretest, recordedAt } )
+        // Memo 112 P6.2 — persist the schemaHash with the deterministic gradings so a
+        // later `grading plan` can detect staleness (live hash != stored hash). The
+        // Mapper already writes entry.schemaHash when given one (DeterministicAreaMapper);
+        // it was simply never fed. A null hash (uncanonicalizable schema) is omitted.
+        const HashGenerator = grading[ 'HashGenerator' ]
+        const computedHash = HashGenerator !== undefined && HashGenerator !== null
+            ? HashGenerator.computeSchemaHash( { 'schema': main } ).hash
+            : null
+        const schemaHash = typeof computedHash === 'string' && computedHash.length > 0 ? computedHash : undefined
+        const mapped = Mapper.mapSchema( { namespace, 'schemaId': schemaName, main, validate, pretest, recordedAt, schemaHash } )
         const providersRoot = join( gradingDataRoot, 'providers' )
         const errors = [ ...mapped.errors ]
         const writeCounter = { count: 0 }
@@ -13449,38 +13460,118 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // PRD-3.3/3.4 — assemble the ONE self-contained Emit-Skill text. Bundles every
-    // READY area (non-null prompt = the currently-emittable stage) into a single
-    // instruction a subagent works in one pass, and writes the Task-ID + the exact
-    // --consume-scores return command INTO the text (Kap 10.1). Hard-gated stage-2
-    // areas are named so the operator knows a follow-up emit is due once every
-    // schema is deterministic-green.
-    static #buildEmitSkill( { target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton } ) {
+    // Memo 112 — assemble the ONE self-contained Emit-Skill as a numbered, single-
+    // authored runbook (Zone 1 harness / Zone 2 numbered tasks / Zone 3 return).
+    //
+    // The three-zone model (Memo 112 Kap 3): the output contract is explained ONCE
+    // in Zone 1 (no per-area duplication of the full schema), the middle is a
+    // numbered Ablaufplan that names every schema file explicitly (no CSV tool blob,
+    // no "think anew every time"), and Zone 3 carries the Task-ID + consume command.
+    //
+    // The per-area composed blob (from AreaPromptLoader) is NOT pasted verbatim —
+    // it is decomposed into its parts (intro sentence, questions list, area-specific
+    // output constraints) and re-rendered numbered. Frontmatter, the empty
+    // `## Pre-Instructions` header and the duplicated `## Question(s)`/`## Questions`
+    // headers are dropped by reconstruction (Memo 112 M1–M3). The big envelope JSON
+    // appears once in Zone 1, not per area (M6).
+    static #buildEmitSkill( { target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton, liveSchemas, pretests, cwd, scopeName = null, runId = null, worklist = null } ) {
         const ready = emittedAreas
             .filter( ( a ) => typeof a.prompt === 'string' && a.prompt.length > 0 )
         const deferred = emittedAreas
             .filter( ( a ) => a.prompt === null || a.prompt === undefined )
             .map( ( a ) => a.area )
 
+        const schemaSteps = FlowMcpCli.#emitSchemaSteps( { liveSchemas, pretests, cwd } )
+        const toolSteps = FlowMcpCli.#emitToolSteps( { liveSchemas, pretests, cwd } )
+        const schemaGroups = FlowMcpCli.#emitSchemaGroups( { toolSteps, schemaSteps } )
+        const singleTestArea = ready.find( ( a ) => FlowMcpCli.#emitAreaUnit( { 'area': a.area } ) === 'tool' )
+        // Namespace-level areas only (tool + schema areas are graded INSIDE the per-
+        // schema sub-agents, so they are not separate orchestrator steps — F10).
+        const namespaceAreas = ready.filter( ( a ) => FlowMcpCli.#emitAreaUnit( { 'area': a.area } ) === 'namespace' )
+
+        // Memo 112 — a schema-scoped emit is a self-contained per-schema sub-skill:
+        // the literal prompt one sub-agent gets (no "create tasks" step, returns ONE
+        // JSON the orchestrator collects). The namespace emit below is the orchestrator.
+        if( scopeName !== null && scopeName !== undefined ) {
+            return FlowMcpCli.#buildSchemaSubSkill( { namespace, scopeName, taskId, ready, schemaGroups, singleTestArea } )
+        }
+
+        // Memo 112 (REV-05) — the namespace emit is a pure ORCHESTRATOR: it carries NO
+        // grading content (questions/contract live ONLY in each per-schema sub-skill).
+        // It just tells the main agent to dispatch one sub-agent per schema, each with
+        // the schema's own `<namespace>/<schema> --emit-prompts` command as its prompt.
         const header = [
-            '# Grading Emit-Skill',
+            `# Grading orchestrator — ${namespace}`,
             '',
-            'This is a grading skill. Hand it to a subagent and follow the steps in',
-            'order. Work the bundled areas below in a SINGLE pass, then return your',
-            'results via the command at the end. Answer only from the files you read —',
-            'no web research, no assumptions.',
+            'You COORDINATE here — you do NOT grade in this context. Each schema is graded',
+            'in its own fresh sub-agent that carries its own complete instructions and',
+            'writes its own results. Your job: dispatch them, then finalize.',
             '',
-            `- Target: \`${target}\` (flow: ${flow}, namespace: ${namespace})`,
-            `- Task-ID: \`${taskId}\``,
-            `- Ready areas this pass: ${ready.map( ( a ) => a.area ).join( ', ' ) || '(none)'}`
+            `- Namespace: \`${namespace}\` · schemas: ${schemaGroups.length} · tools: ${toolSteps.length}`,
+            `- Run-ID: \`${runId !== null ? runId : taskId}\` (every sub-agent below shares it — check progress with \`flowmcp grading state ${namespace}\`)`
+        ].join( '\n' )
+
+        const runFlag = runId !== null ? runId : taskId
+        // Memo 112 P6.3 — dispatch ONLY the worklist (ungraded / stale). A null worklist
+        // means "no filter" → dispatch every schema (unchanged behavior). Fresh schemas
+        // (graded + schemaHash unchanged) are listed as skipped, not re-graded.
+        const dispatchGroups = worklist === null
+            ? schemaGroups
+            : schemaGroups.filter( ( g ) => worklist.includes( g.schemaName ) === true )
+        const skippedGroups = worklist === null
+            ? []
+            : schemaGroups.filter( ( g ) => worklist.includes( g.schemaName ) === false )
+        const dispatchLines = dispatchGroups
+            .map( ( g, index ) => `- **Sub-agent ${index + 1}** — schema \`${g.schemaName}\` (${g.tools.length} tool(s)): run \`flowmcp grading non-deterministic ${namespace}/${g.schemaName} --emit-prompts --run ${runFlag}\`, then give that output to a fresh sub-agent as its ENTIRE prompt.` )
+            .join( '\n' )
+        const skipLine = skippedGroups.length > 0
+            ? `\n\n_Skipped (fresh — already graded, schemaHash unchanged): ${skippedGroups.map( ( g ) => `\`${g.schemaName}\`` ).join( ', ' )}._`
+            : ''
+        const step1 = [
+            '## Step 1 — Dispatch one sub-agent per schema (run in parallel)',
+            '',
+            'For each schema: generate its sub-skill with the command, hand the output to a',
+            'fresh sub-agent, and let it grade + write its own results. The per-schema',
+            'writes are isolated, so the sub-agents are safe to run in parallel.',
+            '',
+            dispatchLines.length > 0 ? dispatchLines : '- (no stale/ungraded schemas — nothing to grade this pass)',
+            skipLine
+        ].join( '\n' )
+
+        const namespaceLines = namespaceAreas
+            .map( ( a ) => `- \`${a.area}\`: run \`flowmcp grading non-deterministic ${namespace} --emit-prompts --phase ${a.area}\`, hand it to a fresh sub-agent, grade it once for the namespace.` )
+            .join( '\n' )
+        const step2 = namespaceAreas.length > 0
+            ? [ '', '', '## Step 2 — Namespace-wide areas (after every schema is done)', '', namespaceLines ].join( '\n' )
+            : ''
+
+        // Memo 112 P6.4 — the outer loop: poll progress (transient per-run state) until
+        // every dispatched schema is scored, re-dispatch any that stalled, then finalize
+        // ONCE (persistent namespace rollup + recommendation). maxTurns is the Notausgang.
+        const step3 = [
+            '',
+            '',
+            '## Step 3 — Outer loop: wait for completion, then finalize',
+            '',
+            `Run-ID \`${runFlag}\` ties every sub-agent's progress together. Loop:`,
+            '',
+            `1. **Poll** \`flowmcp grading state ${namespace}\` → read \`schemaProgress.scored\` / \`.total\`.`,
+            '2. **Re-dispatch** any schema still `pending` or failed → re-run its Step-1 command in a fresh sub-agent.',
+            '3. **Repeat** 1–2 until `scored == total` (or you hit your maxTurns budget — the Notausgang).',
+            `4. **Finalize ONCE** \`flowmcp grading finalize ${namespace}\` → rebuilds the namespace index + grade.json`,
+            '   AND prints the recommendation (which schemas remain stale / below target). An empty worklist',
+            '   means the namespace is fully graded and fresh — you are done.',
+            '',
+            'The rollup runs exactly once, never in parallel with the sub-agents.'
         ].join( '\n' )
 
         const gatedNote = ( Array.isArray( gatedAreas ) ? gatedAreas : [] ).length > 0
             ? [
                 '',
+                '',
                 '## Gated areas (NOT in this pass)',
                 '',
-                'These stage-2 areas are emitted in a FOLLOW-UP skill once every schema',
+                'These stage-2 areas are emitted in a FOLLOW-UP pass once every schema',
                 'of the namespace is deterministic-green — do not attempt them now:',
                 ...( gatedAreas.map( ( g ) => `- ${typeof g === 'string' ? g : ( g.area === undefined ? JSON.stringify( g ) : `${g.area} (${g.reason === undefined ? 'gated' : g.reason})` )}` ) )
             ].join( '\n' )
@@ -13490,45 +13581,301 @@ allowlist, migrate-config, etc.).
             ? `\n\n## Deferred areas\n\nComposed by the harness with the resolved persona (not in this text): ${deferred.join( ', ' )}.`
             : ''
 
-        const areaBlocks = ready
-            .map( ( a ) => `\n\n---\n\n## Area: ${a.area}\n\n${a.prompt}` )
-            .join( '' )
+        return `${header}\n\n${step1}${step2}${step3}${gatedNote}${deferredNote}\n`
+    }
 
-        const returnContract = [
+
+    // Memo 112 (REV-05) — the self-contained per-schema sub-skill: the literal prompt
+    // ONE sub-agent receives to grade ONE schema. It carries EVERYTHING (minimal
+    // contract + questions + ordered per-tool steps + a PRE-FILLED return JSON + the
+    // self-consume command), so nothing depends on a shared doc being in context. The
+    // burden on the sub-agent is minimal: fill the null scores + one reasoning/tool.
+    static #buildSchemaSubSkill( { namespace, scopeName, taskId, ready, schemaGroups, singleTestArea } ) {
+        const group = schemaGroups.find( ( g ) => g.schemaName === scopeName )
+        const tools = group !== undefined ? group.tools : []
+        const toolCount = tools.length
+        const scoresFile = `${scopeName}.scores.json`
+        const toolAreaCount = ready.filter( ( a ) => FlowMcpCli.#emitAreaUnit( { 'area': a.area } ) === 'tool' ).length
+        const schemaAreaCount = ready.filter( ( a ) => FlowMcpCli.#emitAreaUnit( { 'area': a.area } ) === 'schema' ).length
+
+        const header = [
+            `# Grading sub-skill — schema \`${scopeName}\` (namespace \`${namespace}\`)`,
             '',
+            'You are a sub-agent grading ONE schema. Read the file(s), score the areas',
+            'below, fill the pre-built JSON, then run the one command. Answer only from',
+            'the files you open: no web research, no assumptions.',
             '',
-            '---',
-            '',
-            '## Return your results',
-            '',
-            'Produce ONE result object per area in this pass. Shape:',
-            '',
-            '```json',
-            JSON.stringify( payloadSkeleton, null, 2 ),
-            '```',
-            '',
-            'When finished, return the filled array by running:',
-            '',
-            '```bash',
-            `flowmcp grading non-deterministic ${namespace} --consume-scores <your-results-file.json>`,
-            '```',
-            '',
-            `The results file MUST carry this Task-ID (\`${taskId}\`) so consume-scores can`,
-            'match your answers to this emit. Provide exactly the asked number of results',
-            'per area — no more, no fewer.'
+            `- Schema: \`${scopeName}\` (namespace \`${namespace}\`)`,
+            `- Task-ID: \`${taskId}\``,
+            `- Tools: ${toolCount} · areas: per-tool ${toolAreaCount}, per-schema ${schemaAreaCount}`
         ].join( '\n' )
 
-        return `${header}${gatedNote}${deferredNote}${areaBlocks}${returnContract}\n`
+        const contract = [
+            '## How to score (minimal — keep it light)',
+            '',
+            'Score every question `1`–`5` (or `"n/a"`). Per-tool areas: one `reasoning`',
+            'per tool (not per question). Per-schema areas: one `reasoning` for the area.',
+            'Fill only the `null` scores and the empty `reasoning` strings in the JSON',
+            'below — add no other fields. The CLI fills ids, hashes, timestamps. On a',
+            'file-read error reply only with `{ "blocker": "<file>", "reason": "<why>" }`.',
+            'JSON only — no Markdown.'
+        ].join( '\n' )
+
+        const questionsRef = FlowMcpCli.#emitQuestionsReference( { ready } )
+
+        const open = group !== undefined
+            ? `Open \`${group.schemaPath}\` and read its tests (${group.fixtureNote}).`
+            : `Read schema \`${scopeName}\` and its tests.`
+        const areaStepLines = ready
+            .map( ( a ) => {
+                const unit = FlowMcpCli.#emitAreaUnit( { 'area': a.area } )
+                const qn = FlowMcpCli.#emitAreaParts( { 'prompt': a.prompt } ).questionIds.length
+                if( unit === 'tool' ) {
+                    const toolList = tools.length > 0
+                        ? tools.map( ( toolName, index ) => `  ${index + 1}. \`${toolName}\`` ).join( '\n' )
+                        : '  (no tools)'
+                    return `- **${a.area}** — answer its ${qn} questions for EACH tool (one result per tool):\n${toolList}`
+                }
+                return `- **${a.area}** — answer its ${qn} questions ONCE for this schema (one result).`
+            } )
+            .join( '\n' )
+        const steps = [
+            `## Grade schema \`${scopeName}\``,
+            '',
+            open,
+            'Then score the areas (questions listed above):',
+            '',
+            areaStepLines
+        ].join( '\n' )
+
+        const skeleton = FlowMcpCli.#buildSchemaReturnSkeleton( { taskId, ready, tools } )
+        const returnBlock = [
+            '## Fill this JSON, then submit it — and loop until accepted',
+            '',
+            `Save the filled JSON as \`${scoresFile}\` — replace every \`null\` with a score`,
+            'and every empty `reasoning` with one short sentence. Add nothing else.',
+            '',
+            '```json',
+            skeleton,
+            '```',
+            '',
+            'Then submit it (isolated — safe to run in parallel with other schemas):',
+            '',
+            '```bash',
+            `flowmcp grading non-deterministic ${namespace}/${scopeName} --consume-scores ${scoresFile}`,
+            '```',
+            '',
+            '**You are NOT done until this command succeeds (exit 0).** If it reports a',
+            'parse error, a Task-ID mismatch or a result-count mismatch, fix the JSON in',
+            `\`${scoresFile}\` and run the command again. Repeat until it is accepted —`,
+            'only an accepted submission counts as completing this schema.'
+        ].join( '\n' )
+
+        return `${header}\n\n${contract}\n\n${questionsRef}\n\n${steps}\n\n${returnBlock}\n`
+    }
+
+
+    // Memo 112 (REV-05) — the PRE-FILLED per-schema return JSON. One results[] per
+    // ready area, with the question ids already laid out and `null` scores + empty
+    // reasoning for the sub-agent to fill. Per-tool area → one result per tool (with a
+    // `tool` key); per-schema area → exactly one result. consume-scores count-checks
+    // results[] against the per-area expected count; the inner shape is ours, kept
+    // minimal to raise reliability.
+    static #buildSchemaReturnSkeleton( { taskId, ready, tools } ) {
+        const areas = ready
+            .map( ( a ) => {
+                const questionIds = FlowMcpCli.#emitAreaParts( { 'prompt': a.prompt } ).questionIds
+                const unit = FlowMcpCli.#emitAreaUnit( { 'area': a.area } )
+                const emptyScores = () => questionIds.reduce( ( acc, qid ) => { acc[ qid ] = null; return acc }, {} )
+                const results = unit === 'tool'
+                    ? tools.map( ( toolName ) => ( { 'tool': toolName, 'scores': emptyScores(), 'reasoning': '' } ) )
+                    : [ { 'scores': emptyScores(), 'reasoning': '' } ]
+                return { 'area': a.area, results }
+            } )
+        const skeleton = { taskId, 'scores': [], areas }
+
+        return JSON.stringify( skeleton, null, 2 )
+    }
+
+
+    // Memo 112 (REV-04) — group the per-tool steps by their declaring schema, so the
+    // runbook can be organised as ONE task per schema (schemas run sequentially; the
+    // tools inside a schema are the ordered sub-steps). Order follows schemaSteps.
+    static #emitSchemaGroups( { toolSteps, schemaSteps } ) {
+        const tools = Array.isArray( toolSteps ) ? toolSteps : []
+        const order = Array.isArray( schemaSteps ) ? schemaSteps : []
+
+        return order
+            .map( ( s ) => {
+                const groupTools = tools
+                    .filter( ( t ) => t.schemaName === s.schemaName )
+                    .map( ( t ) => t.toolName )
+                return { 'schemaName': s.schemaName, 'schemaPath': s.schemaPath, 'fixtureNote': s.fixtureNote, 'tools': groupTools }
+            } )
+    }
+
+
+    // Memo 112 (REV-04) — the questions, listed ONCE as a reference (a set of
+    // criteria, keyed by their stable [Q-…] id). Every task points back here instead
+    // of repeating the questions per tool/schema.
+    static #emitQuestionsReference( { ready } ) {
+        const blocks = ready
+            .map( ( a ) => {
+                const parts = FlowMcpCli.#emitAreaParts( { 'prompt': a.prompt } )
+                const unit = FlowMcpCli.#emitAreaUnit( { 'area': a.area } )
+                const qList = parts.questions
+                    .map( ( q ) => `- [${q.id}] ${q.text}` )
+                    .join( '\n' )
+                const scope = unit === 'tool'
+                    ? `asked PER TOOL — one result per tool, ${parts.questions.length} answers each`
+                    : ( unit === 'schema'
+                        ? `asked ONCE for this schema — ${parts.questions.length} answers`
+                        : `asked ONCE for the namespace — ${parts.questions.length} answers` )
+                return [ `### ${a.area} — ${scope}`, '', qList ].join( '\n' )
+            } )
+            .join( '\n\n' )
+
+        return [ '## Questions (read once)', '', blocks ].join( '\n' )
+    }
+
+
+    // Memo 112 (REV-05, F10=per-schema) — area iteration unit. `single-test` is per
+    // TOOL (one result per tool); `tools-aggregate-schema` is per SCHEMA (one result
+    // per schema — that is how RebuildIndex reads it). Both belong inside the per-
+    // schema sub-agent. The remaining neutral areas are namespace-level (stage-2).
+    static #emitAreaUnit( { area } ) {
+        if( area === 'single-test' ) { return 'tool' }
+        if( area === 'tools-aggregate-schema' ) { return 'schema' }
+        return 'namespace'
+    }
+
+
+    // Memo 112 — build per-tool steps: every declared tool with the schema file that
+    // declares it and that schema's fixture-size note. Repo-relative paths only.
+    static #emitToolSteps( { liveSchemas, pretests, cwd } ) {
+        const schemas = Array.isArray( liveSchemas ) ? liveSchemas : []
+        const tests = Array.isArray( pretests ) ? pretests : []
+        const fixtureBySchema = tests
+            .reduce( ( acc, p ) => {
+                if( typeof p.summaryPath === 'string' && p.summaryPath.length > 0 ) { acc[ p.schemaName ] = p.summaryPath }
+                return acc
+            }, {} )
+
+        return schemas
+            .flatMap( ( s ) => {
+                const toolMap = ( s.main !== undefined && s.main !== null )
+                    ? ( s.main[ 'tools' ] || s.main[ 'routes' ] || {} )
+                    : {}
+                const schemaPath = typeof s.sourcePath === 'string'
+                    ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': s.sourcePath } )
+                    : `providers/${s.schemaName}`
+                const fixtureNote = FlowMcpCli.#emitFixtureNote( { cwd, 'fixturePath': fixtureBySchema[ s.schemaName ] } )
+                return Object.keys( toolMap )
+                    .map( ( toolName ) => ( { toolName, 'schemaName': s.schemaName, schemaPath, fixtureNote } ) )
+            } )
+    }
+
+
+    // Memo 112 — decompose a composed area blob into its parts using PromptBuilder's
+    // constant headers. Strips leading YAML frontmatter (M1), drops the empty
+    // `## Pre-Instructions` + duplicated `## Question(s)`/`## Questions` headers
+    // (M2/M3), and lifts the per-area question list + question IDs. The full inline
+    // output schema (M6) is intentionally NOT carried over — the contract lives once
+    // in Zone 1. Pure string work; never throws (falls back to empty parts).
+    static #emitAreaParts( { prompt } ) {
+        const stripped = ( typeof prompt === 'string' ? prompt : '' )
+            .replace( /^---\n[\s\S]*?\n---\n/, '' )
+
+        const introMatch = stripped.match( /## Question\(s\)\n+([\s\S]*?)\n+## Questions/ )
+        const intro = introMatch !== null ? introMatch[ 1 ].trim() : ''
+
+        const questionsMatch = stripped.match( /## Questions\n+([\s\S]*?)(?:\n+## |$)/ )
+        const questionsRaw = questionsMatch !== null ? questionsMatch[ 1 ].trim() : ''
+
+        // Parse each "<n>. [<id>] <text>" line into a structured question so the
+        // section can RE-number them inside the area's numbering tree (e.g. 1.2.1)
+        // instead of restarting a flat 1..N inside an already-numbered section.
+        const questions = questionsRaw
+            .split( '\n' )
+            .map( ( line ) => line.trim() )
+            .filter( ( line ) => line.length > 0 )
+            .map( ( line ) => {
+                const match = line.match( /^\d+\.\s*\[([A-Za-z0-9-]+)\]\s*(.*)$/ )
+                return match !== null ? { 'id': match[ 1 ], 'text': match[ 2 ].trim() } : null
+            } )
+            .filter( ( entry ) => entry !== null )
+
+        const questionIds = questions.map( ( q ) => q.id )
+
+        return { intro, questions, questionIds }
+    }
+
+
+    // Memo 112 Kap 4/5 — build the explicit per-schema steps with a fixture-size
+    // gate (F3 = threshold). Schema paths are repo-relative (git-security). For each
+    // schema the test fixture size decides inline-read vs. subagent-read so large
+    // fixtures do not pollute the main context; the size is COMPUTED here, per the
+    // user's requirement that the generator calculate the KB itself.
+    static #emitSchemaSteps( { liveSchemas, pretests, cwd } ) {
+        const schemas = Array.isArray( liveSchemas ) ? liveSchemas : []
+        const tests = Array.isArray( pretests ) ? pretests : []
+
+        const fixtureBySchema = tests
+            .reduce( ( acc, p ) => {
+                if( typeof p.summaryPath === 'string' && p.summaryPath.length > 0 ) { acc[ p.schemaName ] = p.summaryPath }
+                return acc
+            }, {} )
+
+        return schemas
+            .map( ( s ) => {
+                const schemaPath = typeof s.sourcePath === 'string'
+                    ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': s.sourcePath } )
+                    : `providers/${s.schemaName}`
+                const fixturePath = fixtureBySchema[ s.schemaName ]
+                const fixtureNote = FlowMcpCli.#emitFixtureNote( { cwd, fixturePath } )
+                return { 'schemaName': s.schemaName, schemaPath, fixtureNote }
+            } )
+    }
+
+
+    // Memo 112 — fixture-size gate. Reads the fixture's size on disk and recommends
+    // inline reading for small fixtures and a subagent read for large ones (the
+    // threshold avoids content-pollution at scale). Missing fixture = read tests
+    // from the schema directly.
+    static #emitFixtureNote( { cwd, fixturePath } ) {
+        const INLINE_LIMIT_KB = 16
+        if( typeof fixturePath !== 'string' || fixturePath.length === 0 ) {
+            return 'no saved fixture — read the schema\'s declared tests directly'
+        }
+        const relPath = FlowMcpCli.#toRepoRelativePath( { cwd, 'path': fixturePath } )
+        const absPath = isAbsolute( fixturePath ) ? fixturePath : join( cwd, fixturePath )
+        if( existsSync( absPath ) === false ) {
+            return `fixture \`${relPath}\` (not on disk yet — read the schema's declared tests directly)`
+        }
+        const sizeKb = Math.max( 1, Math.round( statSync( absPath ).size / 1024 ) )
+        const mode = sizeKb > INLINE_LIMIT_KB
+            ? 'read it in a SUBAGENT to keep this context clean'
+            : 'read it inline'
+        return `fixture \`${relPath}\`, ~${sizeKb} KB → ${mode}`
     }
 
 
     // Stage 1 — deterministic: Phase-0/1 wiring -> DataPretest.run -> emit the
     // /goal handoff (prompts.json + state.json baton). The CLI does NOT run
     // Agent() — Stage 2 lives in the harness.
-    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, areaSelector, conflict, maxIterations, maxTurns = 25, useKeys, dryRun = false, quiet = false, dependencyChain } ) {
+    static async #gradingEmitPrompts( { cwd, grading, gradingDataRoot, flow, tier, maxGrade, targetDir, target, scopeName = null, runId = null, areaSelector, conflict, maxIterations, maxTurns = 25, useKeys, dryRun = false, quiet = false, dependencyChain } ) {
         const namespace = basename( targetDir )
-        const promptsPath = join( targetDir, 'prompts.json' )
-        const statePath = join( targetDir, 'state.json' )
+        const scoped = scopeName !== null && scopeName !== undefined
+        // Memo 112 — schema-scoped emit (namespace/schema): the per-schema sub-skill
+        // is written to an isolated subdir so parallel per-schema emits never clobber
+        // the namespace handoff or each other. Namespace emit (scopeName null) writes
+        // to the namespace dir exactly as before (byte-identical).
+        // The scoped writeDir is created LATER — only after the schema name is
+        // validated against the live schemas (so a typo'd `ns/wrong` never leaves an
+        // empty _schema/<wrong>/ dir polluting `grading state`).
+        const writeDir = scoped ? join( targetDir, '_schema', scopeName ) : targetDir
+        const promptsPath = join( writeDir, 'prompts.json' )
+        const statePath = join( writeDir, 'state.json' )
 
         // PRD-012 — --no-save (dryRun) means NO write happens. The --on-conflict
         // policy is ORTHOGONAL (it only decides HOW an actual write resolves a
@@ -13572,6 +13919,22 @@ allowlist, migrate-config, etc.).
                 return { 'result': FlowMcpCli.#error( { 'error': resolvedMembers.error, 'fix': resolvedMembers.fix } ) }
             }
             liveSchemas = resolvedMembers.schemas
+        }
+
+        // Memo 112 — schema-scoped emit: restrict the live schemas to the named schema
+        // (the `namespace/schema` id). NO silent default — an unknown schema is a hard
+        // error that lists the available schema names.
+        if( scoped === true ) {
+            const match = liveSchemas.filter( ( s ) => s.schemaName === scopeName )
+            if( match.length === 0 ) {
+                const available = liveSchemas.map( ( s ) => s.schemaName ).join( ', ' )
+                return { 'result': FlowMcpCli.#error( { 'error': `Unknown schema "${scopeName}" in namespace "${namespace}".`, 'fix': `Use one of: ${available} — or grade the whole namespace with "${namespace}".` } ) }
+            }
+            liveSchemas = match
+            // Schema validated — now safe to create the isolated scoped write dir.
+            if( dryRun !== true ) {
+                await mkdir( writeDir, { 'recursive': true } )
+            }
         }
         schemaDirs = liveSchemas.map( ( s ) => s.schemaName )
 
@@ -13660,7 +14023,12 @@ allowlist, migrate-config, etc.).
         if( resolvedAreas.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolvedAreas.error, 'fix': resolvedAreas.fix } ) }
         }
-        const emittedAreas = resolvedAreas.emittedAreas
+        // Memo 112 (REV-05, F10) — a schema-scoped pass IS the per-schema sub-skill:
+        // keep the per-tool area (single-test) AND the per-schema area
+        // (tools-aggregate-schema). Namespace-level areas stay at the namespace pass.
+        const emittedAreas = scoped === true
+            ? resolvedAreas.emittedAreas.filter( ( a ) => [ 'tool', 'schema' ].includes( FlowMcpCli.#emitAreaUnit( { 'area': a.area } ) ) )
+            : resolvedAreas.emittedAreas
         const skippedAreas = resolvedAreas.skippedAreas
         const gatedAreas = resolvedAreas.gatedAreas
 
@@ -13668,20 +14036,63 @@ allowlist, migrate-config, etc.).
         // The set must be non-empty to carry a Task-ID; an empty set (everything
         // skipped/gated/filtered) is surfaced explicitly, not silently hashed.
         const emittedAreaSet = emittedAreas.map( ( a ) => a.area )
-        const taskResult = FlowMcpCli.#computeGradingTaskId( { grading, namespace, emittedAreaSet } )
+        // Memo 112 — a schema-scoped pass carries a schema-scoped slug in its Task-ID
+        // (`namespace/schema--<hash>`) so consume-scores can match per-schema results.
+        const taskIdSlug = scoped === true ? `${namespace}/${scopeName}` : namespace
+        const taskResult = FlowMcpCli.#computeGradingTaskId( { grading, 'namespace': taskIdSlug, emittedAreaSet } )
         if( taskResult.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': taskResult.error, 'fix': taskResult.fix } ) }
         }
         const taskId = taskResult.taskId
         const payloadSkeleton = { taskId, 'areas': emittedAreas.map( ( a ) => ( { 'area': a.area, 'results': [] } ) ) }
 
+        // Memo 112 (F9/F10) — the expected result count per area drives consume-scores'
+        // results.length check, and differs by iteration unit:
+        //   tool   (single-test)            → one result per tool      → tool count
+        //   schema (tools-aggregate-schema) → one result per schema    → schema count
+        //   namespace (the rest)            → one result per question  → question count
+        const namespaceToolCount = liveSchemas
+            .reduce( ( total, s ) => {
+                const toolMap = ( s.main !== undefined && s.main !== null )
+                    ? ( s.main[ 'tools' ] || s.main[ 'routes' ] || {} )
+                    : {}
+                return total + Object.keys( toolMap ).length
+            }, 0 )
+        const schemaCount = liveSchemas.length
+        const expectedResultsByArea = emittedAreas
+            .filter( ( a ) => typeof a.questionCount === 'number' )
+            .reduce( ( acc, a ) => {
+                const unit = FlowMcpCli.#emitAreaUnit( { 'area': a.area } )
+                acc[ a.area ] = unit === 'tool'
+                    ? namespaceToolCount
+                    : ( unit === 'schema' ? schemaCount : a.questionCount )
+                return acc
+            }, {} )
+
         // PRD-3.3/3.4 — assemble ONE self-contained Emit-Skill text: a self-describing
         // header, the bundled READY (non-null prompt) areas, and the Task-ID +
         // --consume-scores return contract IN THE TEXT (not only as JSON siblings).
         // Hard-gated stage-2 areas are named so the operator knows a follow-up emit
         // is needed once every schema is deterministic-green.
+        // Run-ID (progress tracking): the ORCHESTRATOR (namespace) sets its OWN taskId
+        // as the run-id and threads it into every per-schema dispatch command (--run);
+        // a SCOPED emit receives that run-id via --run and records it, so `grading
+        // state <ns>` can group every schema's progress under the same run.
+        const emitRunId = scoped === true ? runId : taskId
+        // Memo 112 P6.3 — the orchestrator dispatches ONLY the worklist (ungraded /
+        // stale schemas); fresh ones (graded + schemaHash unchanged) are skipped.
+        // Best-effort: any compute failure (or a non-provider flow) leaves the worklist
+        // null → dispatch ALL (unchanged behavior, never blocks the emit). Default-on
+        // per F12; an explicit per-schema emit (scoped) is the override.
+        let emitWorklist = null
+        if( scoped !== true && flow === 'provider' ) {
+            const wl = await FlowMcpCli.#computeGradingWorklist( { cwd, grading, gradingDataRoot, namespace, 'targetGrade': null } )
+            if( wl.status === true ) {
+                emitWorklist = wl.worklist.map( ( entry ) => entry.schema )
+            }
+        }
         const emitSkill = FlowMcpCli.#buildEmitSkill( {
-            target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton
+            target, flow, namespace, taskId, emittedAreas, gatedAreas, payloadSkeleton, liveSchemas, pretests, cwd, scopeName, 'runId': emitRunId, 'worklist': emitWorklist
         } )
 
         const now = new Date().toISOString()
@@ -13708,10 +14119,10 @@ allowlist, migrate-config, etc.).
             flow,
             tier,
             taskId,
+            'runId': emitRunId,
+            scopeName,
             emittedAreaSet,
-            'askedByArea': emittedAreas
-                .filter( ( a ) => typeof a.questionCount === 'number' )
-                .reduce( ( acc, a ) => { acc[ a.area ] = a.questionCount; return acc }, {} ),
+            'askedByArea': expectedResultsByArea,
             'taskComplete': false,
             'consumedAreas': [],
             'areaSelector': { 'mode': areaSelector.mode, 'areas': areaSelector.areas },
@@ -13759,10 +14170,13 @@ allowlist, migrate-config, etc.).
             }
         }
 
-        // Write-safety: atomic + No-Overwrite. prompts respects the explicit
-        // conflict policy; state is a one-time baton (skip if present).
+        // Write-safety: atomic + No-Overwrite. prompts AND state share the explicit
+        // conflict policy so they stay in sync — a re-emit with --on-conflict=overwrite
+        // refreshes BOTH (else a changed area-set leaves a stale state Task-ID that
+        // consume-scores would then reject). The early skip/abort gates above already
+        // handle the "keep existing" case before any write.
         const promptsWrite = await FlowMcpCli.#writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), 'onConflict': conflict } )
-        await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': 'skip' } )
+        await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': conflict } )
 
         return {
             'result': {
@@ -14050,7 +14464,93 @@ allowlist, migrate-config, etc.).
 
     // Stage 3 — consume the harness scores -> verify (PRD-007) -> grade ->
     // rebuild*Index (5-status) -> write Provider-Proof (PRD-008) -> finalize baton.
-    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
+    // Memo 112 (REV-05) — convert validated per-tool single-test SCORES into the
+    // on-disk _gradings/ entries RebuildIndex reads. One entry per tool, written to
+    // `<schema>/tools/<tool>/_gradings/single-test--<ts>.json` (the tool's own dir, so
+    // parallel per-schema consumes never collide). Reuses the grading Grading API so
+    // the grade math (weighted sum → tier-trim) is identical to the harness path.
+    static async #writeSchemaGradingsFromScores( { grading, scoresDoc, namespaceDir, schemaName } ) {
+        const Grading = grading[ 'Grading' ]
+        if( Grading === undefined || Grading === null ) {
+            return { 'status': false, 'error': 'Grading module unavailable from flowmcp-grading.' }
+        }
+        const areas = Array.isArray( scoresDoc[ 'areas' ] ) ? scoresDoc[ 'areas' ] : []
+        if( areas.length === 0 ) {
+            return { 'status': true, 'written': 0 }
+        }
+        const now = new Date().toISOString()
+        // Grading filename grammar wants `…THH-MM-SSZ` (no milliseconds, ':'→'-').
+        const timestamp = now.replace( /\.\d+Z$/, 'Z' ).replace( /:/g, '-' )
+
+        // Memo 112 P6.2 (Kap 7 open build point) — close the non-deterministic
+        // schemaHash gap so `grading plan` can detect staleness for LLM-scored schemas
+        // too. Best-effort: resolve the live schema once and compute its hash; stamp it
+        // onto the tools-aggregate-schema entry (the entry `plan` reads). If the schema
+        // can't be resolved or hashed, omit it (legacy behavior) — never block consume.
+        const HashGenerator = grading[ 'HashGenerator' ]
+        const aggregateSchemaHash = await FlowMcpCli.#liveSchemaHashFor( { HashGenerator, namespaceDir, schemaName } )
+
+        // One _gradings entry per result. A result WITH a `tool` key → per-tool area
+        // (single-test) → written to the tool's own dir. A result WITHOUT a tool →
+        // per-schema area (tools-aggregate-schema) → written to the schema's dir. Both
+        // are the paths RebuildIndex reads (F10).
+        try {
+            const written = await areas
+                .reduce( ( areaPromise, areaEntry ) => areaPromise.then( async ( areaCount ) => {
+                    const area = areaEntry.area
+                    const results = Array.isArray( areaEntry.results ) ? areaEntry.results : []
+                    const writtenForArea = await results
+                        .reduce( ( promise, result ) => promise.then( async ( count ) => {
+                            const toolName = typeof result.tool === 'string' && result.tool.length > 0 ? result.tool : null
+                            const scores = result.scores !== undefined && result.scores !== null ? result.scores : {}
+                            const reasoning = typeof result.reasoning === 'string' ? result.reasoning : ''
+                            const label = toolName !== null ? `${area}/${toolName}` : area
+
+                            const created = Grading.createEntry( { schemaId: schemaName, 'gradingTier': 'autonomous', 'grader': { 'kind': 'llm', 'llmModel': 'claude-code' }, area, 'harness': 'claude-code' } )
+                            if( created.entry === null ) { throw new Error( `createEntry (${label}): ${created.errors.join( '; ' )}` ) }
+
+                            const entry = Object.keys( scores )
+                                .reduce( ( acc, questionId ) => {
+                                    const added = Grading.addGrading( { 'entry': acc, 'grading': { 'dimension': questionId, 'score': scores[ questionId ], 'determinism': 'non-deterministic', 'weight': 1, reasoning, 'recordedAt': now, 'selectionContext': { 'personaIds': [ 'neutral' ] } } } )
+                                    if( added.errors.length > 0 ) { throw new Error( `addGrading (${label}/${questionId}): ${added.errors.join( '; ' )}` ) }
+                                    return added.entry
+                                }, created.entry )
+
+                            const agg = Grading.computeAggregateGrade( { entry } )
+                            if( agg.aggregateGrade === null || agg.aggregateGrade === undefined ) {
+                                throw new Error( `computeAggregateGrade (${label}): no scorable answers (${( agg.errors || [] ).join( '; ' )})` )
+                            }
+                            const stamped = Object.assign( {}, entry, { 'aggregateGrade': agg.aggregateGrade, 'grade': agg.aggregateGrade, 'rawGrade': agg.rawGrade, 'normalizedScore': agg.normalizedScore, 'gradingMode': 'full' } )
+                            // Stamp the schemaHash onto the schema-level (tools-aggregate)
+                            // entry — the one `grading plan` reads to compare against the
+                            // live hash. Per-tool entries (toolName !== null) don't need it.
+                            if( toolName === null && aggregateSchemaHash !== null ) {
+                                stamped[ 'schemaHash' ] = aggregateSchemaHash
+                            }
+
+                            const { filename } = Grading.formatGradingFilename( { area, timestamp } )
+                            const dir = toolName !== null
+                                ? join( namespaceDir, schemaName, 'tools', toolName, '_gradings' )
+                                : join( namespaceDir, schemaName, '_gradings' )
+                            await mkdir( dir, { 'recursive': true } )
+                            await FlowMcpCli.#writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                            return count + 1
+                        } ), Promise.resolve( 0 ) )
+                    return areaCount + writtenForArea
+                } ), Promise.resolve( 0 ) )
+
+            return { 'status': true, written }
+        } catch( err ) {
+            return { 'status': false, 'error': err.message }
+        }
+    }
+
+
+    static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, scopeName = null, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
+        const scoped = scopeName !== null && scopeName !== undefined
+        // Memo 112 — schema-scoped consume reads the ISOLATED per-schema emit
+        // (_schema/<name>/state.json), so a sub-agent validates ONLY its own schema.
+        const stateDir = scoped ? join( targetDir, '_schema', scopeName ) : targetDir
         const scoresPath = resolve( cwd, consumeScores )
         if( existsSync( scoresPath ) === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
@@ -14058,20 +14558,52 @@ allowlist, migrate-config, etc.).
 
         const { data: scoresDoc } = await FlowMcpCli.#readJson( { 'filePath': scoresPath } )
         if( scoresDoc === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Invalid JSON in scores file: ${scoresPath}`, 'fix': 'The harness must write valid JSON scores.' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': `Invalid JSON in scores file: ${scoresPath}`, 'fix': 'Fix the JSON syntax (a parser could not read it) and run the command again.' } ) }
         }
         if( Array.isArray( scoresDoc[ 'scores' ] ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'See the grading scores schema.' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'Keep the "scores": [] field from the template and run the command again.' } ) }
         }
 
-        const statePath = join( targetDir, 'state.json' )
+        const statePath = join( stateDir, 'state.json' )
         const { data: prevState } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
 
         // PRD-007 — verify the multi-area Task-ID payload (additive; legacy scores
         // without a taskId skip this and proceed). A mismatch is a hard Reject.
         const verify = FlowMcpCli.#verifyConsumePayload( { grading, scoresDoc, 'state': prevState } )
         if( verify.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area question counts.' } ) }
+            return { 'result': FlowMcpCli.#error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area result counts, then run the command again.' } ) }
+        }
+
+        // Memo 112 — schema-scoped consume: validate this schema's scores against its
+        // isolated emit (Task-ID + per-area result count), PERSIST them next to the
+        // scoped state, and STOP. The namespace rollup (index + grade.json) runs ONCE
+        // at namespace level — never per schema (that would race on the shared index).
+        // This is the feedback the sub-agent's loop needs: a clear accept or a clear
+        // parse/Task-ID/count error to fix and re-submit.
+        if( scoped === true ) {
+            if( dryRun === true ) {
+                return { 'result': { 'status': true, 'stage': 3, 'mode': 'consume-scores', 'saved': false, scoped, flow, target, 'acceptedAreas': verify.acceptedAreas, 'taskComplete': verify.complete, 'scoreCount': scoresDoc[ 'scores' ].length, dependencyChain } }
+            }
+            // Convert the validated per-tool scores into the on-disk _gradings/ entries
+            // that RebuildIndex reads (one single-test entry per tool, in the tool's own
+            // _gradings dir — parallel-safe). The namespace rollup (RebuildIndex +
+            // ProviderProof) runs ONCE at namespace level, never here.
+            const gradingsWrite = await FlowMcpCli.#writeSchemaGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'schemaName': scopeName } )
+            if( gradingsWrite.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': `Could not write gradings for ${scopeName}: ${gradingsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or n/a per question) and run the command again.' } ) }
+            }
+
+            const now = new Date().toISOString()
+            const savedPath = join( stateDir, 'scores.json' )
+            await FlowMcpCli.#writeAtomic( { 'path': savedPath, 'content': JSON.stringify( scoresDoc, null, 4 ), 'onConflict': 'overwrite' } )
+            const scopedState = prevState === null ? { target, scopeName } : prevState
+            scopedState[ 'status' ] = 'scored'
+            scopedState[ 'lastUpdatedAt' ] = now
+            scopedState[ 'consumedAreas' ] = verify.acceptedAreas
+            scopedState[ 'taskComplete' ] = verify.complete
+            scopedState[ 'gradingsWritten' ] = gradingsWrite.written
+            await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( scopedState, null, 4 ), 'onConflict': 'overwrite' } )
+            return { 'result': { 'status': true, 'stage': 3, 'mode': 'consume-scores', 'saved': true, scoped, flow, target, 'scoresPath': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': savedPath } ), 'gradingsWritten': gradingsWrite.written, 'acceptedAreas': verify.acceptedAreas, 'taskComplete': verify.complete, 'scoreCount': scoresDoc[ 'scores' ].length, dependencyChain } }
         }
 
         // PRD-012 — --no-save (dryRun): the scores file was read and the Task-ID
@@ -14347,6 +14879,185 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Memo 112 P6.1 — `grading finalize <ns>`: the Austritts-Rollup. A thin wrapper
+    // around the proven RebuildIndex -> ProviderProof sequence (`#deterministicRollup`),
+    // PLUS the Recommendation (the same worklist `plan` reports). Bare namespace only
+    // (no ns/schema): finalize rolls up a whole namespace. NO SILENT DEFAULT.
+    static async gradingFinalize( { cwd, target, gradingDataDir, gradingExportDir = null, targetGrade = null, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing finalize target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading finalize <namespace> [--target <grade>]` } ) }
+        }
+        if( target.includes( '/' ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `finalize operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading finalize ${target.split( '/' )[ 0 ]}` } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const rollup = await FlowMcpCli.#deterministicRollup( { cwd, grading, gradingDataRoot, gradingExportDir, 'namespace': target } )
+        if( rollup.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': rollup.error, 'fix': rollup.fix } ) }
+        }
+
+        const recommendation = await FlowMcpCli.#computeGradingWorklist( { cwd, grading, gradingDataRoot, 'namespace': target, targetGrade } )
+        if( recommendation.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': recommendation.error, 'fix': recommendation.fix } ) }
+        }
+
+        return {
+            'result': {
+                'status': true,
+                'mode': 'finalize',
+                'namespace': target,
+                'target': targetGrade,
+                'indexPath': rollup.indexPath,
+                'proofPath': rollup.proofPath,
+                'rollupStatus': rollup.rollupStatus,
+                'rollupGrade': rollup.rollupGrade,
+                'recommendation': { 'worklist': recommendation.worklist, 'skip': recommendation.skip }
+            }
+        }
+    }
+
+
+    // Memo 112 P6.2 — `grading plan <ns>`: the read-only Eintritts-Worklist. Reports
+    // the SAME worklist as finalize: which schemas need (re-)grading (ungraded OR the
+    // schemaHash drifted OR — with --target — below the target grade), and which are
+    // skipped (fresh / at-or-above target). Writes NOTHING. NO SILENT DEFAULT.
+    static async gradingPlan( { cwd, target, gradingDataDir, targetGrade = null, json } ) {
+        const grading = await FlowMcpCli.#loadGradingModule()
+        if( grading === null ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+        }
+        if( typeof target !== 'string' || target.length === 0 ) {
+            return { 'result': FlowMcpCli.#error( { 'error': 'Missing plan target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading plan <namespace> [--target <grade>]` } ) }
+        }
+        if( target.includes( '/' ) ) {
+            return { 'result': FlowMcpCli.#error( { 'error': `plan operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading plan ${target.split( '/' )[ 0 ]}` } ) }
+        }
+
+        const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
+        const worklist = await FlowMcpCli.#computeGradingWorklist( { cwd, grading, gradingDataRoot, 'namespace': target, targetGrade } )
+        if( worklist.status !== true ) {
+            return { 'result': FlowMcpCli.#error( { 'error': worklist.error, 'fix': worklist.fix } ) }
+        }
+
+        return {
+            'result': {
+                'status': true,
+                'mode': 'plan',
+                'namespace': target,
+                'target': targetGrade,
+                'worklist': worklist.worklist,
+                'skip': worklist.skip
+            }
+        }
+    }
+
+
+    // Memo 112 P6.2 — the shared staleness worklist used by BOTH plan and finalize.
+    // For every LIVE schema of the namespace it decides one of two buckets:
+    //   worklist (needs grading): ungraded | stale (stored schemaHash != live) |
+    //                             under-target (grade below --target)
+    //   skip (no work):           fresh (stored hash == live) and at/above target
+    // The stored hash is read from the latest tools-aggregate `_gradings` entry the
+    // schema's index node references; the live hash via HashGenerator.computeSchemaHash.
+    // A graded schema WITHOUT a stored hash (legacy grade) is NOT treated as stale —
+    // re-grading is opt-in via edit (Quality-Bar not lowered) — but it is flagged.
+    // NO SILENT DEFAULT: an unresolvable namespace is a coded error.
+    static #gradeRank( { grade } ) {
+        const ranks = { 'A': 5, 'B': 4, 'C': 3, 'D': 2, 'F': 1 }
+        return typeof grade === 'string' && ranks[ grade ] !== undefined ? ranks[ grade ] : 0
+    }
+
+
+    static async #computeGradingWorklist( { cwd, grading, gradingDataRoot, namespace, targetGrade = null } ) {
+        const HashGenerator = grading[ 'HashGenerator' ]
+        if( HashGenerator === undefined || HashGenerator === null ) {
+            return { 'status': false, 'error': 'flowmcp-grading too old: HashGenerator not exported; staleness cannot be computed.', 'fix': 'Update the flowmcp-grading dependency.' }
+        }
+
+        const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolved.status !== true ) {
+            return { 'status': false, 'error': resolved.error, 'fix': resolved.fix }
+        }
+
+        const namespaceDir = join( gradingDataRoot, 'providers', namespace )
+        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': join( namespaceDir, 'index.json' ) } )
+        const indexSchemas = index !== null && index[ 'schemas' ] !== undefined ? index[ 'schemas' ] : {}
+        const targetRank = targetGrade === null ? null : FlowMcpCli.#gradeRank( { 'grade': targetGrade } )
+
+        const worklist = []
+        const skip = []
+
+        await resolved.schemas
+            .reduce( ( promise, schema ) => promise.then( async () => {
+                const node = indexSchemas[ schema.schemaName ] === undefined ? null : indexSchemas[ schema.schemaName ]
+                const grade = node !== null && typeof node[ 'grade' ] === 'string' ? node[ 'grade' ] : null
+                const isGraded = node !== null && node[ 'status' ] === 'graded' && grade !== null
+
+                if( isGraded === false ) {
+                    worklist.push( { 'schema': schema.schemaName, 'reason': 'ungraded', grade } )
+                    return
+                }
+
+                const liveHash = HashGenerator.computeSchemaHash( { 'schema': schema.main } ).hash
+                const storedHash = await FlowMcpCli.#readStoredSchemaHash( { namespaceDir, node } )
+                const underTarget = targetRank !== null && FlowMcpCli.#gradeRank( { grade } ) < targetRank
+
+                // Stale only when BOTH hashes are known and differ. A null live hash
+                // (schema not canonicalizable) or a missing stored hash (legacy grade)
+                // is treated as not-stale — never a silent re-grade of the whole island.
+                if( storedHash !== null && liveHash !== null && storedHash !== liveHash ) {
+                    worklist.push( { 'schema': schema.schemaName, 'reason': 'stale', grade } )
+                    return
+                }
+                if( underTarget === true ) {
+                    worklist.push( { 'schema': schema.schemaName, 'reason': 'under-target', grade } )
+                    return
+                }
+                skip.push( { 'schema': schema.schemaName, grade, 'hashVerified': storedHash !== null } )
+            } ), Promise.resolve() )
+
+        return { 'status': true, worklist, skip }
+    }
+
+
+    // Read the schemaHash a schema's grade was recorded with, from the tools-aggregate
+    // `_gradings` entry the index node points at. Returns null when the entry, the ref,
+    // or the field is absent (legacy grade) — never a silent default.
+    static async #readStoredSchemaHash( { namespaceDir, node } ) {
+        const ref = node !== null
+            && node[ 'toolsAggregate' ] !== undefined
+            && node[ 'toolsAggregate' ] !== null
+            && typeof node[ 'toolsAggregate' ][ 'ref' ] === 'string'
+            ? node[ 'toolsAggregate' ][ 'ref' ]
+            : null
+        if( ref === null ) { return null }
+        const { data: entry } = await FlowMcpCli.#readJson( { 'filePath': join( namespaceDir, ref ) } )
+        if( entry === null ) { return null }
+        return typeof entry[ 'schemaHash' ] === 'string' && entry[ 'schemaHash' ].length > 0 ? entry[ 'schemaHash' ] : null
+    }
+
+
+    // Memo 112 P6.2 — best-effort live schemaHash for one schema, used by the
+    // non-deterministic consume path to persist the hash. The namespace is derived
+    // from the island namespace dir (providers/<ns>). Returns null on any miss (module
+    // absent, schema not resolvable, uncanonicalizable) — never throws into consume.
+    static async #liveSchemaHashFor( { HashGenerator, namespaceDir, schemaName } ) {
+        if( HashGenerator === undefined || HashGenerator === null ) { return null }
+        const namespace = basename( namespaceDir )
+        const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
+        if( resolved.status !== true ) { return null }
+        const match = resolved.schemas.find( ( s ) => s.schemaName === schemaName )
+        if( match === undefined ) { return null }
+        const computed = HashGenerator.computeSchemaHash( { 'schema': match.main } ).hash
+        return typeof computed === 'string' && computed.length > 0 ? computed : null
+    }
+
+
     static async gradingState( { cwd, target, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
@@ -14371,6 +15082,11 @@ allowlist, migrate-config, etc.).
         // PRD-010 — the graph-driven nextAction block, identical on state + doctor.
         const nextAction = await FlowMcpCli.#computeNextAction( { grading, detected, target } )
 
+        // Memo 112 — per-schema progress from the isolated `_schema/<name>/` states,
+        // so a parallel per-schema grading run is checkable: which schemas are scored,
+        // under which run-id, how many remain.
+        const schemaProgress = await FlowMcpCli.#readSchemaProgress( { 'targetDir': detected.targetDir } )
+
         return {
             'result': {
                 'status': true,
@@ -14381,14 +15097,47 @@ allowlist, migrate-config, etc.).
                 'rollupGrade': index === null ? null : index[ 'grade' ],
                 'summary': index === null ? null : index[ 'summary' ],
                 'batonStatus': state === null ? null : state[ 'status' ],
+                'runId': state === null ? null : ( state[ 'runId' ] || null ),
                 'lastUpdatedAt': state === null ? null : state[ 'lastUpdatedAt' ],
                 indexPath,
                 statePath,
                 'indexPresent': index !== null,
                 'statePresent': state !== null,
+                schemaProgress,
                 nextAction
             }
         }
+    }
+
+
+    // Memo 112 — read the per-schema progress for a namespace from the isolated
+    // `_schema/<name>/state.json` files the scoped emit/consume write. Returns each
+    // schema's status + run-id, plus a scored/total tally. NO silent default: a
+    // missing `_schema/` dir means "no per-schema run yet" (empty, total 0).
+    static async #readSchemaProgress( { targetDir } ) {
+        const schemaRoot = join( targetDir, '_schema' )
+        if( existsSync( schemaRoot ) === false ) {
+            return { 'schemas': [], 'scored': 0, 'total': 0 }
+        }
+        const entries = await readdir( schemaRoot, { 'withFileTypes': true } )
+        const dirs = entries
+            .filter( ( e ) => e.isDirectory() === true )
+            .map( ( e ) => e.name )
+            .sort()
+        const schemas = await dirs
+            .reduce( ( promise, name ) => promise.then( async ( acc ) => {
+                const { data: st } = await FlowMcpCli.#readJson( { 'filePath': join( schemaRoot, name, 'state.json' ) } )
+                acc.push( {
+                    'schema': name,
+                    'status': st === null ? 'pending' : ( st[ 'status' ] || 'pending' ),
+                    'runId': st === null ? null : ( st[ 'runId' ] || null ),
+                    'taskComplete': st !== null && st[ 'taskComplete' ] === true
+                } )
+                return acc
+            } ), Promise.resolve( [] ) )
+        const scored = schemas.filter( ( s ) => s.status === 'scored' ).length
+
+        return { schemas, scored, 'total': schemas.length }
     }
 
 

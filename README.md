@@ -112,8 +112,12 @@ workbench island. They are reachable both as `flowmcp grading ...` and
 | `flowmcp grading non-deterministic <ns\|selection> --consume-scores <path>` | Stage 3: consume harness scores, rebuild index, finalize |
 | `flowmcp grading export <ns\|selection>` | Export the graded state (`index.json`) back to the source |
 | `flowmcp grading state <ns\|selection>` | Show the current rollup status (read-only) |
+| `flowmcp grading plan <ns> [--target <grade>]` | Read-only entry worklist: which schemas need (re-)grading — ungraded, `schemaHash`-stale, or below `--target` — and which are fresh/skipped |
+| `flowmcp grading finalize <ns> [--target <grade>]` | Rebuild the namespace `index.json` + `grade.json` from the per-schema gradings, then print the same recommendation (worklist) as `plan` |
 
 Flags: `--phase <area>` restricts grading to a single area/skill;
+`--target <grade>` adds a quality lens to `plan`/`finalize` (worklist also
+includes schemas below the target; never lowers the quality bar);
 `--on-conflict <abort\|skip\|overwrite>` sets the write-conflict policy
 (default: no overwrite); `--grading-data <path>` overrides the island location
 for a single call.
