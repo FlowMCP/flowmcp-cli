@@ -51,6 +51,7 @@ const args = parseArgs( {
         'schema': { type: 'string' },
         'only': { type: 'string' },
         'phase': { type: 'string' },
+        'run': { type: 'string' },
         'member-source': { type: 'string' },
         'grading-data': { type: 'string' },
         'export-dir': { type: 'string' },
@@ -58,7 +59,8 @@ const args = parseArgs( {
         'max-turns': { type: 'string' },
         'with-keys': { type: 'boolean' },
         'set-data-dir': { type: 'string' },
-        'set-export-dir': { type: 'string' }
+        'set-export-dir': { type: 'string' },
+        'target': { type: 'string' }
     }
 } )
 
@@ -433,13 +435,16 @@ const runCommand = async () => {
         // non-deterministic LLM-scoring path (emit + consume), formerly only reached
         // via `run --emit-prompts` / `run --consume-scores`. `run` is kept as the
         // internal mechanic (Never-delete-legacy).
-        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'skill', 'export', 'run', 'state', 'worklist', 'doctor', 'config' ]
+        // Memo 112 Phase 6 — `finalize` (P6.1) is the Austritts-Rollup (RebuildIndex
+        // -> ProviderProof) + Recommendation; `plan` (P6.2) is the read-only
+        // Eintritts-Worklist (Staleness via schemaHash). Both report the SAME worklist.
+        const validSubCommands = [ 'deterministic', 'non-deterministic', 'reload', 'skill', 'export', 'run', 'state', 'worklist', 'doctor', 'config', 'finalize', 'plan' ]
 
         if( !subCommand || !validSubCommands.includes( subCommand ) ) {
             const result = {
                 'status': false,
                 'error': 'Missing or unknown grading sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | skill <ns|selection> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | config [--set-data-dir <path>] [--set-export-dir <path>]`
+                'fix': `Use: ${appConfig[ 'cliCommand' ]} grading deterministic <id> [--force] | non-deterministic <ns|selection> --emit-prompts | --consume-scores <path> | reload <ns|ns/schema> | skill <ns|selection> | export <ns|selection> | state <ns|selection> | worklist <ns> | doctor <ns> | plan <ns> [--target <grade>] | finalize <ns> [--target <grade>] | config [--set-data-dir <path>] [--set-export-dir <path>]`
             }
             output( { result } )
 
@@ -448,6 +453,7 @@ const runCommand = async () => {
 
         const target = positionals[ 2 ]
         const phase = values[ 'phase' ] === undefined ? null : values[ 'phase' ]
+        const runId = values[ 'run' ] === undefined ? null : values[ 'run' ]
         const emitPrompts = values[ 'emit-prompts' ] === true
         const consumeScores = values[ 'consume-scores' ] === undefined ? null : values[ 'consume-scores' ]
         const onConflict = values[ 'on-conflict' ] === undefined ? null : values[ 'on-conflict' ]
@@ -468,6 +474,9 @@ const runCommand = async () => {
         const force = values[ 'force' ] === true
         // PRD-4.1 — --quiet silences the stderr progress; stdout JSON is unaffected.
         const quiet = values[ 'quiet' ] === true
+        // Memo 112 Phase 6 / P6.5 — optional quality lens for plan/finalize. Default
+        // null = pure coverage/staleness. Does NOT lower the quality bar.
+        const targetGrade = values[ 'target' ] === undefined ? null : values[ 'target' ]
 
         if( subCommand === 'deterministic' ) {
             const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
@@ -516,7 +525,7 @@ const runCommand = async () => {
             // mechanic. Both share the exact same gradingRun() implementation (no
             // code drift). The mode (--emit-prompts | --consume-scores) is still
             // explicit — no silent default.
-            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
+            const { result } = await FlowMcpCli.gradingRun( { cwd, target, phase, runId, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns, withKeys, dryRun, quiet, json } )
             // The planned round-trip: `--emit-prompts` (without --json) RETURNS the
             // self-contained Emit-Skill TEXT directly — the thing you hand to a
             // subagent — so no jq/field-digging is needed. The machine envelope stays
@@ -556,6 +565,22 @@ const runCommand = async () => {
             const setDataDir = values[ 'set-data-dir' ] === undefined ? null : values[ 'set-data-dir' ]
             const setExportDir = values[ 'set-export-dir' ] === undefined ? null : values[ 'set-export-dir' ]
             const { result } = await FlowMcpCli.gradingConfig( { cwd, setDataDir, setExportDir, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'finalize' ) {
+            // Memo 112 P6.1 — Austritts-Rollup + Recommendation (same worklist as `plan`).
+            const { result } = await FlowMcpCli.gradingFinalize( { cwd, target, gradingDataDir, gradingExportDir, targetGrade, json } )
+            output( { result } )
+
+            return true
+        }
+
+        if( subCommand === 'plan' ) {
+            // Memo 112 P6.2 — read-only Eintritts-Worklist via Staleness (schemaHash).
+            const { result } = await FlowMcpCli.gradingPlan( { cwd, target, gradingDataDir, targetGrade, json } )
             output( { result } )
 
             return true

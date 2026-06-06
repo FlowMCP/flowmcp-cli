@@ -400,19 +400,21 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
 describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', () => {
     afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
 
-    it( 'emits ONE self-contained emit-skill with Task-ID + consume command in the text', async () => {
+    it( 'emits the namespace ORCHESTRATOR with Task-ID + per-schema dispatch commands', async () => {
         const cwd = await freshCwd()
         FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
         expect( result.status ).toBe( true )
         expect( typeof result.emitSkill ).toBe( 'string' )
-        // self-describing header + Task-ID in the text
-        expect( result.emitSkill ).toContain( 'Grading Emit-Skill' )
+        // Memo 112 (REV-05): the namespace emit is the ORCHESTRATOR — self-describing
+        // header + Task-ID, dispatching per-schema sub-skills via the schema-scoped
+        // --emit-prompts command (consume is delegated to each sub-agent).
+        expect( result.emitSkill ).toContain( 'Grading orchestrator' )
         expect( result.emitSkill ).toContain( result.taskId )
-        // the return contract names the exact consume command in the text
-        expect( result.emitSkill ).toContain( 'grading non-deterministic demoapi --consume-scores' )
-        // the ready-area prompts are filled — no NAME torso survives
+        expect( result.emitSkill ).toContain( 'demoapi/' )
+        expect( result.emitSkill ).toContain( '--emit-prompts' )
+        // no NAME torso survives anywhere in the orchestrator text
         expect( result.emitSkill.includes( '{{NAMESPACE}}' ) ).toBe( false )
         expect( result.emitSkill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
         expect( result.emitSkill.includes( '{{OUTPUT_SCHEMA_REF}}' ) ).toBe( false )
@@ -504,9 +506,10 @@ describe( 'gradingSkill — print the emitted Emit-Skill text', () => {
         const { result } = await FlowMcpCli.gradingSkill( { cwd, target: 'demoapi', gradingDataDir: '.flowmcp/grading' } )
         expect( result.status ).toBe( true )
         expect( typeof result.skill ).toBe( 'string' )
-        expect( result.skill ).toContain( 'Grading Emit-Skill' )
+        // Memo 112 (REV-05): namespace skill = orchestrator (dispatch via --emit-prompts)
+        expect( result.skill ).toContain( 'Grading orchestrator' )
         expect( result.skill ).toContain( emitted.result.taskId )
-        expect( result.skill ).toContain( '--consume-scores' )
+        expect( result.skill ).toContain( '--emit-prompts' )
         expect( result.skill.includes( '{{TOOL_NAME}}' ) ).toBe( false )
         expect( result.taskId ).toBe( emitted.result.taskId )
     } )
