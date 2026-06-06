@@ -14802,26 +14802,57 @@ allowlist, migrate-config, etc.).
         const matched = []
         const loadErrors = []
 
-        await sources
-            .reduce( ( promise, source ) => promise.then( async () => {
-                await source[ 'schemas' ]
-                    .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
-                        const { file } = schemaInfo
-                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${file}` } )
-                        const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+        // Flatten (source, schemaInfo) pairs so the cheap namespace probe and the
+        // expensive compile can be separated.
+        const pairs = sources
+            .reduce( ( acc, source ) => {
+                const list = source[ 'schemas' ] === undefined ? [] : source[ 'schemas' ]
+                list
+                    .forEach( ( schemaInfo ) => { acc.push( { source, schemaInfo } ) } )
+                return acc
+            }, [] )
 
-                        if( main === null || main === undefined ) {
-                            // A load failure is only relevant if the file might belong to
-                            // the target namespace; we cannot know without main.namespace,
-                            // so record it for diagnostics without aborting the scan.
-                            loadErrors.push( `${source[ 'name' ]}/${file}: ${error}` )
-                            return
-                        }
-                        if( main[ 'namespace' ] !== namespace ) { return }
+        // O(N^2) fix: grading one schema must not IMPORT every schema in
+        // schemaFolders[] just to read main.namespace. Narrow the candidate set with
+        // a cheap text probe first — read each file and regex its declared namespace
+        // string(s). A file is a candidate when the target namespace appears OR when
+        // no namespace string can be read (unknown -> compile to stay correct). This
+        // catches folder != namespace and multi-folder namespaces without false
+        // exclusions; main.namespace below remains the authoritative gate.
+        const candidates = await pairs
+            .reduce( ( promise, pair ) => promise.then( async ( acc ) => {
+                const { source, schemaInfo } = pair
+                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${schemaInfo[ 'file' ]}` } )
+                let isCandidate = true
+                try {
+                    const text = await readFile( filePath, 'utf-8' )
+                    const found = [ ...text.matchAll( /namespace\s*:\s*['"]([a-z][a-z0-9-]*)['"]/g ) ]
+                        .map( ( match ) => match[ 1 ] )
+                    isCandidate = found.length === 0 || found.includes( namespace )
+                } catch {
+                    isCandidate = true
+                }
+                if( isCandidate ) { acc.push( { source, schemaInfo, filePath } ) }
+                return acc
+            } ), Promise.resolve( [] ) )
 
-                        const schemaName = basename( file, '.mjs' )
-                        matched.push( { schemaName, main, handlersFn, 'sourcePath': filePath } )
-                    } ), Promise.resolve() )
+        await candidates
+            .reduce( ( promise, candidate ) => promise.then( async () => {
+                const { source, schemaInfo, filePath } = candidate
+                const { file } = schemaInfo
+                const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                if( main === null || main === undefined ) {
+                    // A load failure is only relevant if the file might belong to
+                    // the target namespace; we cannot know without main.namespace,
+                    // so record it for diagnostics without aborting the scan.
+                    loadErrors.push( `${source[ 'name' ]}/${file}: ${error}` )
+                    return
+                }
+                if( main[ 'namespace' ] !== namespace ) { return }
+
+                const schemaName = basename( file, '.mjs' )
+                matched.push( { schemaName, main, handlersFn, 'sourcePath': filePath } )
             } ), Promise.resolve() )
 
         if( matched.length === 0 ) {
