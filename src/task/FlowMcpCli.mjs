@@ -9290,7 +9290,8 @@ allowlist, migrate-config, etc.).
                 const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
                 const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
                 const schemaRequire = createRequire( resolve( filePath ) )
-                const unresolved = []
+                const notInstalled = []
+                const loadFailed = []
 
                 await requiredLibraries
                     .reduce( ( promise, lib ) => promise.then( async () => {
@@ -9298,13 +9299,23 @@ allowlist, migrate-config, etc.).
 
                         if( loaded[ 'status' ] === true ) {
                             libraries[ lib ] = loaded[ 'module' ]
+                        } else if( loaded[ 'loadError' ] !== null && loaded[ 'loadError' ] !== undefined ) {
+                            // Installed but unloadable — a broken/ABI-mismatched native binding.
+                            loadFailed.push( { lib, 'reason': loaded[ 'loadError' ] } )
                         } else {
-                            unresolved.push( lib )
+                            notInstalled.push( lib )
                         }
                     } ), Promise.resolve() )
 
-                if( unresolved.length > 0 ) {
-                    throw new Error( `LIB-RESOLVE: required librar${unresolved.length === 1 ? 'y' : 'ies'} not resolvable from CLI base (${resolveBase}) nor schema dir: ${unresolved.join( ', ' )}. Install the librar${unresolved.length === 1 ? 'y' : 'ies'} into the CLI (npm install <lib>) so handlers can load deterministically.` )
+                if( loadFailed.length > 0 ) {
+                    const detail = loadFailed
+                        .map( ( entry ) => `${entry.lib} (${entry.reason})` )
+                        .join( '; ' )
+                    throw new Error( `LIB-BINDING: required librar${loadFailed.length === 1 ? 'y is' : 'ies are'} installed but failed to load — a native binding is missing or built for a different Node.js ABI: ${detail}. Rebuild the native module (e.g. "npm rebuild ${loadFailed[ 0 ].lib}" in the CLI, or reinstall it). This is NOT a missing dependency.` )
+                }
+
+                if( notInstalled.length > 0 ) {
+                    throw new Error( `LIB-RESOLVE: required librar${notInstalled.length === 1 ? 'y' : 'ies'} not resolvable from CLI base (${resolveBase}) nor schema dir: ${notInstalled.join( ', ' )}. Install the librar${notInstalled.length === 1 ? 'y' : 'ies'} into the CLI (npm install <lib>) so handlers can load deterministically.` )
                 }
             }
 
@@ -9331,6 +9342,12 @@ allowlist, migrate-config, etc.).
     static async #loadOneLibrary( { lib, baseRequire, schemaRequire } ) {
         // Deterministic base first (CLI install node_modules), then schema-dir fallback.
         const requires = [ baseRequire, schemaRequire ]
+        // A library can fail in two distinct ways: NOT INSTALLED (resolve throws) or
+        // INSTALLED-BUT-UNLOADABLE (resolve succeeds, load throws — e.g. a native module
+        // such as better-sqlite3 whose .node binding is missing or built for a different
+        // ABI). They need different fixes, so the load error is captured separately and
+        // never collapsed into a misleading "not installed" message.
+        let loadError = null
 
         const attempt = await requires
             .reduce( async ( accPromise, req ) => {
@@ -9340,22 +9357,30 @@ allowlist, migrate-config, etc.).
                     return acc
                 }
 
+                let resolvedPath = null
                 try {
-                    const resolvedPath = req.resolve( lib )
-
-                    try {
-                        const mod = await import( pathToFileURL( resolvedPath ).href )
-                        return { 'status': true, 'module': mod.default || mod }
-                    } catch( importErr ) {
-                        const mod = req( lib )
-                        return { 'status': true, 'module': mod.default || mod }
-                    }
+                    resolvedPath = req.resolve( lib )
                 } catch( resolveErr ) {
                     return acc
                 }
+
+                // Present from this base — any failure now is a LOAD error (native
+                // binding / ABI), not a missing dependency.
+                try {
+                    const mod = await import( pathToFileURL( resolvedPath ).href )
+                    return { 'status': true, 'module': mod.default || mod }
+                } catch( importErr ) {
+                    try {
+                        const mod = req( lib )
+                        return { 'status': true, 'module': mod.default || mod }
+                    } catch( requireErr ) {
+                        loadError = requireErr.message || importErr.message
+                        return acc
+                    }
+                }
             }, Promise.resolve( { 'status': false, 'module': null } ) )
 
-        return attempt
+        return { ...attempt, loadError }
     }
 
 

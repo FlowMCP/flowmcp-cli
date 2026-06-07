@@ -23,6 +23,10 @@ All notable changes to `flowmcp-cli` are documented here.
 
 ### Fixed
 
+- A required native library that is installed but fails to load (a missing or
+  ABI-mismatched `.node` binding, e.g. better-sqlite3 after a broken build) now reports a
+  clear `LIB-BINDING` error that says to rebuild the native module — instead of the
+  misleading `LIB-RESOLVE` "library not resolvable / install it" message.
 - Empty/whitespace `.env` values for a `requiredServerParam` are now treated as MISSING
   (key-gated, DPT-007) instead of being injected as an empty credential that fired a
   live 401 recorded as a false FAIL. Consistent with how `search`/`list` flag a tool as
