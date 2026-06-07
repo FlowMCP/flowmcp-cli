@@ -60,7 +60,8 @@ const args = parseArgs( {
         'with-keys': { type: 'boolean' },
         'set-data-dir': { type: 'string' },
         'set-export-dir': { type: 'string' },
-        'target': { type: 'string' }
+        'target': { type: 'string' },
+        'throttle': { type: 'string' }
     }
 } )
 
@@ -477,9 +478,13 @@ const runCommand = async () => {
         // Memo 112 Phase 6 / P6.5 — optional quality lens for plan/finalize. Default
         // null = pure coverage/staleness. Does NOT lower the quality bar.
         const targetGrade = values[ 'target' ] === undefined ? null : values[ 'target' ]
+        // Memo 115 follow-up — --throttle <ms> spaces live data-pretest fetches
+        // (opt-in, default 0 = no throttle). Lets rate-limited multi-tool schemas
+        // (e.g. taapi/coreac/footballdata) clear the per-burst provider limit.
+        const throttleMs = values[ 'throttle' ] === undefined ? 0 : Number( values[ 'throttle' ] )
 
         if( subCommand === 'deterministic' ) {
-            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
+            const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json, throttleMs } )
             output( { result } )
             // PRD-4.2 — a concise human summary to STDERR (not on stdout, so a piped
             // `... | jq` stays pure machine JSON). Suppressed by --quiet and by --json
