@@ -12732,7 +12732,7 @@ allowlist, migrate-config, etc.).
     // selection-member run through the existing structural primitive check
     // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
     // allowlist applies (no duplication).
-    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false } ) {
+    static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false, throttleMs = 0 } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
             return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
@@ -12761,7 +12761,7 @@ allowlist, migrate-config, etc.).
         // namespace rollup (index.json) + Provider-Proof (grade.json). Delegated so
         // the single-schema path below stays unchanged.
         if( parsed.type === 'namespace' ) {
-            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json } )
+            return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json, throttleMs } )
         }
         if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
             return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
@@ -12839,7 +12839,8 @@ allowlist, migrate-config, etc.).
             sharedLists,
             'gradingDataDir': gradingDataRoot,
             dryRun,
-            force
+            force,
+            throttleMs
         } )
 
         // Tool-ID: restrict the pretest view to the one addressed tool. The gate is
@@ -13038,7 +13039,7 @@ allowlist, migrate-config, etc.).
     // Memo 107 PRD-004 — bare-namespace deterministic grade: run every schema of the
     // namespace (skipRollup, so each writes its own `_gradings/` but defers the rollup),
     // then build the namespace index.json + Provider-Proof grade.json EXACTLY ONCE.
-    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, quiet = false, json } ) {
+    static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, quiet = false, json, throttleMs = 0 } ) {
         const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolved.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
@@ -13052,7 +13053,7 @@ allowlist, migrate-config, etc.).
             .reduce( ( promise, schema, index ) => promise.then( async () => {
                 FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${total}] ${schema.schemaName}` } )
                 const sub = await FlowMcpCli.gradingDeterministic( {
-                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, 'quiet': true, json, 'skipRollup': true
+                    cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, 'quiet': true, json, 'skipRollup': true, throttleMs
                 } )
                 const subResult = sub.result
                 perSchema.push( {
