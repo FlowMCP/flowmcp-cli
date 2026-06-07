@@ -22,6 +22,7 @@ import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
 import { FlowMCP } from 'flowmcp/v2'
+import { SkillValidator, SelectionValidator } from 'flowmcp/v4'
 
 import { ZodBuilder } from './ZodBuilder.mjs'
 
@@ -8859,35 +8860,55 @@ allowlist, migrate-config, etc.).
                 }
             }
 
+            // skill / prompt / selection-member carry no downloadable data. They are
+            // validated STRUCTURALLY against the real v4 modules (no longer stub-passed):
+            // SkillValidator / SelectionValidator / a prompt field check. A structurally
+            // invalid primitive returns status:false.
             if( primitive === 'skill' ) {
-                // TODO PRD-005: import SkillContentGenerator + PlaceholderResolver from flowmcp/v4 once subpath is exported
-                // Currently flowmcp package only exposes ./v2; v4 modules exist in flowmcp-core/src/v4 but no package export
+                const tools = schemaMain[ 'tools' ] || {}
+                const resources = schemaMain[ 'resources' ] || {}
+                const skill = typedTest[ 'context' ][ 'skill' ]
+                const skillName = typedTest[ 'name' ]
+                const { status, messages } = SkillValidator.validate( {
+                    'skills': { [ skillName ]: skill },
+                    tools,
+                    resources
+                } )
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'skill-structural-test (TODO: import SkillContentGenerator/PlaceholderResolver from flowmcp/v4)',
+                    status,
+                    'error': status ? null : ( ( messages || [] )[ 0 ] || 'skill structurally invalid' ),
+                    'output': `skill-structural:${skillName}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
             }
 
             if( primitive === 'prompt' ) {
-                // TODO PRD-005: import PlaceholderResolver from flowmcp/v4 once subpath is exported
+                // No dedicated v4 PromptValidator export — the honest structural check is
+                // field-level: a prompt must carry a non-empty string name.
+                const prompt = typedTest[ 'context' ][ 'prompt' ]
+                const status = prompt !== undefined && prompt !== null && typeof prompt[ 'name' ] === 'string' && prompt[ 'name' ].length > 0
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'prompt-structural-test (TODO: import PlaceholderResolver from flowmcp/v4)',
+                    status,
+                    'error': status ? null : 'prompt structurally invalid: missing string name',
+                    'output': `prompt-structural:${typedTest[ 'name' ]}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
             }
 
             if( primitive === 'selection-member' ) {
-                // TODO PRD-005: transitive resolution via IdResolver + recursive #getAllTestsTyped on sub-schema
+                // Single-schema structural validation of the selection block via the real
+                // v4 module. Catalog-resolvability (SEL003) needs cross-schema registry
+                // data not available here, so it is omitted.
+                const selection = schemaMain[ 'selection' ] || null
+                const { valid, errors } = selection === null
+                    ? { 'valid': false, 'errors': [ 'selection block missing on schema' ] }
+                    : SelectionValidator.validate( { selection, 'catalog': null } )
                 return {
-                    'status': true,
-                    'error': null,
-                    'output': 'selection-member (transitive-not-yet-implemented)',
+                    'status': valid,
+                    'error': valid ? null : ( ( errors || [] )[ 0 ] || 'selection structurally invalid' ),
+                    'output': `selection-member:${typedTest[ 'name' ]}`,
                     'durationMs': Date.now() - startedAt,
                     primitive
                 }
@@ -14781,26 +14802,57 @@ allowlist, migrate-config, etc.).
         const matched = []
         const loadErrors = []
 
-        await sources
-            .reduce( ( promise, source ) => promise.then( async () => {
-                await source[ 'schemas' ]
-                    .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
-                        const { file } = schemaInfo
-                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${file}` } )
-                        const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+        // Flatten (source, schemaInfo) pairs so the cheap namespace probe and the
+        // expensive compile can be separated.
+        const pairs = sources
+            .reduce( ( acc, source ) => {
+                const list = source[ 'schemas' ] === undefined ? [] : source[ 'schemas' ]
+                list
+                    .forEach( ( schemaInfo ) => { acc.push( { source, schemaInfo } ) } )
+                return acc
+            }, [] )
 
-                        if( main === null || main === undefined ) {
-                            // A load failure is only relevant if the file might belong to
-                            // the target namespace; we cannot know without main.namespace,
-                            // so record it for diagnostics without aborting the scan.
-                            loadErrors.push( `${source[ 'name' ]}/${file}: ${error}` )
-                            return
-                        }
-                        if( main[ 'namespace' ] !== namespace ) { return }
+        // O(N^2) fix: grading one schema must not IMPORT every schema in
+        // schemaFolders[] just to read main.namespace. Narrow the candidate set with
+        // a cheap text probe first — read each file and regex its declared namespace
+        // string(s). A file is a candidate when the target namespace appears OR when
+        // no namespace string can be read (unknown -> compile to stay correct). This
+        // catches folder != namespace and multi-folder namespaces without false
+        // exclusions; main.namespace below remains the authoritative gate.
+        const candidates = await pairs
+            .reduce( ( promise, pair ) => promise.then( async ( acc ) => {
+                const { source, schemaInfo } = pair
+                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${schemaInfo[ 'file' ]}` } )
+                let isCandidate = true
+                try {
+                    const text = await readFile( filePath, 'utf-8' )
+                    const found = [ ...text.matchAll( /namespace\s*:\s*['"]([a-z][a-z0-9-]*)['"]/g ) ]
+                        .map( ( match ) => match[ 1 ] )
+                    isCandidate = found.length === 0 || found.includes( namespace )
+                } catch {
+                    isCandidate = true
+                }
+                if( isCandidate ) { acc.push( { source, schemaInfo, filePath } ) }
+                return acc
+            } ), Promise.resolve( [] ) )
 
-                        const schemaName = basename( file, '.mjs' )
-                        matched.push( { schemaName, main, handlersFn, 'sourcePath': filePath } )
-                    } ), Promise.resolve() )
+        await candidates
+            .reduce( ( promise, candidate ) => promise.then( async () => {
+                const { source, schemaInfo, filePath } = candidate
+                const { file } = schemaInfo
+                const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+
+                if( main === null || main === undefined ) {
+                    // A load failure is only relevant if the file might belong to
+                    // the target namespace; we cannot know without main.namespace,
+                    // so record it for diagnostics without aborting the scan.
+                    loadErrors.push( `${source[ 'name' ]}/${file}: ${error}` )
+                    return
+                }
+                if( main[ 'namespace' ] !== namespace ) { return }
+
+                const schemaName = basename( file, '.mjs' )
+                matched.push( { schemaName, main, handlersFn, 'sourcePath': filePath } )
             } ), Promise.resolve() )
 
         if( matched.length === 0 ) {

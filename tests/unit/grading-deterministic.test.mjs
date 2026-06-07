@@ -116,6 +116,28 @@ describe( 'gradingDeterministic — module + input guards', () => {
 } )
 
 
+describe( 'gradingDeterministic — O(N^2) resolver fix (folder != declared namespace)', () => {
+    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+
+    it( 'resolves a schema by its DECLARED namespace even when the provider folder name differs', async () => {
+        // crossschema declares namespace "crossfolderns" but is seeded into a folder
+        // named "mismatchfolder". The narrowed resolver must key off the declared
+        // namespace (content probe), not the folder — otherwise this schema would be
+        // silently unresolvable once the O(N^2) compile-everything scan was removed.
+        const crossFixture = join( here, '..', 'integration', 'fixtures', 'grading-crossns' )
+        await seedGradingSchemaFolder( { providerFixture: crossFixture, namespace: 'mismatchfolder', sourceName: 'crossns-src' } )
+
+        const cwd = await freshCwd()
+        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'crossfolderns/crossschema', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
+
+        expect( result.mode ).toBe( 'deterministic' )
+        expect( result.validate.status ).toBe( true )
+        expect( JSON.stringify( result ) ).not.toContain( 'SRC-001' )
+    } )
+} )
+
+
 describe( 'gradingDeterministic — schema-ID flow (validate + pretest, no emit)', () => {
     afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
 
