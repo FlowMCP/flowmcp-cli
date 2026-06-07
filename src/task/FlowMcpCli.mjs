@@ -7935,7 +7935,7 @@ Schema Folders (Memo 099):
 
 Development & Schema Maintenance:
   ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
-                                      (validate, test, allowlist, migrate-config,
+                                      (schema-check, allowlist, migrate-config,
                                        selection, lists, schemas, status,
                                        prompt, resource, etc.)
 
@@ -7967,8 +7967,12 @@ Development & Schema Maintenance commands. Tier 2 — used by schema authors
 and maintainers. AI agents typically use Tier 1 commands (${cmd} --help).
 
 Validation & Testing:
-  dev validate [path]                 Validate schema(s) structurally
-  (Memo 102: "dev test project/user/single" removed — its PASS criterion was a
+  ${cmd} schema-check [path]          Structure-only check (OFFLINE). Verifies the
+                                      schema shape against the v4 spec. It does NOT
+                                      call any API or check liveness — run
+                                      "grading deterministic" before shipping.
+  (Memo 119: "validate" was renamed to "schema-check" — old name removed, no alias.
+   Memo 102: "dev test project/user/single" removed — its PASS criterion was a
    strict subset of the deterministic grading pretest. Use:
      grading deterministic <namespace>/<schema>        structural validate + data pretest
      grading deterministic <namespace>/tool/<name>     restrict to one tool
@@ -8099,7 +8103,7 @@ ${cmd} list
 
 ## Development Commands
 
-Run \`${cmd} dev --help\` for development commands (validate, test,
+Run \`${cmd} dev --help\` for development commands (schema-check,
 allowlist, migrate-config, etc.).
 `
 
@@ -9581,7 +9585,12 @@ allowlist, migrate-config, etc.).
         const serverParams = requiredServerParams
             .reduce( ( acc, paramName ) => {
                 const value = envObject[ paramName ]
-                if( value !== undefined ) {
+                // Memo 119 Kap 5a — an empty/whitespace env value is treated as MISSING,
+                // not injected as an empty credential. Injecting '' fired a live request
+                // with an empty key (401) that was recorded as a false FAIL; omitting it
+                // routes the schema to the key-gated "not evaluable" path (DPT-007),
+                // consistent with how `search`/`list` flag a tool as disabled.
+                if( FlowMcpCli.#isKeyFilled( { value } ) ) {
                     acc[ paramName ] = value
                 }
 
@@ -10068,6 +10077,24 @@ allowlist, migrate-config, etc.).
     }
 
 
+    static #v4ConsistencyErrors( { main, toolCount } ) {
+        const errors = []
+        const routeKeys = main && main[ 'routes' ] ? Object.keys( main[ 'routes' ] ) : []
+        if( routeKeys.length > 0 ) {
+            errors.push( 'VERSION-001: a 4.x schema must not declare populated "routes" (use "tools")' )
+        }
+        const skills = main && Array.isArray( main[ 'skills' ] ) ? main[ 'skills' ] : []
+        if( skills.length > 0 ) {
+            errors.push( 'VERSION-002: a 4.x schema must not declare "skills"' )
+        }
+        if( toolCount > 8 ) {
+            errors.push( `VERSION-003: a 4.x schema declares ${toolCount} tools; the per-file cap is 8 (split the namespace)` )
+        }
+
+        return errors
+    }
+
+
     static #validateSingleSchema( { main, file, v4 } ) {
         const namespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : 'unknown'
         const toolCount = Object.keys( ( main && ( main[ 'tools' ] || main[ 'routes' ] ) ) || {} ).length
@@ -10088,12 +10115,17 @@ allowlist, migrate-config, etc.).
                         'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
                     }
                 }
+                // Memo 119 Kap 3 — version-consistency gate. A schema declaring a 4.x
+                // version must be SHAPED like v4: no populated v2 `routes`, no populated
+                // v3 `skills`, and at most 8 tools per file. Because v4 reuses the v2
+                // transport, a mis-declared schema otherwise only fails at runtime.
+                const consistencyErrors = FlowMcpCli.#v4ConsistencyErrors( { main, toolCount } )
                 const enriched = v4[ 'MetaGenerator' ]
                     ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
                     : main
                 const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
-                const combinedMessages = [ ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
-                const combinedStatus = status && sqliteGtfsErrors.length === 0
+                const combinedMessages = [ ...consistencyErrors, ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+                const combinedStatus = status && sqliteGtfsErrors.length === 0 && consistencyErrors.length === 0
                 return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
             }
 

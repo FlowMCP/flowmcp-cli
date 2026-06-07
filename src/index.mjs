@@ -714,7 +714,11 @@ const runCommand = async () => {
         return true
     }
 
-    if( command === 'validate' ) {
+    // Memo 119 Kap 7 (F3) — `validate` was renamed to `schema-check` to make the
+    // offline structural-only nature explicit (vs. `grading deterministic`, which
+    // also runs the live data pretest). The old `validate` name is REMOVED, no
+    // deprecated alias (deliberate breaking change).
+    if( command === 'schema-check' ) {
         const group = values[ 'group' ]
         const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
         output( { result } )

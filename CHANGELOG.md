@@ -2,6 +2,32 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.7.0 — 2026-06-07 (Memo 119)
+
+### Changed (BREAKING)
+
+- The `validate` command was renamed to `schema-check` to make its offline,
+  structure-only nature explicit (vs. `grading deterministic`, which also runs the
+  live data pretest). The old `validate` name is **removed** — there is no deprecated
+  alias (`flowmcp validate` now reports "Unknown command"). The sibling commands
+  `validate-catalog`, `validate-lists` and `validate-agent` are unaffected.
+
+### Added
+
+- Version-consistency gate in structural validation: a schema declaring a 4.x version
+  is now checked to be SHAPED like v4 — no populated v2 `routes` (VERSION-001), no v3
+  `skills` (VERSION-002), and at most 8 tools per file (VERSION-003). Because v4 reuses
+  the v2 transport, a mis-declared schema otherwise only fails at runtime.
+- Perf-guard test for the O(matched) namespace resolver: the deterministic grading run
+  compiles only the schema files that declare the target namespace, never the rest.
+
+### Fixed
+
+- Empty/whitespace `.env` values for a `requiredServerParam` are now treated as MISSING
+  (key-gated, DPT-007) instead of being injected as an empty credential that fired a
+  live 401 recorded as a false FAIL. Consistent with how `search`/`list` flag a tool as
+  `[disabled: missing KEY]`.
+
 ## 4.4.0 — 2026-06-04 (Memo 107)
 
 ### Added
