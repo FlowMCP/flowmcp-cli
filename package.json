@@ -35,6 +35,7 @@
         "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#de3a08888fa3945a284203d3c6ecd1419caab2bc",
         "flowmcp-grading": "github:FlowMCP/flowmcp-grading#f8bededa2328e09198930367046ca9e4885f4744",
         "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
+        "geo-dzt-toolkit": "git+https://github.com/FlowMCP/geo-dzt-toolkit.git#b11c3f67e60d6b03ff0a66fe1003c71dca1f58e4",
         "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
         "geo-gtfs-toolkit": "git+https://github.com/FlowMCP/geo-gtfs-toolkit.git#b868e612dc74c70e6401c9568a044f61ce80cede",
         "geo-idbridge-toolkit": "git+https://github.com/FlowMCP/geo-idbridge-toolkit.git#af8e57fccea2ec0716c09acb131b72f73f13f8db",
