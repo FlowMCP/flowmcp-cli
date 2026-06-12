@@ -2,6 +2,27 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.8.0 — 2026-06-09 (Memo 128)
+
+### Added
+
+- Lazy schema-resolution for `call <namespace>/tool/<name>` (Spec-ID): the call now
+  consults the prebuilt `.flowmcp/namespace-index.json` and imports ONLY the single
+  schema file that owns the tool, instead of importing every configured schema
+  (~549) before matching. For a keyless pure-calculation tool this collapses the
+  call from ~1.3–1.8 s to ~0.6 s (measured on `geo/tool/geoExtent`). Every other
+  FlowMCP consumer that shells to `flowmcp call` benefits — there is no API change.
+
+### Changed
+
+- `callTool` schema resolution and wire-name matching were extracted into reusable
+  helpers (`#resolveSchemasForCall`, `#matchToolInSchemas`, `#resolveSchemaByIndex`).
+  A Spec-ID call that misses the index, hits a stale entry, or fails the wire-name
+  re-verify falls back transparently to the full scan — behaviour is identical to
+  the previous full-scan path, only the import count changes. A `<source>:` prefix
+  still scopes resolution to exactly that source (no first-wins). Bare wire-names and
+  `flowmcp run`/serve are unaffected (full scan as before).
+
 ## 4.7.0 — 2026-06-07 (Memo 119)
 
 ### Changed (BREAKING)
