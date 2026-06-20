@@ -1,6 +1,6 @@
 {
   "name": "flowmcp-cli",
-  "version": "4.6.0",
+  "version": "4.7.0",
   "description": "CLI for developing and validating FlowMCP schemas",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "ethers": "^6.16.0",
     "figlet": "^1.10.0",
     "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#de3a08888fa3945a284203d3c6ecd1419caab2bc",
-    "flowmcp-grading": "github:FlowMCP/flowmcp-grading#24c2257bd0f292942b3b41a26ae7d0e6b0c85a05",
+    "flowmcp-grading": "github:FlowMCP/flowmcp-grading#2974ae81d79e5e94464ecfb16f66856b5beefc83",
     "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
     "geo-dzt-toolkit": "git+https://github.com/FlowMCP/geo-dzt-toolkit.git#9f1d52c9b4f9372bd3749ebb0bb53b48e22a364d",
     "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",

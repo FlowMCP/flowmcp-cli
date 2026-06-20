@@ -2,6 +2,25 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## 4.7.0 — 2026-06-20 (Memo 141)
+
+### Added
+
+- **Schema-Persona threading into grading emit** — the emit path now resolves the
+  per-namespace Schema-Persona (base + lens) and threads it into the emit substitution
+  context, so the persona-required Schema-Areas (`about-namespace`, `namespace-skills`)
+  compose instead of deferring. Adds `#resolveSchemaPersona`, `#resolveSchemaPersonaPaths`,
+  `#resolveFirstSkill`, and the extended `#buildEmitSubstitutions`.
+- **Consume-side writer for namespace-area gradings** — `--consume-scores` now persists the
+  persona-required namespace areas (`about-namespace`/`namespace-skills`) under
+  `<ns>/<schema>/resources/about/_gradings/`. This was the missing writer behind the
+  "0 About graded" symptom; the About-Persona path now works end-to-end (`about:graded`).
+
+### Changed
+
+- Re-pinned `flowmcp-grading` to `2.5.0` (`2974ae8`) for the persona-area emit composition,
+  and `geo-dzt-toolkit` to its `getTrails` build.
+
 ## 4.4.0 — 2026-06-04 (Memo 107)
 
 ### Added
