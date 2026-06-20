@@ -1,50 +1,50 @@
 {
-    "name": "flowmcp-cli",
-    "version": "4.6.0",
-    "description": "CLI for developing and validating FlowMCP schemas",
-    "type": "module",
-    "license": "MIT",
-    "author": "FlowMCP",
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/FlowMCP/flowmcp-cli.git"
-    },
-    "bugs": {
-        "url": "https://github.com/FlowMCP/flowmcp-cli/issues"
-    },
-    "homepage": "https://github.com/FlowMCP/flowmcp-cli#readme",
-    "bin": {
-        "flowmcp": "./src/index.mjs"
-    },
-    "main": "./src/task/FlowMcpCli.mjs",
-    "engines": {
-        "node": ">=22.0.0"
-    },
-    "scripts": {
-        "test": "node --experimental-vm-modules node_modules/.bin/jest",
-        "test:coverage:src": "node --experimental-vm-modules node_modules/.bin/jest --coverage --collectCoverageFrom='src/**/*.mjs'",
-        "test:file": "node --experimental-vm-modules node_modules/.bin/jest",
-        "test:isolation": "bash scripts/friction-test-isolation.sh"
-    },
-    "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.0.0",
-        "better-sqlite3": "^12.6.2",
-        "chalk": "^5.6.2",
-        "ethers": "^6.16.0",
-        "figlet": "^1.10.0",
-        "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#de3a08888fa3945a284203d3c6ecd1419caab2bc",
-        "flowmcp-grading": "github:FlowMCP/flowmcp-grading#f8bededa2328e09198930367046ca9e4885f4744",
-        "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
-        "geo-dzt-toolkit": "git+https://github.com/FlowMCP/geo-dzt-toolkit.git#c8bdcbf95ab024ee2254af9b3f36b90b3783a361",
-        "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
-        "geo-gtfs-toolkit": "git+https://github.com/FlowMCP/geo-gtfs-toolkit.git#b868e612dc74c70e6401c9568a044f61ce80cede",
-        "geo-idbridge-toolkit": "git+https://github.com/FlowMCP/geo-idbridge-toolkit.git#af8e57fccea2ec0716c09acb131b72f73f13f8db",
-        "geo-overpass-toolkit": "git+https://github.com/FlowMCP/geo-overpass-toolkit.git#708ce2ac4e7a59123bb8863ec4f236f562a011e5",
-        "geo-zhv-toolkit": "git+https://github.com/FlowMCP/geo-zhv-toolkit.git#10372245125e60472e64ba69fa575f91373215e0",
-        "inquirer": "^12.3.0"
-    },
-    "devDependencies": {
-        "@jest/globals": "^30.0.0",
-        "jest": "^30.0.0"
-    }
+  "name": "flowmcp-cli",
+  "version": "4.6.0",
+  "description": "CLI for developing and validating FlowMCP schemas",
+  "type": "module",
+  "license": "MIT",
+  "author": "FlowMCP",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FlowMCP/flowmcp-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FlowMCP/flowmcp-cli/issues"
+  },
+  "homepage": "https://github.com/FlowMCP/flowmcp-cli#readme",
+  "bin": {
+    "flowmcp": "./src/index.mjs"
+  },
+  "main": "./src/task/FlowMcpCli.mjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:coverage:src": "node --experimental-vm-modules node_modules/.bin/jest --coverage --collectCoverageFrom='src/**/*.mjs'",
+    "test:file": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:isolation": "bash scripts/friction-test-isolation.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^12.6.2",
+    "chalk": "^5.6.2",
+    "ethers": "^6.16.0",
+    "figlet": "^1.10.0",
+    "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#de3a08888fa3945a284203d3c6ecd1419caab2bc",
+    "flowmcp-grading": "github:FlowMCP/flowmcp-grading#24c2257bd0f292942b3b41a26ae7d0e6b0c85a05",
+    "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
+    "geo-dzt-toolkit": "git+https://github.com/FlowMCP/geo-dzt-toolkit.git#c8bdcbf95ab024ee2254af9b3f36b90b3783a361",
+    "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
+    "geo-gtfs-toolkit": "git+https://github.com/FlowMCP/geo-gtfs-toolkit.git#b868e612dc74c70e6401c9568a044f61ce80cede",
+    "geo-idbridge-toolkit": "git+https://github.com/FlowMCP/geo-idbridge-toolkit.git#af8e57fccea2ec0716c09acb131b72f73f13f8db",
+    "geo-overpass-toolkit": "git+https://github.com/FlowMCP/geo-overpass-toolkit.git#708ce2ac4e7a59123bb8863ec4f236f562a011e5",
+    "geo-zhv-toolkit": "git+https://github.com/FlowMCP/geo-zhv-toolkit.git#10372245125e60472e64ba69fa575f91373215e0",
+    "inquirer": "^12.3.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.0.0",
+    "jest": "^30.0.0"
+  }
 }
