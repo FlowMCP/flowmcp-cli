@@ -14796,6 +14796,105 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Memo 141 — the persona-required namespace areas (about-namespace, namespace-skills)
+    // are emitted in the namespace pass but their _gradings live SCHEMA-scoped, where
+    // RebuildIndex reads them (#resolveAboutNamespace → <ns>/<schema>/resources/about/
+    // _gradings/; #resolveNamespaceSkills → <ns>/<schema>/skills/<skill>/_gradings/).
+    // Before this, the namespace consume writer only handled the two root areas, so
+    // about-namespace / namespace-skills scores were verified+accepted then silently
+    // DROPPED — every namespace stayed about:pending forever. This writes them where
+    // RebuildIndex reads. The target schema is the first island schema dir (RebuildIndex
+    // iterates schemas and takes the first about/skill grading it finds, so a single
+    // deterministic schema dir is sufficient and conflict-free).
+    static async #writePersonaNamespaceGradings( { grading, scoresDoc, namespaceDir } ) {
+        const Grading = grading[ 'Grading' ]
+        if( Grading === undefined || Grading === null ) {
+            return { 'status': false, 'error': 'Grading module unavailable from flowmcp-grading.' }
+        }
+        const PERSONA_AREAS = [ 'about-namespace', 'namespace-skills' ]
+        const areas = Array.isArray( scoresDoc[ 'areas' ] ) ? scoresDoc[ 'areas' ] : []
+        const personaAreas = areas
+            .filter( ( areaEntry ) => PERSONA_AREAS.includes( areaEntry.area ) )
+        if( personaAreas.length === 0 ) {
+            return { 'status': true, 'written': 0 }
+        }
+
+        // Resolve the first island schema dir (same filter as RebuildIndex.#listSchemaDirs:
+        // exclude the `_`-prefixed meta dirs). No schema dir → nothing to scope under.
+        const schemaDir = existsSync( namespaceDir ) === true
+            ? readdirSync( namespaceDir, { 'withFileTypes': true } )
+                .filter( ( e ) => e.isDirectory() === true && e.name.startsWith( '_' ) === false )
+                .map( ( e ) => e.name )
+                .sort()
+                .find( ( name ) => true )
+            : undefined
+        if( schemaDir === undefined ) {
+            return { 'status': false, 'error': `no island schema dir under ${namespaceDir} to scope persona gradings` }
+        }
+
+        const now = new Date().toISOString()
+        const timestamp = now.replace( /\.\d+Z$/, 'Z' ).replace( /:/g, '-' )
+
+        try {
+            const written = await personaAreas
+                .reduce( ( areaPromise, areaEntry ) => areaPromise.then( async ( areaCount ) => {
+                    const area = areaEntry.area
+                    const results = Array.isArray( areaEntry.results ) ? areaEntry.results : []
+
+                    const created = Grading.createEntry( { 'schemaId': schemaDir, 'gradingTier': 'autonomous', 'grader': { 'kind': 'llm', 'llmModel': 'claude-code' }, area, 'harness': 'claude-code' } )
+                    if( created.entry === null ) { throw new Error( `createEntry (${area}): ${created.errors.join( '; ' )}` ) }
+
+                    const entry = results
+                        .reduce( ( entryForResults, result ) => {
+                            const scores = result.scores !== undefined && result.scores !== null ? result.scores : {}
+                            const resultReasoning = typeof result.reasoning === 'string' ? result.reasoning : ''
+                            return Object.keys( scores )
+                                .reduce( ( acc, questionId ) => {
+                                    const added = Grading.addGrading( { 'entry': acc, 'grading': { 'dimension': questionId, 'score': scores[ questionId ], 'determinism': 'non-deterministic', 'weight': 1, 'reasoning': resultReasoning, 'recordedAt': now, 'selectionContext': { 'personaIds': [ 'schema-maintainer--documentation-dx-reviewer' ] } } } )
+                                    if( added.errors.length > 0 ) { throw new Error( `addGrading (${area}/${questionId}): ${added.errors.join( '; ' )}` ) }
+                                    return added.entry
+                                }, entryForResults )
+                        }, created.entry )
+
+                    const agg = Grading.computeAggregateGrade( { entry } )
+                    if( agg.aggregateGrade === null || agg.aggregateGrade === undefined ) {
+                        throw new Error( `computeAggregateGrade (${area}): no scorable answers (${( agg.errors || [] ).join( '; ' )})` )
+                    }
+                    const stamped = Object.assign( {}, entry, { 'aggregateGrade': agg.aggregateGrade, 'grade': agg.aggregateGrade, 'rawGrade': agg.rawGrade, 'normalizedScore': agg.normalizedScore, 'gradingMode': 'full' } )
+
+                    const { filename } = Grading.formatGradingFilename( { area, timestamp } )
+                    // about-namespace → <schema>/resources/about/_gradings/
+                    // namespace-skills → <schema>/skills/<skill>/_gradings/ (first declared skill)
+                    const dir = area === 'about-namespace'
+                        ? join( namespaceDir, schemaDir, 'resources', 'about', '_gradings' )
+                        : join( namespaceDir, schemaDir, 'skills', FlowMcpCli.#resolveIslandSkillName( { 'schemaDirPath': join( namespaceDir, schemaDir ) } ), '_gradings' )
+                    await mkdir( dir, { 'recursive': true } )
+                    await FlowMcpCli.#writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                    return areaCount + 1
+                } ), Promise.resolve( 0 ) )
+
+            return { 'status': true, written }
+        } catch( err ) {
+            return { 'status': false, 'error': err.message }
+        }
+    }
+
+
+    // Memo 141 — the skill name for a namespace-skills grading dir. Prefer an existing
+    // island skill dir under <schema>/skills/; else fall back to a stable 'default'
+    // bucket (no silent drop — the grading is still written and RebuildIndex reads it).
+    static #resolveIslandSkillName( { schemaDirPath } ) {
+        const skillsRoot = join( schemaDirPath, 'skills' )
+        if( existsSync( skillsRoot ) === false ) { return 'default' }
+        const existing = readdirSync( skillsRoot, { 'withFileTypes': true } )
+            .filter( ( e ) => e.isDirectory() === true )
+            .map( ( e ) => e.name )
+            .sort()
+            .find( ( name ) => true )
+        return existing !== undefined ? existing : 'default'
+    }
+
+
     static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, scopeName = null, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
         const scoped = scopeName !== null && scopeName !== undefined
         // Memo 112 — schema-scoped consume reads the ISOLATED per-schema emit
@@ -14895,6 +14994,14 @@ allowlist, migrate-config, etc.).
             const nsWrite = await FlowMcpCli.#writeNamespaceGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'namespace': basename( targetDir ) } )
             if( nsWrite.status === false ) {
                 return { 'result': FlowMcpCli.#error( { 'error': `Could not write namespace gradings for ${target}: ${nsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or "n/a" per question) and run the command again.' } ) }
+            }
+            // Memo 141 — persist the persona-required namespace areas (about-namespace,
+            // namespace-skills) into their schema-scoped _gradings, where RebuildIndex
+            // reads them. Without this they are accepted-but-dropped (every namespace
+            // stays about:pending). about-namespace is the About-Persona-Scoring payoff.
+            const personaWrite = await FlowMcpCli.#writePersonaNamespaceGradings( { grading, scoresDoc, 'namespaceDir': targetDir } )
+            if( personaWrite.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': `Could not write persona-area gradings for ${target}: ${personaWrite.error}`, 'fix': 'Ensure the namespace has an island schema dir and the scores carry 1–5 (or "n/a") per question, then run the command again.' } ) }
             }
         }
 
