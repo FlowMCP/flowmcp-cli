@@ -14039,8 +14039,16 @@ allowlist, migrate-config, etc.).
         // skipped), dependency/Namespace-Gate (non-det namespace areas gated until
         // all schemas deterministic-green), then the caller's area selector. Each
         // partition is auditable; nothing is silently dropped.
+        // PRD-005 — the About resource is live-read from schemaFolders[], so the
+        // applicability probe needs the real SOURCE schema-file directories (where
+        // <ns>/resources/about/ lives), not the island targetDir. Derive them from the
+        // live schemas' sourcePath (unique dirnames).
+        const sourceDirs = [ ...new Set( liveSchemas
+            .map( ( s ) => s.sourcePath )
+            .filter( ( p ) => typeof p === 'string' && p.length > 0 )
+            .map( ( p ) => dirname( p ) ) ) ]
         const resolvedAreas = await FlowMcpCli.#resolveEmittedAreas( {
-            grading, areas, targetDir, schemaDirs, pretests, areaSelector
+            grading, areas, targetDir, schemaDirs, pretests, areaSelector, sourceDirs
         } )
         if( resolvedAreas.status === false ) {
             return { 'result': FlowMcpCli.#error( { 'error': resolvedAreas.error, 'fix': resolvedAreas.fix } ) }
@@ -14230,9 +14238,9 @@ allowlist, migrate-config, etc.).
     // PRD-005/006/004 — partition composed areas into emitted / skipped / gated.
     // Order: applicability pre-filter (PRD-005) -> dependency+Namespace-Gate
     // (PRD-006) -> caller area selector (PRD-004). NO silent default at any step.
-    static async #resolveEmittedAreas( { grading, areas, targetDir, schemaDirs, pretests, areaSelector } ) {
+    static async #resolveEmittedAreas( { grading, areas, targetDir, schemaDirs, pretests, areaSelector, sourceDirs = [] } ) {
         // --- PRD-005: optional-area applicability pre-filter ---------------------
-        const aboutProbe = await FlowMcpCli.#detectAboutResourcePresent( { targetDir, schemaDirs } )
+        const aboutProbe = await FlowMcpCli.#detectAboutResourcePresent( { targetDir, schemaDirs, sourceDirs } )
         const filtered = FlowMcpCli.#filterApplicableAreas( { grading, areas, aboutPresent: aboutProbe.present } )
         if( filtered.status === false ) {
             return { 'status': false, 'error': filtered.error, 'fix': filtered.fix }
@@ -14266,7 +14274,24 @@ allowlist, migrate-config, etc.).
     // schema folder (resources/about/), mirroring the rebuild lookup but at the
     // resource (not _gradings/) level. A probe error returns present:false with a
     // recorded note — never a thrown swallow, never a silent true.
-    static async #detectAboutResourcePresent( { targetDir, schemaDirs } ) {
+    static async #detectAboutResourcePresent( { targetDir, schemaDirs, sourceDirs = [] } ) {
+        // The About resource is declared by the schema's `resources.about` and resolves
+        // relative to the schema-file directory in schemaFolders[] (live-read, no
+        // import). In the flat v4 layout the schema file sits at <ns>/<schema>.mjs, so
+        // the about page lives at <ns>/resources/about/ in the SOURCE tree — NOT in the
+        // island targetDir. We probe the real source schema-file directories first; the
+        // island targetDir (namespace level + <schema> subdir) is kept as an additive
+        // fallback for grading-data trees that carry an imported about copy. Present if
+        // ANY location exists (no silent default).
+        const sourceHit = sourceDirs
+            .some( ( dir ) => existsSync( join( dir, 'resources', 'about' ) ) )
+        if( sourceHit === true ) {
+            return { 'present': true }
+        }
+        const namespaceLevel = existsSync( join( targetDir, 'resources', 'about' ) )
+        if( namespaceLevel === true ) {
+            return { 'present': true }
+        }
         const checks = await schemaDirs
             .reduce( async ( accPromise, schemaName ) => {
                 const acc = await accPromise
@@ -14568,6 +14593,78 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Namespace-level counterpart to #writeSchemaGradingsFromScores. The live-read
+    // consume (Memo 099/102) dropped the old GradingImport writer; the per-schema
+    // (scoped) branch was re-wired, but the namespace branch went straight to
+    // RebuildIndex with no writer — so tools-aggregate-namespace / namespace-description
+    // scores were verified+accepted then silently dropped and the aggregate stayed
+    // pending forever. This writes them where RebuildIndex reads: ONE entry per area
+    // under providers/<ns>/_gradings/<area>--<ts>.json (schemaId = namespace). Only the
+    // two namespace-root areas are written here; about-namespace / namespace-skills are
+    // schema/skill-scoped and per-schema areas belong to the scoped writer.
+    static async #writeNamespaceGradingsFromScores( { grading, scoresDoc, namespaceDir, namespace } ) {
+        const Grading = grading[ 'Grading' ]
+        if( Grading === undefined || Grading === null ) {
+            return { 'status': false, 'error': 'Grading module unavailable from flowmcp-grading.' }
+        }
+        const NAMESPACE_ROOT_AREAS = [ 'tools-aggregate-namespace', 'namespace-description' ]
+        const areas = Array.isArray( scoresDoc[ 'areas' ] ) ? scoresDoc[ 'areas' ] : []
+        const nsAreas = areas
+            .filter( ( areaEntry ) => NAMESPACE_ROOT_AREAS.includes( areaEntry.area ) )
+        if( nsAreas.length === 0 ) {
+            return { 'status': true, 'written': 0 }
+        }
+        const now = new Date().toISOString()
+        const timestamp = now.replace( /\.\d+Z$/, 'Z' ).replace( /:/g, '-' )
+        const gradingsDir = join( namespaceDir, '_gradings' )
+
+        // ONE entry per namespace area: each per-question result contributes its
+        // dimension(s) into the same entry (namespace units emit one result per
+        // question — #emitAreaUnit). reasoning = first non-empty per area.
+        try {
+            const written = await nsAreas
+                .reduce( ( areaPromise, areaEntry ) => areaPromise.then( async ( areaCount ) => {
+                    const area = areaEntry.area
+                    const results = Array.isArray( areaEntry.results ) ? areaEntry.results : []
+                    const firstReasoning = results
+                        .map( ( result ) => ( typeof result.reasoning === 'string' ? result.reasoning : '' ) )
+                        .find( ( reasoning ) => reasoning.length > 0 )
+                    const areaReasoning = firstReasoning !== undefined ? firstReasoning : ''
+
+                    const created = Grading.createEntry( { schemaId: namespace, 'gradingTier': 'autonomous', 'grader': { 'kind': 'llm', 'llmModel': 'claude-code' }, area, 'harness': 'claude-code' } )
+                    if( created.entry === null ) { throw new Error( `createEntry (${area}): ${created.errors.join( '; ' )}` ) }
+
+                    const entry = results
+                        .reduce( ( entryForResults, result ) => {
+                            const scores = result.scores !== undefined && result.scores !== null ? result.scores : {}
+                            const resultReasoning = typeof result.reasoning === 'string' && result.reasoning.length > 0 ? result.reasoning : areaReasoning
+                            return Object.keys( scores )
+                                .reduce( ( acc, questionId ) => {
+                                    const added = Grading.addGrading( { 'entry': acc, 'grading': { 'dimension': questionId, 'score': scores[ questionId ], 'determinism': 'non-deterministic', 'weight': 1, 'reasoning': resultReasoning, 'recordedAt': now, 'selectionContext': { 'personaIds': [ 'neutral' ] } } } )
+                                    if( added.errors.length > 0 ) { throw new Error( `addGrading (${area}/${questionId}): ${added.errors.join( '; ' )}` ) }
+                                    return added.entry
+                                }, entryForResults )
+                        }, created.entry )
+
+                    const agg = Grading.computeAggregateGrade( { entry } )
+                    if( agg.aggregateGrade === null || agg.aggregateGrade === undefined ) {
+                        throw new Error( `computeAggregateGrade (${area}): no scorable answers (${( agg.errors || [] ).join( '; ' )})` )
+                    }
+                    const stamped = Object.assign( {}, entry, { 'aggregateGrade': agg.aggregateGrade, 'grade': agg.aggregateGrade, 'rawGrade': agg.rawGrade, 'normalizedScore': agg.normalizedScore, 'gradingMode': 'full' } )
+
+                    const { filename } = Grading.formatGradingFilename( { area, timestamp } )
+                    await mkdir( gradingsDir, { 'recursive': true } )
+                    await FlowMcpCli.#writeAtomic( { 'path': join( gradingsDir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                    return areaCount + 1
+                } ), Promise.resolve( 0 ) )
+
+            return { 'status': true, written }
+        } catch( err ) {
+            return { 'status': false, 'error': err.message }
+        }
+    }
+
+
     static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, scopeName = null, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
         const scoped = scopeName !== null && scopeName !== undefined
         // Memo 112 — schema-scoped consume reads the ISOLATED per-schema emit
@@ -14655,6 +14752,18 @@ allowlist, migrate-config, etc.).
                     'scoreCount': scoresDoc[ 'scores' ].length,
                     dependencyChain
                 }
+            }
+        }
+
+        // Persist the namespace-area scores BEFORE the rebuild — the missing
+        // counterpart to the scoped per-schema writer. Without it the rebuild reads an
+        // empty namespace _gradings/ and tools-aggregate-namespace / namespace-description
+        // stay pending forever (accepted-but-dropped). Provider flow only; selection
+        // areas are not namespace-root areas.
+        if( flow === 'provider' ) {
+            const nsWrite = await FlowMcpCli.#writeNamespaceGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'namespace': basename( targetDir ) } )
+            if( nsWrite.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': `Could not write namespace gradings for ${target}: ${nsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or "n/a" per question) and run the command again.' } ) }
             }
         }
 
