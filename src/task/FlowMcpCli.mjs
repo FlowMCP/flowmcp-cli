@@ -13441,7 +13441,7 @@ allowlist, migrate-config, etc.).
     // Compose one prompt per grading area via the AreaPromptLoader (Memo 097
     // Kap. 9.0). The loader reuses PromptBuilder.build and resolves the package-
     // local prompts/ tree itself, so the CLI does not guess paths.
-    static async #composeGradingAreas( { grading, flow, substitutions = null } ) {
+    static async #composeGradingAreas( { grading, flow, persona = null, personaAreas = null, substitutions = null } ) {
         const AreaPromptLoader = grading[ 'AreaPromptLoader' ]
         if( AreaPromptLoader === undefined || AreaPromptLoader === null ) {
             throw new Error( 'AreaPromptLoader unavailable from flowmcp-grading — update the dependency.' )
@@ -13450,7 +13450,12 @@ allowlist, migrate-config, etc.).
         // PRD-3.2: pass the substitution context so the composed prompts carry real
         // schema paths + tool/namespace names (no torso). A null context keeps the
         // legacy placeholder behaviour (back-compat for callers without schema data).
-        const { areas } = await AreaPromptLoader.loadAllAreas( { promptsRoot, flow, substitutions } )
+        // Memo 141: pass the resolved Schema-Persona so the persona-required areas
+        // (about-namespace, namespace-skills) are COMPOSED here instead of deferred.
+        // A null persona keeps the legacy defer behaviour (Selection/Task-B flow).
+        // personaAreas is the composition-time applicability allow-list (about-namespace
+        // corpus-wide; namespace-skills only when the namespace carries skills).
+        const { areas } = await AreaPromptLoader.loadAllAreas( { promptsRoot, flow, persona, personaAreas, substitutions } )
 
         return { areas }
     }
@@ -13461,7 +13466,14 @@ allowlist, migrate-config, etc.).
     // artifact). The single-test/tools-aggregate areas are bundled across the
     // namespace, so {{TOOL_NAME}} resolves to the joined declared tool list and
     // {{SCHEMA_NAME}} to the schema name (single schema) or the namespace.
-    static #buildEmitSubstitutions( { cwd, namespace, liveSchemas, pretests } ) {
+    //
+    // Memo 141 — the substitution context additionally carries the persona-required
+    // Schema-Area inputs: the resolved base persona + lens (name + repo-relative file,
+    // filling the four persona NAME tokens and the {{personaPath}}/{{lensPath}} file
+    // map) plus the per-namespace {{aboutPath}}, {{namespacePath}}, {{skillPath}} and
+    // {{domainKnowledgePath}}. Composition-time applicability (which persona areas
+    // actually compose) is the caller's personaAreas allow-list.
+    static #buildEmitSubstitutions( { cwd, grading, namespace, liveSchemas, pretests } ) {
         const allTools = liveSchemas
             .flatMap( ( s ) => {
                 const tools = s.main[ 'tools' ] || s.main[ 'routes' ] || {}
@@ -13478,7 +13490,111 @@ allowlist, migrate-config, etc.).
             ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': firstPretest.summaryPath } )
             : `providers/${namespace}`
 
-        return { namespace, schemaName, toolName, schemaPath, responseFixturePath }
+        // Memo 141 — per-namespace persona + resource paths. The namespace source dir
+        // is the dirname of the first live schema's sourcePath; the About page lives at
+        // <nsDir>/resources/about/<ns>-about.md (Memo 137 convention). domainKnowledge
+        // for a namespace-skill review is its About page (the canonical namespace
+        // description). The skill ({{SKILL_NAME}}/{{skillPath}}) is the first skill the
+        // namespace declares, or empty when it has none (namespace-skills then stays
+        // off the personaAreas allow-list, so the token is never a torso).
+        const nsDir = firstSchema !== undefined && typeof firstSchema.sourcePath === 'string'
+            ? dirname( firstSchema.sourcePath )
+            : null
+        const aboutPath = nsDir !== null
+            ? FlowMcpCli.#toRepoRelativePath( { cwd, 'path': join( nsDir, 'resources', 'about', `${namespace}-about.md` ) } )
+            : `providers/${namespace}`
+        const skill = FlowMcpCli.#resolveFirstSkill( { nsDir } )
+        const persona = FlowMcpCli.#resolveSchemaPersonaPaths( { cwd, grading } )
+
+        return {
+            namespace,
+            schemaName,
+            toolName,
+            schemaPath,
+            responseFixturePath,
+            'namespacePath': schemaPath,
+            aboutPath,
+            'domainKnowledgePath': aboutPath,
+            'skillName': skill.skillName,
+            'skillPath': skill.skillPath === '' ? '' : FlowMcpCli.#toRepoRelativePath( { cwd, 'path': skill.skillPath } ),
+            'basePersonaName': persona.basePersonaName,
+            'basePersonaFile': persona.basePersonaFile,
+            'lensName': persona.lensName,
+            'lensFile': persona.lensFile,
+            'personaPath': persona.basePersonaFile,
+            'lensPath': persona.lensFile
+        }
+    }
+
+
+    // Memo 141 — the resolved technical Schema-Persona for the persona-required
+    // Schema-Areas (about-namespace, namespace-skills): the spec base persona
+    // `schema-maintainer` reviewed through the `documentation-dx-reviewer` lens
+    // (the about/skills documentation lens). Slug convention `<base>--<lens>`.
+    static #resolveSchemaPersona() {
+        return {
+            'id': 'schema-maintainer--documentation-dx-reviewer',
+            'basePersona': 'schema-maintainer',
+            'lens': 'documentation-dx-reviewer'
+        }
+    }
+
+
+    // Memo 141 — resolve repo-relative paths to the base persona + lens files. The
+    // lens ships with the grading package (AreaPromptLoader.getPersonasRoot); the base
+    // persona is the spec single-source-of-truth in repos/flowmcp-spec/personas. Both
+    // are resolved against candidate locations and the first existing one wins; the
+    // first candidate is the best-effort fallback (a missing file surfaces as a
+    // subagent blocker, never a silent success).
+    static #resolveSchemaPersonaPaths( { cwd, grading } ) {
+        const persona = FlowMcpCli.#resolveSchemaPersona()
+        const AreaPromptLoader = grading !== undefined && grading !== null
+            ? grading[ 'AreaPromptLoader' ]
+            : null
+        const packagePersonasRoot = AreaPromptLoader !== null && typeof AreaPromptLoader.getPersonasRoot === 'function'
+            ? AreaPromptLoader.getPersonasRoot().personasRoot
+            : null
+
+        const lensCandidates = [
+            join( cwd, 'repos', 'flowmcp-grading', 'personas', `${persona.lens}.md` ),
+            packagePersonasRoot !== null ? join( packagePersonasRoot, `${persona.lens}.md` ) : null
+        ]
+            .filter( ( p ) => typeof p === 'string' )
+        const baseCandidates = [
+            join( cwd, 'repos', 'flowmcp-spec', 'personas', `${persona.basePersona}.md` )
+        ]
+
+        const lensAbs = lensCandidates.find( ( p ) => existsSync( p ) ) ?? lensCandidates[ 0 ]
+        const baseAbs = baseCandidates.find( ( p ) => existsSync( p ) ) ?? baseCandidates[ 0 ]
+
+        return {
+            'basePersonaName': persona.basePersona,
+            'basePersonaFile': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': baseAbs } ),
+            'lensName': persona.lens,
+            'lensFile': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': lensAbs } )
+        }
+    }
+
+
+    // Memo 141 — find the first skill a namespace declares (<nsDir>/skills/*.mjs).
+    // Returns empty strings when the namespace has none; the caller then keeps
+    // namespace-skills off the personaAreas allow-list (no {{SKILL_NAME}} torso).
+    static #resolveFirstSkill( { nsDir } ) {
+        if( nsDir === null || existsSync( join( nsDir, 'skills' ) ) === false ) {
+            return { 'skillName': '', 'skillPath': '' }
+        }
+        const skillsDir = join( nsDir, 'skills' )
+        const skillFile = readdirSync( skillsDir )
+            .filter( ( name ) => name.endsWith( '.mjs' ) === true )
+            .sort()
+            .find( ( name ) => true )
+        if( skillFile === undefined ) {
+            return { 'skillName': '', 'skillPath': '' }
+        }
+        return {
+            'skillName': basename( skillFile, '.mjs' ),
+            'skillPath': join( nsDir, 'skills', skillFile )
+        }
     }
 
 
@@ -14023,16 +14139,31 @@ allowlist, migrate-config, etc.).
 
         // Memo 097 Kap. 9.0 fix #1: compose ONE prompt per area via the
         // AreaPromptLoader (which reuses PromptBuilder.build), not only the
-        // goalBlock. Neutral areas are composed deterministically here; persona-
-        // required areas are surfaced as deferred entries (harness composes them
-        // with the resolved domain/selection persona — no invented persona).
+        // goalBlock. Neutral areas are composed deterministically here.
+        // Memo 141: the persona-required Schema-Areas are now COMPOSED here too, with
+        // the resolved technical Schema-Persona — about-namespace corpus-wide, and
+        // namespace-skills only when the namespace declares skills (personaAreas gate).
+        // The Selection/Task-B flow still defers (persona stays null below).
         // PRD-3.2: a substitution context fills the real schema path + tool/namespace
-        // names into the neutral composed prompts (no {{…}} torso). Repo-relative
-        // paths only — never leak an absolute path into the emitted artifact.
+        // names into the composed prompts (no {{…}} torso). Repo-relative paths only —
+        // never leak an absolute path into the emitted artifact.
         const substitutions = flow === 'provider'
-            ? FlowMcpCli.#buildEmitSubstitutions( { cwd, namespace, liveSchemas, pretests } )
+            ? FlowMcpCli.#buildEmitSubstitutions( { cwd, grading, namespace, liveSchemas, pretests } )
             : null
-        const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow, substitutions } )
+        const persona = flow === 'provider'
+            ? FlowMcpCli.#resolveSchemaPersona()
+            : null
+        // about-namespace composes for every provider (gated later by About-presence);
+        // namespace-skills composes only when the namespace declares a skill, so its
+        // {{SKILL_NAME}}/{{skillPath}} tokens always carry a real value.
+        const personaAreas = flow === 'provider'
+            ? [ 'about-namespace' ].concat(
+                substitutions !== null && typeof substitutions.skillName === 'string' && substitutions.skillName.length > 0
+                    ? [ 'namespace-skills' ]
+                    : []
+            )
+            : null
+        const { areas } = await FlowMcpCli.#composeGradingAreas( { grading, flow, persona, personaAreas, substitutions } )
 
         // PRD-005/006/004 — derive the FINAL emitted area set from the composed
         // areas: applicability pre-filter (optional-area precondition absent ->
@@ -14665,6 +14796,105 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Memo 141 — the persona-required namespace areas (about-namespace, namespace-skills)
+    // are emitted in the namespace pass but their _gradings live SCHEMA-scoped, where
+    // RebuildIndex reads them (#resolveAboutNamespace → <ns>/<schema>/resources/about/
+    // _gradings/; #resolveNamespaceSkills → <ns>/<schema>/skills/<skill>/_gradings/).
+    // Before this, the namespace consume writer only handled the two root areas, so
+    // about-namespace / namespace-skills scores were verified+accepted then silently
+    // DROPPED — every namespace stayed about:pending forever. This writes them where
+    // RebuildIndex reads. The target schema is the first island schema dir (RebuildIndex
+    // iterates schemas and takes the first about/skill grading it finds, so a single
+    // deterministic schema dir is sufficient and conflict-free).
+    static async #writePersonaNamespaceGradings( { grading, scoresDoc, namespaceDir } ) {
+        const Grading = grading[ 'Grading' ]
+        if( Grading === undefined || Grading === null ) {
+            return { 'status': false, 'error': 'Grading module unavailable from flowmcp-grading.' }
+        }
+        const PERSONA_AREAS = [ 'about-namespace', 'namespace-skills' ]
+        const areas = Array.isArray( scoresDoc[ 'areas' ] ) ? scoresDoc[ 'areas' ] : []
+        const personaAreas = areas
+            .filter( ( areaEntry ) => PERSONA_AREAS.includes( areaEntry.area ) )
+        if( personaAreas.length === 0 ) {
+            return { 'status': true, 'written': 0 }
+        }
+
+        // Resolve the first island schema dir (same filter as RebuildIndex.#listSchemaDirs:
+        // exclude the `_`-prefixed meta dirs). No schema dir → nothing to scope under.
+        const schemaDir = existsSync( namespaceDir ) === true
+            ? readdirSync( namespaceDir, { 'withFileTypes': true } )
+                .filter( ( e ) => e.isDirectory() === true && e.name.startsWith( '_' ) === false )
+                .map( ( e ) => e.name )
+                .sort()
+                .find( ( name ) => true )
+            : undefined
+        if( schemaDir === undefined ) {
+            return { 'status': false, 'error': `no island schema dir under ${namespaceDir} to scope persona gradings` }
+        }
+
+        const now = new Date().toISOString()
+        const timestamp = now.replace( /\.\d+Z$/, 'Z' ).replace( /:/g, '-' )
+
+        try {
+            const written = await personaAreas
+                .reduce( ( areaPromise, areaEntry ) => areaPromise.then( async ( areaCount ) => {
+                    const area = areaEntry.area
+                    const results = Array.isArray( areaEntry.results ) ? areaEntry.results : []
+
+                    const created = Grading.createEntry( { 'schemaId': schemaDir, 'gradingTier': 'autonomous', 'grader': { 'kind': 'llm', 'llmModel': 'claude-code' }, area, 'harness': 'claude-code' } )
+                    if( created.entry === null ) { throw new Error( `createEntry (${area}): ${created.errors.join( '; ' )}` ) }
+
+                    const entry = results
+                        .reduce( ( entryForResults, result ) => {
+                            const scores = result.scores !== undefined && result.scores !== null ? result.scores : {}
+                            const resultReasoning = typeof result.reasoning === 'string' ? result.reasoning : ''
+                            return Object.keys( scores )
+                                .reduce( ( acc, questionId ) => {
+                                    const added = Grading.addGrading( { 'entry': acc, 'grading': { 'dimension': questionId, 'score': scores[ questionId ], 'determinism': 'non-deterministic', 'weight': 1, 'reasoning': resultReasoning, 'recordedAt': now, 'selectionContext': { 'personaIds': [ 'schema-maintainer--documentation-dx-reviewer' ] } } } )
+                                    if( added.errors.length > 0 ) { throw new Error( `addGrading (${area}/${questionId}): ${added.errors.join( '; ' )}` ) }
+                                    return added.entry
+                                }, entryForResults )
+                        }, created.entry )
+
+                    const agg = Grading.computeAggregateGrade( { entry } )
+                    if( agg.aggregateGrade === null || agg.aggregateGrade === undefined ) {
+                        throw new Error( `computeAggregateGrade (${area}): no scorable answers (${( agg.errors || [] ).join( '; ' )})` )
+                    }
+                    const stamped = Object.assign( {}, entry, { 'aggregateGrade': agg.aggregateGrade, 'grade': agg.aggregateGrade, 'rawGrade': agg.rawGrade, 'normalizedScore': agg.normalizedScore, 'gradingMode': 'full' } )
+
+                    const { filename } = Grading.formatGradingFilename( { area, timestamp } )
+                    // about-namespace → <schema>/resources/about/_gradings/
+                    // namespace-skills → <schema>/skills/<skill>/_gradings/ (first declared skill)
+                    const dir = area === 'about-namespace'
+                        ? join( namespaceDir, schemaDir, 'resources', 'about', '_gradings' )
+                        : join( namespaceDir, schemaDir, 'skills', FlowMcpCli.#resolveIslandSkillName( { 'schemaDirPath': join( namespaceDir, schemaDir ) } ), '_gradings' )
+                    await mkdir( dir, { 'recursive': true } )
+                    await FlowMcpCli.#writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                    return areaCount + 1
+                } ), Promise.resolve( 0 ) )
+
+            return { 'status': true, written }
+        } catch( err ) {
+            return { 'status': false, 'error': err.message }
+        }
+    }
+
+
+    // Memo 141 — the skill name for a namespace-skills grading dir. Prefer an existing
+    // island skill dir under <schema>/skills/; else fall back to a stable 'default'
+    // bucket (no silent drop — the grading is still written and RebuildIndex reads it).
+    static #resolveIslandSkillName( { schemaDirPath } ) {
+        const skillsRoot = join( schemaDirPath, 'skills' )
+        if( existsSync( skillsRoot ) === false ) { return 'default' }
+        const existing = readdirSync( skillsRoot, { 'withFileTypes': true } )
+            .filter( ( e ) => e.isDirectory() === true )
+            .map( ( e ) => e.name )
+            .sort()
+            .find( ( name ) => true )
+        return existing !== undefined ? existing : 'default'
+    }
+
+
     static async #gradingConsumeScores( { cwd, grading, gradingDataRoot, flow, targetDir, target, scopeName = null, consumeScores, conflict, gradingDataDir, gradingExportDir, dryRun = false, dependencyChain } ) {
         const scoped = scopeName !== null && scopeName !== undefined
         // Memo 112 — schema-scoped consume reads the ISOLATED per-schema emit
@@ -14764,6 +14994,14 @@ allowlist, migrate-config, etc.).
             const nsWrite = await FlowMcpCli.#writeNamespaceGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'namespace': basename( targetDir ) } )
             if( nsWrite.status === false ) {
                 return { 'result': FlowMcpCli.#error( { 'error': `Could not write namespace gradings for ${target}: ${nsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or "n/a" per question) and run the command again.' } ) }
+            }
+            // Memo 141 — persist the persona-required namespace areas (about-namespace,
+            // namespace-skills) into their schema-scoped _gradings, where RebuildIndex
+            // reads them. Without this they are accepted-but-dropped (every namespace
+            // stays about:pending). about-namespace is the About-Persona-Scoring payoff.
+            const personaWrite = await FlowMcpCli.#writePersonaNamespaceGradings( { grading, scoresDoc, 'namespaceDir': targetDir } )
+            if( personaWrite.status === false ) {
+                return { 'result': FlowMcpCli.#error( { 'error': `Could not write persona-area gradings for ${target}: ${personaWrite.error}`, 'fix': 'Ensure the namespace has an island schema dir and the scores carry 1–5 (or "n/a") per question, then run the command again.' } ) }
             }
         }
 
