@@ -465,7 +465,7 @@ flowmcp grading deterministic my-namespace/tool/getBalance
 
 ## Testing
 
-> **Memo 102:** `flowmcp dev test` (`project` / `user` / `single`) was **removed**.
+> **Note:** `flowmcp dev test` (`project` / `user` / `single`) was **removed**.
 > Its PASS criterion (HTTP 200 only) was a strict subset of the deterministic
 > grading pretest, which additionally requires non-empty data (HTTP 200 **and**
 > real data). Schema checking now has **one** path: `grading`.
