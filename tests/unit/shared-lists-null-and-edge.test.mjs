@@ -174,7 +174,7 @@ afterAll( async () => {
 } )
 
 
-describe( 'callTool with sharedLists but no _lists dir — exercises #findListsDir returning null and || {} fallback', () => {
+describe( 'callTool with sharedLists but no _lists dir — fail-loud LST-001 (Memo 149 Strang B/C, No Silent Defaults)', () => {
     const CWD = join( tmpdir(), `flowmcp-nolists-call-${Date.now()}` )
 
 
@@ -201,15 +201,18 @@ describe( 'callTool with sharedLists but no _lists dir — exercises #findListsD
     } )
 
 
-    it( 'succeeds when #findListsDir returns null — sharedLists stays empty in #resolveHandlers', async () => {
+    it( 'fails loud with LST-001 when a declared sharedList has no _lists dir — never a silent content:[]', async () => {
+        // Memo 149 Strang B/C: pre-149 this call silently succeeded with an empty
+        // sharedLists ({} fallback) — exactly the evmChains content:[] class of bug. The
+        // declared-but-unresolvable list must now surface a coded error instead.
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_nolistssrc',
             'jsonArgs': '{}',
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'content' ] ).toBeDefined()
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toMatch( /LST-001/ )
     }, 15000 )
 } )
 

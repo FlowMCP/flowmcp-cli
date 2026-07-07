@@ -240,6 +240,19 @@ flowmcp grading export providers/defillama
 | `flowmcp call <tool-name> [json] --refresh` | Call a tool and refresh cache |
 | `flowmcp run` | Start MCP server (stdio transport) |
 
+### Diagnostics
+
+| Command | Description |
+|---------|-------------|
+| `flowmcp doctor` | Structural health check over the configured `schemaFolders[]` — are the shared lists, required modules, refs and config present and consistent? Reports by error code, offline (no live API probe). Exits `1` if any `ERROR`-severity check fails. |
+| `flowmcp version` / `flowmcp --version` | Print the CLI name and version — answers "which flowmcp is running?" |
+
+`doctor` runs seven checks: `config-single-source` (every `schemaFolders[]` path exists), `schema-load` (every schema module loads), `shared-list-resolve` (every declared `sharedLists` ref resolves non-empty — `LST-001`/`HND-001`/`LST-006`), `module-present` (every `requiredLibraries` entry resolves from the CLI base — `LIB-001`), `key-coverage` (`requiredServerParams` vs `.env` — `INFO` only; missing keys disable individual tools, they are not a structural failure), and `cli-version`. The machine-readable result is JSON on stdout; a human summary prints to stderr (suppressed by `--json`).
+
+### Error Codes
+
+Every caught failure the CLI surfaces carries a `PREFIX-NNN` code (3–4 uppercase letters, a dash, three digits; e.g. `LST-001`, `CFG-002`, `SQL-004`). Severity is `ERROR` (blocks), `WARNING`, or `INFO`. A **declared** `sharedLists` ref that cannot be located or resolved now **fails loud** with a code instead of silently returning an empty list. `flowmcp doctor` reads these codes back. The runtime code namespace is registered in the [specification wayfinder](https://github.com/FlowMCP/flowmcp-spec) (`09-validation-rules.md → CLI Runtime Error Codes`); each code's authoritative home is its `try`/`catch` site in `src/task/FlowMcpCli.mjs`.
+
 ## Tool Reference Format
 
 ```
@@ -413,6 +426,7 @@ Related sections: [Path Variables](#path-variables) (resolution logic), [Data So
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--help` | `-h` | Show help |
+| `--version` | | Print the CLI name and version |
 | `--route <name>` | | Filter by route name (for test commands) |
 | `--no-cache` | | Bypass cache (for call) |
 | `--refresh` | | Refresh cached result (for call) |

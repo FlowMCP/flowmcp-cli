@@ -51,7 +51,8 @@ class AddonLoader {
         try {
             addonModule = await import( addonName )
         } catch( err ) {
-            throw new Error( `Failed to load addon '${addonName}': ${err.message}` )
+            // Memo 149 Strang C — coded rethrow (ADN-001).
+            throw new Error( `ADN-001 addon: Failed to load addon '${addonName}': ${err.message}` )
         }
 
         return { addonName, addonModule, source }
@@ -72,7 +73,12 @@ class AddonLoader {
             const isLocal = dependencyValue.startsWith( 'file:' )
 
             return isLocal ? 'local' : 'live'
-        } catch {
+        } catch( err ) {
+            // Memo 149 Strang C (CLI-001) — benign fallback: an unreadable/absent
+            // package.json means we cannot tell local from live, so default to 'live'.
+            // Coded to stderr so the census/doctor see it; stdout JSON stays clean.
+            process.stderr.write( `CLI-001 detectSource: package.json unreadable, defaulting to 'live': ${err.message}\n` )
+
             return 'live'
         }
     }

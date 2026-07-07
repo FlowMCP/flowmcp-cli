@@ -33,6 +33,27 @@ import { AddonLoader } from '../addons/loadAddon.mjs'
 import { SqliteGtfsResourceValidator } from '../validators/SqliteGtfsResourceValidator.mjs'
 
 
+// Memo 149 Strang C — canonical error-code helpers. The CLI grew for a year with
+// try/catch sites that swallowed silently or threw uncoded strings (deterministic
+// census: 111 sites). Every surfaced failure now carries a `PREFIX-NNN` code
+// (node-error-codes format: 3-4 uppercase letters, 3-digit number, regex
+// /^([A-Z]{3,4}-\d{3})/). Severity ERROR blocks grade A+B, WARNING blocks A, INFO is
+// advisory — the doctor (Strang D) reads these back.
+const ERROR_CODE_PATTERN = /^([A-Z]{3,4}-\d{3})/
+
+
+class CliError extends Error {
+    constructor( { code, severity = 'ERROR', source = null, message, originalError = null } ) {
+        super( message )
+        this.name = 'CliError'
+        this.code = code
+        this.severity = severity
+        this.source = source
+        this.originalError = originalError
+    }
+}
+
+
 class FlowMcpCli {
     static async init( { cwd } ) {
         FlowMcpCli.#printHeadline()
@@ -200,7 +221,7 @@ class FlowMcpCli {
             registry = JSON.parse( registryText )
         } catch {
             const result = FlowMcpCli.#error( {
-                'error': `Invalid JSON in ${appConfig[ 'registryFileName' ]}`,
+                'error': `IMP-001 import: Invalid JSON in ${appConfig[ 'registryFileName' ]}`,
                 'fix': `The remote ${appConfig[ 'registryFileName' ]} contains invalid JSON. Check the repository.`
             } )
 
@@ -364,7 +385,7 @@ class FlowMcpCli {
             registry = JSON.parse( registryText )
         } catch {
             const result = FlowMcpCli.#error( {
-                'error': 'Invalid JSON in registry file',
+                'error': 'IMP-002 importRegistry: Invalid JSON in registry file',
                 'fix': 'The remote registry file contains invalid JSON.'
             } )
 
@@ -810,7 +831,8 @@ class FlowMcpCli {
                         }
 
                         expandedRefs.push( ref )
-                    } catch {
+                    } catch( err ) {
+                        process.stderr.write( `GRP-001 groupAppend: ref expansion failed: ${err.message}\n` )
                         invalidRefs.push( ref )
                     }
                 }
@@ -1584,7 +1606,7 @@ class FlowMcpCli {
             try {
                 dirStat = await stat( resolvedDir )
             } catch {
-                const result = FlowMcpCli.#error( { 'error': `Path not found: ${dirPath}` } )
+                const result = FlowMcpCli.#error( { 'error': `SKL-001 findMainSkillsBlock: Path not found: ${dirPath}` } )
 
                 return { result }
             }
@@ -1604,7 +1626,7 @@ class FlowMcpCli {
             try {
                 pathStat = await stat( resolvedPath )
             } catch {
-                const result = FlowMcpCli.#error( { 'error': `Path not found: ${schemaPath}` } )
+                const result = FlowMcpCli.#error( { 'error': `SKL-002 findMainSkillsBlock: Path not found: ${schemaPath}` } )
 
                 return { result }
             }
@@ -1700,6 +1722,7 @@ class FlowMcpCli {
                 if( warnings.length > 0 ) { reasonParts.push( `Warnings: ${warnings.join( '; ' )}` ) }
                 results.push( { 'file': filePath, 'action': 'migrated', 'reason': reasonParts.join( '. ' ) } )
             } catch( err ) {
+                process.stderr.write( `CLI-002 migrate: file migration failed: ${err.message}\n` )
                 failed += 1
                 results.push( { 'file': filePath, 'action': 'failed', 'reason': err.message } )
             }
@@ -1917,7 +1940,7 @@ class FlowMcpCli {
             StdioServerTransport = stdioModule.StdioServerTransport
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to load MCP SDK: ${err.message}`,
+                'error': `CLI-003 run: Failed to load MCP SDK: ${err.message}`,
                 'fix': 'Run: npm install @modelcontextprotocol/sdk'
             } )
 
@@ -1949,8 +1972,9 @@ class FlowMcpCli {
             .reduce( ( promise, { main, handlersFn, file, source } ) => promise.then( async () => {
                 const requiredServerParams = main[ 'requiredServerParams' ] || []
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-                const schemasBaseDir = FlowMcpCli.#schemasDir()
-                const schemaFilePath = join( schemasBaseDir, file )
+                // Memo 149 Strang B — resolve via the single-source helper (was:
+                // join( #schemasDir(), file ) against the dead staging dir).
+                const { filePath: schemaFilePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: file } )
                 const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
                 const namespaceForTools = main[ 'namespace' ] || 'unknown'
 
@@ -2100,6 +2124,7 @@ class FlowMcpCli {
                             // "<source>:<namespace>/tool/<name>" call is readable from `list`.
                             tools.push( { toolName, namespace, routeName, description, 'source': source || null } )
                         } catch( err ) {
+                            process.stderr.write( `CLI-004 callListTools: tool name build failed: ${err.message}\n` )
                             tools.push( {
                                 'toolName': `error_${routeName}_${namespace}`,
                                 namespace,
@@ -2228,7 +2253,7 @@ class FlowMcpCli {
                 userParams = JSON.parse( jsonArgs )
             } catch {
                 const result = FlowMcpCli.#error( {
-                    'error': 'Invalid JSON argument.',
+                    'error': 'CAL-001 callTool: Invalid JSON argument.',
                     'fix': `Provide valid JSON: ${appConfig[ 'cliCommand' ]} call ${toolName} '{"param": "value"}'`
                 } )
 
@@ -2267,8 +2292,8 @@ class FlowMcpCli {
                                 matchedToolName = candidateName
                                 matchedRouteName = routeName
                             }
-                        } catch {
-                            // skip
+                        } catch( err ) {
+                            process.stderr.write( `CAL-002 callTool: tool name match failed: ${err.message}\n` )
                         }
                     } )
             } )
@@ -2312,7 +2337,7 @@ class FlowMcpCli {
         const matchedRouteConfig = ( matchedMain[ 'routes' ] || matchedMain[ 'tools' ] )[ matchedRouteName ]
         const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
         const { filePath: matchedSchemaFilePath } = matchedFile
-            ? await FlowMcpCli.#resolveSchemaPath( { schemaRef: matchedFile } )
+            ? await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: matchedFile } )
             : { filePath: null }
         const { sharedLists: matchedSharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': matchedMain, 'filePath': matchedSchemaFilePath } )
         const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters, 'sharedLists': matchedSharedLists } )
@@ -2373,9 +2398,10 @@ class FlowMcpCli {
         try {
             const requiredServerParams = matchedMain[ 'requiredServerParams' ] || []
             const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
-            const schemasBaseDir = FlowMcpCli.#schemasDir()
-            const schemaFilePath = matchedFile ? join( schemasBaseDir, matchedFile ) : ''
-            const { handlerMap } = await FlowMcpCli.#resolveHandlers( { 'main': matchedMain, 'handlersFn': matchedHandlersFn, 'filePath': schemaFilePath } )
+            // Memo 149 Strang B — reuse the already-resolved matchedSchemaFilePath (the
+            // param path computed it via #resolveSchemaFilePath above). No second, dead
+            // join( #schemasDir(), matchedFile ).
+            const { handlerMap } = await FlowMcpCli.#resolveHandlers( { 'main': matchedMain, 'handlersFn': matchedHandlersFn, 'filePath': matchedSchemaFilePath } )
 
             const fetchResult = await FlowMCP.fetch( {
                 'main': matchedMain,
@@ -2461,7 +2487,7 @@ class FlowMcpCli {
             return { result }
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Tool execution failed: ${err.message}`,
+                'error': `CFG-001 matchedRouteConfig: Tool execution failed: ${err.message}`,
                 'fix': `Check the tool parameters and env vars. Run ${appConfig[ 'cliCommand' ]} call list-tools for details.`
             } )
 
@@ -2609,8 +2635,9 @@ class FlowMcpCli {
                                 } )
                         }
                     }
-                } catch {
+                } catch( err ) {
                     // Schema could not be loaded — return without enrichment
+                    process.stderr.write( `CLI-005 search: schema enrichment skipped: ${err.message}\n` )
                 }
 
                 const toolType = tool[ 'type' ] || 'tool'
@@ -3175,8 +3202,9 @@ class FlowMcpCli {
                             }
 
                             tools.push( entry )
-                        } catch {
+                        } catch( err ) {
                             // skip broken tools
+                            process.stderr.write( `CLI-006 list: broken tool skipped: ${err.message}\n` )
                         }
                     } )
             } )
@@ -3249,7 +3277,8 @@ class FlowMcpCli {
                     const entries = await readdir( listsDir )
                     listFiles = entries
                         .filter( ( f ) => f.endsWith( '.mjs' ) )
-                } catch {
+                } catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'LST-001', 'location': 'listSharedLists: lists dir read failed', err } )
                     return
                 }
 
@@ -3277,8 +3306,9 @@ class FlowMcpCli {
                                 'source': sourceName,
                                 entries
                             } )
-                        } catch {
+                        } catch( err ) {
                             // skip broken list files
+                            process.stderr.write( `LST-002 listSharedLists: broken list file skipped: ${err.message}\n` )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
@@ -3351,7 +3381,7 @@ class FlowMcpCli {
             parsedEntry = JSON.parse( jsonEntry )
         } catch {
             const result = FlowMcpCli.#error( {
-                'error': `Invalid JSON entry: "${jsonEntry}"`,
+                'error': `CLI-007 listsAddEntry: Invalid JSON entry: "${jsonEntry}"`,
                 'fix': 'Provide a valid JSON object, e.g. \'{"alias":"FOO","chainId":99}\''
             } )
 
@@ -3382,8 +3412,9 @@ class FlowMcpCli {
                 try {
                     await access( candidate, constants.F_OK )
                     listFilePath = candidate
-                } catch {
+                } catch( err ) {
                     // not in this source
+                    process.stderr.write( `CLI-008 listsAddEntry: list not in source: ${err.message}\n` )
                 }
             } ), Promise.resolve() )
 
@@ -3405,7 +3436,7 @@ class FlowMcpCli {
                 .find( ( v ) => v && typeof v === 'object' && v[ 'meta' ] && Array.isArray( v[ 'entries' ] ) )
         } catch {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to import list file "${normalizedName}".`,
+                'error': `CLI-009 listsAddEntry: Failed to import list file "${normalizedName}".`,
                 'fix': 'Check the list file for syntax errors.'
             } )
 
@@ -3533,7 +3564,8 @@ class FlowMcpCli {
                         let fileContent
                         try {
                             fileContent = await readFile( filePath, 'utf-8' )
-                        } catch {
+                        } catch( err ) {
+                            process.stderr.write( `CLI-010 listsRefs: schema read failed: ${err.message}\n` )
                             return
                         }
 
@@ -3545,7 +3577,8 @@ class FlowMcpCli {
                         try {
                             const mod = await import( pathToFileURL( filePath ).href )
                             schemaMain = mod[ 'main' ] || null
-                        } catch {
+                        } catch( err ) {
+                            process.stderr.write( `CLI-011 listsRefs: schema import failed: ${err.message}\n` )
                             return
                         }
 
@@ -3631,7 +3664,8 @@ class FlowMcpCli {
                     } else {
                         tagsByNamespace[ namespace ] = []
                     }
-                } catch {
+                } catch( err ) {
+                    process.stderr.write( `CLI-012 generateCatalog: schema tags load failed: ${err.message}\n` )
                     tagsByNamespace[ namespace ] = []
                 }
             } ), Promise.resolve() )
@@ -4405,7 +4439,8 @@ class FlowMcpCli {
         try {
             await access( envPath, constants.F_OK )
             envOk = true
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'HLT-001', 'location': 'healthCheck: env file access check failed', err } )
             envOk = false
         }
 
@@ -4434,7 +4469,8 @@ class FlowMcpCli {
                 } ), Promise.resolve( [] ) )
             sourceDirs = entryResults
             schemaSourceCount = sourceDirs.length
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'HLT-002', 'location': 'healthCheck: schema dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -4775,6 +4811,25 @@ class FlowMcpCli {
     }
 
 
+    // Memo 149 Strang B (F4=B) — single source of truth for a schema's on-disk file
+    // path. callTool (param + handler path), serve and the resource-query path all
+    // resolve through here. Before, the handler path rebuilt the path via
+    // join( #schemasDir(), file ) against the obsolete ~/.flowmcp/schemas staging dir
+    // (a 099-migration rest), so _lists/ was never found and declared sharedLists (e.g.
+    // evmChains) silently resolved to {} -> content:[]. Routing every caller through one
+    // helper makes that "one path correct, one on the dead dir" asymmetry structurally
+    // impossible to reintroduce.
+    static async #resolveSchemaFilePath( { schemaRef } ) {
+        if( !schemaRef ) {
+            return { filePath: '' }
+        }
+
+        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+
+        return { filePath }
+    }
+
+
     static #cacheDir() {
         const dir = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'cacheDirName' ] )
 
@@ -4823,7 +4878,9 @@ class FlowMcpCli {
             const isExpired = now >= expiresAt
 
             return { data, meta, isExpired, cachePath }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CCH-001', 'location': 'readCache: cache read failed', err } )
+
             return { data: null, meta: null, isExpired: true, cachePath }
         }
     }
@@ -4881,7 +4938,7 @@ class FlowMcpCli {
             return { result }
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to clear cache: ${err.message}`,
+                'error': `CCH-002 cacheClear: Failed to clear cache: ${err.message}`,
                 'fix': `Check permissions on ${cacheBase}`
             } )
 
@@ -4907,8 +4964,9 @@ class FlowMcpCli {
 
             const { rmdir } = await import( 'node:fs/promises' )
             await rmdir( dirPath )
-        } catch {
+        } catch( err ) {
             // directory doesn't exist, nothing to clear
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-013', 'location': 'removeDir: recursive dir removal failed', err } )
         }
     }
 
@@ -4934,8 +4992,9 @@ class FlowMcpCli {
                             entries.push( file )
                         } )
                 } ), Promise.resolve() )
-        } catch {
+        } catch( err ) {
             // cache directory doesn't exist yet
+            FlowMcpCli.#emitCoded( { 'code': 'HLT-003', 'location': 'cacheStatus: cache dir scan failed', err } )
         }
 
         const totalSize = entries
@@ -4994,13 +5053,15 @@ class FlowMcpCli {
                                 'size': meta[ 'size' ],
                                 'expired': isExpired
                             } )
-                        } catch {
+                        } catch( err ) {
                             // corrupt cache file, skip
+                            process.stderr.write( `CCH-003 collectCacheFiles: corrupt cache file skipped: ${err.message}\n` )
                         }
                     }
                 } ), Promise.resolve() )
-        } catch {
+        } catch( err ) {
             // directory doesn't exist
+            FlowMcpCli.#emitCoded( { 'code': 'CCH-004', 'location': 'collectCacheFiles: cache dir read failed', err } )
         }
 
         return collected
@@ -5037,7 +5098,8 @@ class FlowMcpCli {
             try {
                 const st = await stat( dbPath )
                 dbMtime = st.mtime.toISOString()
-            } catch {
+            } catch( err ) {
+                FlowMcpCli.#emitCoded( { 'code': 'CCH-005', 'location': 'writeSealCache: db stat failed', err } )
                 dbMtime = null
             }
         }
@@ -5076,7 +5138,9 @@ class FlowMcpCli {
             const { isStale } = await FlowMcpCli.#checkSealCacheStale( { entry, 'dbPath': entry[ 'dbPath' ] } )
 
             return { entry, isStale }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CCH-006', 'location': 'readSealCache: seal cache read failed', err } )
+
             return { 'entry': null, 'isStale': true }
         }
     }
@@ -5094,7 +5158,9 @@ class FlowMcpCli {
             const isStale = currentMtime !== entry[ 'dbMtime' ]
 
             return { isStale }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CCH-007', 'location': 'checkSealCacheStale: db stat failed', err } )
+
             return { 'isStale': true }
         }
     }
@@ -5123,12 +5189,14 @@ class FlowMcpCli {
                                 const raw = await readFile( join( dir, name ), 'utf-8' )
                                 const parsed = JSON.parse( raw )
                                 entries.push( parsed )
-                            } catch {
+                            } catch( err ) {
                                 // corrupt — skip
+                                process.stderr.write( `SQL-001 listSealCache: corrupt seal cache skipped: ${err.message}\n` )
                             }
                         } ), Promise.resolve() )
-                } catch {
+                } catch( err ) {
                     // cache dir for this source doesn't exist yet
+                    FlowMcpCli.#emitCoded( { 'code': 'SQL-002', 'location': 'listSealCache: cache dir read failed', err } )
                 }
             } ), Promise.resolve() )
 
@@ -5146,7 +5214,8 @@ class FlowMcpCli {
         try {
             await access( resolvedSchemaPath, constants.F_OK )
             schemaExists = true
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'SCH-001', 'location': 'maybeAddSchema: schema access check failed', err } )
             schemaExists = false
         }
 
@@ -5238,7 +5307,8 @@ class FlowMcpCli {
             try {
                 await access( resolvedPath, constants.R_OK )
                 dbExists = true
-            } catch {
+            } catch( err ) {
+                FlowMcpCli.#emitCoded( { 'code': 'SQL-004', 'location': 'addPipeline: db access check failed', err } )
                 dbExists = false
             }
 
@@ -5260,7 +5330,7 @@ class FlowMcpCli {
             addonLoaded = await AddonLoader.loadAddon( { sourceKey } )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to load addon for source '${sourceKey}': ${err.message}`,
+                'error': `SQL-005 addPipeline: Failed to load addon for source '${sourceKey}': ${err.message}`,
                 'fix': `Ensure '${ADDON_REGISTRY[ sourceKey ] ? ADDON_REGISTRY[ sourceKey ].name : sourceKey}' is installed as a package.json dependency.`
             } )
 
@@ -5372,7 +5442,7 @@ class FlowMcpCli {
             toolDefs = built.tools || []
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to build tool definitions from addon ${addonName}: ${err.message}`,
+                'error': `SQL-008 addPipeline: Failed to build tool definitions from addon ${addonName}: ${err.message}`,
                 'fix': `Verify the addon supports the schema namespace.`
             } )
 
@@ -5539,7 +5609,7 @@ class FlowMcpCli {
 
             return rows
         } finally {
-            try { db.close() } catch { /* ignore */ }
+            try { db.close() } catch( err ) { process.stderr.write( `SQL-009 sqlTemplate: db close failed: ${err.message}\n` ) }
         }
     }
 
@@ -5577,7 +5647,7 @@ class FlowMcpCli {
                 userParams = JSON.parse( jsonArgs )
             } catch {
                 const result = FlowMcpCli.#error( {
-                    'error': 'Invalid JSON argument.',
+                    'error': 'SQL-010 autoTool: Invalid JSON argument.',
                     'fix': `Provide valid JSON: ${appConfig[ 'cliCommand' ]} call ${toolName} '{"param": "value"}'`
                 } )
 
@@ -5615,7 +5685,7 @@ class FlowMcpCli {
             addonLoaded = await AddonLoader.loadAddon( { 'sourceKey': entry[ 'sourceKey' ] } )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to load addon '${entry[ 'addonName' ]}': ${err.message}`,
+                'error': `SQL-011 autoTool: Failed to load addon '${entry[ 'addonName' ]}': ${err.message}`,
                 'fix': `Ensure '${entry[ 'addonName' ]}' is installed as a package.json dependency.`
             } )
 
@@ -5641,7 +5711,7 @@ class FlowMcpCli {
                 await FlowMcpAdapter.loadFromUrl( { 'url': entry[ 'url' ], 'parseConfig': entry[ 'parseConfig' ] } )
             } catch( err ) {
                 const result = FlowMcpCli.#error( {
-                    'error': `Failed to load url resource '${entry[ 'url' ]}' for '${toolName}': ${err.message}`,
+                    'error': `SQL-012 autoTool: Failed to load url resource '${entry[ 'url' ]}' for '${toolName}': ${err.message}`,
                     'fix': `Verify the url is reachable over HTTPS and returns a valid document.`
                 } )
 
@@ -5656,7 +5726,7 @@ class FlowMcpCli {
                 : FlowMcpAdapter.getAvailableMethods( { 'dbPath': entry[ 'dbPath' ] } )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to read addon methods for ${entry[ 'addonName' ]}: ${err.message}`,
+                'error': `SQL-013 autoTool: Failed to read addon methods for ${entry[ 'addonName' ]}: ${err.message}`,
                 'fix': `Run '${appConfig[ 'cliCommand' ]} add ${entry[ 'schemaFile' ] || entry[ 'schemaName' ]}' to refresh the cache.`
             } )
 
@@ -5709,7 +5779,7 @@ class FlowMcpCli {
             }
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Auto-tool '${toolName}' handler failed: ${err.message}`,
+                'error': `SQL-014 autoTool: Auto-tool '${toolName}' handler failed: ${err.message}`,
                 'fix': `Verify input parameters and that the DB is readable at ${entry[ 'dbPath' ]}.`
             } )
 
@@ -5976,8 +6046,9 @@ class FlowMcpCli {
                                 searchTerms,
                                 'schemaRefs': matchingSchemaRefs
                             } )
-                        } catch {
+                        } catch( err ) {
                             // _shared file could not be loaded — skip
+                            FlowMcpCli.#emitCoded( { 'code': 'SCH-002', 'location': 'loadSharedAliases: shared file load failed', err } )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
@@ -6309,8 +6380,8 @@ class FlowMcpCli {
             return { data, 'error': null }
         } catch( err ) {
             const message = err.name === 'TimeoutError'
-                ? `Request timed out after ${timeout}ms`
-                : err.message
+                ? `NET-001 fetchUrl: Request timed out after ${timeout}ms`
+                : `NET-001 fetchUrl: ${err.message}`
 
             return { 'data': null, 'error': message }
         }
@@ -6330,7 +6401,8 @@ class FlowMcpCli {
             const { hash } = FlowMcpCli.#hashContent( { content } )
 
             return { hash, 'error': null }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'HSH-001', 'location': 'hashFile: file hash failed', err } )
             return { 'hash': null, 'error': null }
         }
     }
@@ -6436,7 +6508,7 @@ class FlowMcpCli {
             const updateResult = {
                 sourceName,
                 'status': false,
-                'error': 'Invalid JSON in remote registry',
+                'error': 'CLI-014 updateSource: Invalid JSON in remote registry',
                 'downloaded': 0,
                 'updated': 0,
                 'skipped': 0,
@@ -6779,7 +6851,8 @@ class FlowMcpCli {
                     } ), Promise.resolve( [] ) )
 
                 sourceDirs = dirChecks
-            } catch {
+            } catch( err ) {
+                FlowMcpCli.#emitCoded( { 'code': 'CFG-002', 'location': 'listSources: schemas dir scan failed', err } )
                 sourceDirs = []
             }
 
@@ -7027,7 +7100,8 @@ class FlowMcpCli {
             const data = JSON.parse( content )
 
             return { data }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CFG-003', 'location': 'readJson: json read/parse failed', err } )
             return { 'data': null }
         }
     }
@@ -7039,7 +7113,7 @@ class FlowMcpCli {
 
             return { data, 'error': null }
         } catch {
-            return { 'data': null, 'error': `Cannot read file: ${filePath}` }
+            return { 'data': null, 'error': `CLI-015 readText: Cannot read file: ${filePath}` }
         }
     }
 
@@ -7926,6 +8000,12 @@ Execution:
   call list-tools                     List all available tools
   call <tool-name> [json]             Execute a tool call (no activation needed)
 
+Diagnostics:
+  doctor                              Structural health check over schemaFolders[]
+                                      (lists, modules, refs, config) — reports by
+                                      error code; exit 1 if any ERROR check fails
+  version, --version                  Print the CLI name and version
+
 Schema Folders (Memo 099):
   Tools come directly from the folders listed in schemaFolders[] in
   ~/.flowmcp/config.json. Add a folder by editing that array (name + path).
@@ -8126,7 +8206,7 @@ allowlist, migrate-config, etc.).
                 await access( envPath, constants.F_OK )
             } catch {
                 throw new Error(
-                    `FlowMCP requires an .env file at ${envPath}.\n` +
+                    `CLI-016 quickInstall: FlowMCP requires an .env file at ${envPath}.\n` +
                     `Create it manually with your API keys, then re-run this command.\n` +
                     `Or specify a custom path: flowmcp init --env-path <path>\n` +
                     `Template:\n` +
@@ -8173,7 +8253,8 @@ allowlist, migrate-config, etc.).
 
                     return count
                 } ), Promise.resolve( 0 ) )
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-017', 'location': 'quickInstall: schemas dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -8294,7 +8375,8 @@ allowlist, migrate-config, etc.).
 
                     return count
                 } ), Promise.resolve( 0 ) )
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-018', 'location': 'manualInstall: schemas dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -8498,7 +8580,7 @@ allowlist, migrate-config, etc.).
 
                         return true
                     } catch {
-                        return `File not found: ${resolvedPath}`
+                        return `ENV-001 promptEnvPath: File not found: ${resolvedPath}`
                     }
                 },
                 filter: ( input ) => {
@@ -8523,7 +8605,8 @@ allowlist, migrate-config, etc.).
                 .length
 
             console.log( `  ${chalk.green( '✓' )} ${varCount} variable${varCount !== 1 ? 's' : ''} found` )
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'ENV-002', 'location': 'promptEnvPath: env file read failed', err } )
             console.log( `  ${chalk.yellow( '!' )} File will be created on first use` )
         }
 
@@ -8580,7 +8663,9 @@ allowlist, migrate-config, etc.).
                             if( pkg[ 'name' ] ) {
                                 version = pkg[ 'version' ] || 'unknown'
                             }
-                        } catch { /* skip malformed package.json */ }
+                        } catch( err ) {
+                            FlowMcpCli.#emitCoded( { 'code': 'CLI-019', 'location': 'detectCoreInfo: package.json parse failed', err } )
+                        }
                     }
 
                     dir = dirname( dir )
@@ -8590,7 +8675,8 @@ allowlist, migrate-config, etc.).
             const schemaSpec = appConfig[ 'schemaSpec' ]
 
             return { version, commit, schemaSpec }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-020', 'location': 'detectCoreInfo: core resolution failed', err } )
             return {
                 'version': 'unknown',
                 'commit': 'unknown',
@@ -8924,7 +9010,7 @@ allowlist, migrate-config, etc.).
         } catch( err ) {
             return {
                 'status': false,
-                'error': err && err.message ? err.message : String( err ),
+                'error': `CLI-021 executeTest: ${err && err.message ? err.message : String( err )}`,
                 'output': null,
                 'durationMs': Date.now() - startedAt,
                 primitive
@@ -9238,6 +9324,21 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // internal: test access only — Memo 149 Strang B/C. Exposes #resolveHandlers so the
+    // fail-loud shared-list contract (LST-001 / HND-001) and the single-source path
+    // helper can be exercised deterministically without a live schemaFolders round-trip.
+    static async _testHook_resolveHandlers( { main, handlersFn, filePath } ) {
+        return await FlowMcpCli.#resolveHandlers( { main, handlersFn, filePath } )
+    }
+
+
+    // internal: test access only — Memo 149 Strang B. The single source of truth for a
+    // schema's on-disk file path.
+    static async _testHook_resolveSchemaFilePath( { schemaRef } ) {
+        return await FlowMcpCli.#resolveSchemaFilePath( { schemaRef } )
+    }
+
+
     // internal: test access only — PRD-005
     static async _testHook_runTypedTests( { main, schemaSource = null, handlerMap, resourceHandlerMap, serverParams, sharedLists, fullOutput = false } ) {
         return await FlowMcpCli.#runTypedTests( {
@@ -9267,9 +9368,21 @@ allowlist, migrate-config, etc.).
 
             if( sharedListRefs.length > 0 ) {
                 const { listsDir } = FlowMcpCli.#findListsDir( { filePath } )
-                if( listsDir ) {
-                    const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
-                    sharedLists = resolved[ 'sharedLists' ] || {}
+                // Memo 149 Strang B/C — No Silent Defaults: a schema that DECLARES
+                // sharedLists but whose _lists/ dir cannot be located, or whose refs
+                // resolve to nothing, must fail loud with a code — never fall through to
+                // an empty {} that surfaces downstream as a confusing content:[] (the
+                // evmChains class of bug). The 30-lines-below requiredLibraries branch
+                // already fails loud; the shared-list branch now matches that standard.
+                if( !listsDir ) {
+                    throw new Error( `LST-001 sharedLists: _lists directory not found for a schema declaring ${sharedListRefs.length} shared list(s) (filePath: ${filePath}). Ensure the schema resolves to its real repo path (schemaFolders[]).` )
+                }
+
+                const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
+                sharedLists = resolved[ 'sharedLists' ] || {}
+
+                if( Object.keys( sharedLists ).length === 0 ) {
+                    throw new Error( `HND-001 sharedLists: declared ${sharedListRefs.length} shared list(s) but none resolved from ${listsDir}. Check the ref name(s) and list version(s).` )
                 }
             }
 
@@ -9313,9 +9426,17 @@ allowlist, migrate-config, etc.).
         } catch( resolveErr ) {
             // No Silent Defaults: a handler-resolution failure (e.g. an unresolvable required
             // library or shared-list ref) must be visible, not swallowed into empty handlers
-            // that later surface as a confusing "No response received from server". The empty
-            // maps are still returned so callers can degrade, but the cause is always reported.
-            console.error( `[resolveHandlers] handler resolution failed: ${resolveErr.message}` )
+            // that later surface as a confusing "No response received from server".
+            // Memo 149 Strang B/C — a CODED failure (PREFIX-NNN, e.g. LST-001/HND-001) is a
+            // declared-but-unresolvable contract violation and MUST surface (re-throw) rather
+            // than degrade to empty handlers -> content:[]. Uncoded, unexpected errors still
+            // degrade gracefully (empty maps returned) but are always logged.
+            const isCoded = typeof resolveErr?.message === 'string' && /^[A-Z]{3,4}-\d{3}/.test( resolveErr.message )
+            if( isCoded ) {
+                throw resolveErr
+            }
+
+            console.error( `HND-001 [resolveHandlers] handler resolution failed: ${resolveErr.message}` )
             handlerMap = {}
             resourceHandlerMap = {}
         }
@@ -9343,10 +9464,12 @@ allowlist, migrate-config, etc.).
                         const mod = await import( pathToFileURL( resolvedPath ).href )
                         return { 'status': true, 'module': mod.default || mod }
                     } catch( importErr ) {
+                        FlowMcpCli.#emitCoded( { 'code': 'LIB-001', 'location': 'loadOneLibrary: esm import failed, trying cjs require', 'err': importErr } )
                         const mod = req( lib )
                         return { 'status': true, 'module': mod.default || mod }
                     }
                 } catch( resolveErr ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'LIB-002', 'location': 'loadOneLibrary: require base could not resolve lib', 'err': resolveErr } )
                     return acc
                 }
             }, Promise.resolve( { 'status': false, 'module': null } ) )
@@ -9431,7 +9554,8 @@ allowlist, migrate-config, etc.).
                     const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
                     sharedLists = resolved[ 'sharedLists' ] || {}
                 }
-            } catch {
+            } catch( err ) {
+                FlowMcpCli.#emitCoded( { 'code': 'LST-003', 'location': 'resolveSharedListsForSchema: shared list resolution failed', err } )
                 sharedLists = {}
             }
         }
@@ -9488,7 +9612,7 @@ allowlist, migrate-config, etc.).
 
             return { main, handlersFn, 'error': null }
         } catch( err ) {
-            return { 'main': null, 'handlersFn': null, 'error': `Failed to load schema: ${filePath} - ${err.message}` }
+            return { 'main': null, 'handlersFn': null, 'error': `SCH-003 loadSchema: Failed to load schema: ${filePath} - ${err.message}` }
         }
     }
 
@@ -9500,7 +9624,7 @@ allowlist, migrate-config, etc.).
         try {
             pathStat = await stat( resolvedPath )
         } catch {
-            return { 'schemas': null, 'error': `Path not found: ${schemaPath}` }
+            return { 'schemas': null, 'error': `SCH-004 loadSchemasFromPath: Path not found: ${schemaPath}` }
         }
 
         if( pathStat.isFile() ) {
@@ -9678,13 +9802,294 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #error( { error, fix } ) {
+    static #error( { error, fix, code = null, severity = null } ) {
         const result = { 'status': false, error }
+        // Memo 149 Strang C — carry a machine-readable code (and optional severity) when
+        // provided. If the caller passed no explicit code but the message already begins
+        // with a PREFIX-NNN, surface that so coded messages self-describe.
+        const derivedCode = code || FlowMcpCli.#extractErrorCode( { 'message': error } )
+        if( derivedCode ) {
+            result[ 'code' ] = derivedCode
+        }
+        if( severity ) {
+            result[ 'severity' ] = severity
+        }
         if( fix ) {
             result[ 'fix' ] = fix
         }
 
         return result
+    }
+
+
+    // Memo 149 Strang C — extract a PREFIX-NNN code from a message (node-error-codes
+    // regex). Returns null when the message carries no code.
+    static #extractErrorCode( { message } ) {
+        if( typeof message !== 'string' ) {
+            return null
+        }
+
+        const match = message.match( ERROR_CODE_PATTERN )
+
+        return match ? match[ 1 ] : null
+    }
+
+
+    // Memo 149 Strang C — coded stderr note for a non-fatal caught failure on a
+    // best-effort/degrading path. A benign absence (ENOENT/ENOTDIR — a cache, seal or
+    // optional dir/file that simply does not exist yet) is the normal empty state and
+    // stays quiet; any other cause is surfaced (coded) to stderr so the census + doctor
+    // stay aware while stdout JSON remains clean. The `code` string literal at the call
+    // site is what the census reads.
+    static #emitCoded( { code, location, err } ) {
+        const errCode = err && err.code
+        const benignAbsence = errCode === 'ENOENT' || errCode === 'ENOTDIR'
+        if( benignAbsence ) {
+            return
+        }
+
+        const detail = err && err.message ? err.message : String( err )
+        process.stderr.write( `${code} ${location}: ${detail}\n` )
+    }
+
+
+    // Memo 149 Strang D — the CLI's own version, read from its package.json (same
+    // deterministic base as #resolveLibraryBase). Answers "which flowmcp is running?"
+    // without guessing.
+    static #cliVersion() {
+        try {
+            const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+            const pkgPath = join( resolveBase, 'package.json' )
+            const raw = readFileSync( pkgPath, 'utf-8' )
+            const pkg = JSON.parse( raw )
+
+            return { 'name': pkg[ 'name' ] || appConfig[ 'appName' ], 'version': pkg[ 'version' ] || 'unknown' }
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-028', 'location': 'cliVersion: package.json unreadable', err } )
+
+            return { 'name': appConfig[ 'appName' ], 'version': 'unknown' }
+        }
+    }
+
+
+    // Memo 149 Strang D (F5=A) — `flowmcp --version` / `flowmcp version`. The version
+    // stamp that ends the "is an old CLI running?" guessing, without bloating every
+    // response.
+    static async version() {
+        const { name, version } = FlowMcpCli.#cliVersion()
+        const result = { 'status': true, name, version }
+
+        return { result }
+    }
+
+
+    // Memo 149 Strang D (F3=A) — `flowmcp doctor`. Structural health check over the
+    // configured schemaFolders[] (NOT the legacy ~/.flowmcp/schemas staging dir): are the
+    // lists, modules, refs and config present and consistent with each other? Reports by
+    // error code, offline by default (no per-schema live probe). Builds on the same pieces
+    // as #healthCheck but generalized to the single-source config model (Memo 099).
+    static async doctor( { cwd } ) {
+        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        if( !initialized ) {
+            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix, 'code': 'CFG-001' } )
+
+            return { result }
+        }
+
+        const { name: cliName, version: cliVersion } = FlowMcpCli.#cliVersion()
+        const checks = []
+
+        // Check 1 — config single-source: every schemaFolders[] path must exist on disk.
+        const { schemaFolders, error: foldersError } = await FlowMcpCli.#readSchemaFolders()
+        if( foldersError !== undefined && foldersError !== null ) {
+            checks.push( { 'check': 'config-single-source', 'severity': 'ERROR', 'ok': false, 'code': 'CFG-002', 'detail': foldersError } )
+        } else if( schemaFolders.length === 0 ) {
+            checks.push( { 'check': 'config-single-source', 'severity': 'ERROR', 'ok': false, 'code': 'CFG-001', 'detail': 'No schemaFolders[] configured in ~/.flowmcp/config.json.' } )
+        } else {
+            const missingFolders = schemaFolders
+                .filter( ( folder ) => existsSync( folder[ 'path' ] ) === false )
+                .map( ( folder ) => `${folder[ 'name' ]} -> ${folder[ 'path' ]}` )
+
+            checks.push( {
+                'check': 'config-single-source',
+                'severity': 'ERROR',
+                'ok': missingFolders.length === 0,
+                'code': missingFolders.length === 0 ? null : 'CFG-001',
+                'detail': missingFolders.length === 0
+                    ? `${schemaFolders.length} schemaFolder(s), all present`
+                    : `missing path(s): ${missingFolders.join( ', ' )}`
+            } )
+        }
+
+        // Load all schemas once (structural — no network).
+        const { schemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        if( resolveError !== null && resolveError !== undefined ) {
+            checks.push( { 'check': 'schema-load', 'severity': 'ERROR', 'ok': false, 'code': 'SCH-001', 'detail': resolveError } )
+            const result = FlowMcpCli.#doctorResult( { cliName, cliVersion, checks, 'fix': resolveFix } )
+
+            return { result }
+        }
+
+        // Check 2 — schema-load.
+        checks.push( { 'check': 'schema-load', 'severity': 'ERROR', 'ok': schemas.length > 0, 'code': schemas.length > 0 ? null : 'SCH-001', 'detail': `${schemas.length} schema(s) loaded from ${schemaFolders.length} folder(s)` } )
+
+        // Checks 3-5 — per schema: shared-list resolve (list-present + ref/version), module-present.
+        const sharedListFailures = []
+        const libraryFailures = []
+        const envKeysNeeded = new Set()
+        const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+        const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
+
+        await schemas
+            .reduce( ( promise, entry ) => promise.then( async () => {
+                const { main, file } = entry
+                const namespace = main[ 'namespace' ] || file
+                const sharedListRefs = main[ 'sharedLists' ] || []
+                const requiredLibraries = main[ 'requiredLibraries' ] || []
+                const requiredServerParams = main[ 'requiredServerParams' ] || []
+
+                requiredServerParams
+                    .forEach( ( key ) => envKeysNeeded.add( key ) )
+
+                if( sharedListRefs.length > 0 ) {
+                    const { filePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: file } )
+                    const { listsDir } = FlowMcpCli.#findListsDir( { filePath } )
+
+                    if( !listsDir ) {
+                        sharedListFailures.push( `${namespace}: LST-001 no _lists dir` )
+                    } else {
+                        try {
+                            const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
+                            const lists = resolved[ 'sharedLists' ] || {}
+
+                            if( Object.keys( lists ).length === 0 ) {
+                                sharedListFailures.push( `${namespace}: HND-001 resolved empty` )
+                            }
+                        } catch( err ) {
+                            const rawMessage = err && err.message ? err.message : String( err )
+                            const moduleMatch = rawMessage.match( /Cannot find module '([^']+)'/ )
+                            const shortReason = moduleMatch ? `missing list ${basename( moduleMatch[ 1 ] )}` : rawMessage
+                            sharedListFailures.push( `${namespace}: LST-006 ${shortReason}` )
+                        }
+                    }
+                }
+
+                if( requiredLibraries.length > 0 ) {
+                    requiredLibraries
+                        .forEach( ( lib ) => {
+                            try {
+                                baseRequire.resolve( lib )
+                            } catch( err ) {
+                                // LIB-001 — requiredLibrary not resolvable from the CLI base
+                                // (aggregated into the module-present check below).
+                                libraryFailures.push( `${namespace}: LIB-001 ${lib}` )
+                            }
+                        } )
+                }
+            } ), Promise.resolve() )
+
+        checks.push( {
+            'check': 'shared-list-resolve',
+            'severity': 'ERROR',
+            'ok': sharedListFailures.length === 0,
+            'code': sharedListFailures.length === 0 ? null : 'LST-001',
+            'detail': sharedListFailures.length === 0
+                ? 'all declared shared lists resolve non-empty'
+                : `${sharedListFailures.length} issue(s): ${sharedListFailures.slice( 0, 8 ).join( '; ' )}`
+        } )
+
+        checks.push( {
+            'check': 'module-present',
+            'severity': 'ERROR',
+            'ok': libraryFailures.length === 0,
+            'code': libraryFailures.length === 0 ? null : 'LIB-001',
+            'detail': libraryFailures.length === 0
+                ? 'all requiredLibraries resolvable from the CLI base'
+                : `${libraryFailures.length} unresolvable: ${libraryFailures.slice( 0, 8 ).join( '; ' )}`
+        } )
+
+        // Check 6 — key-coverage (INFO: missing keys disable individual tools, they are
+        // not a structural failure of the install).
+        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { envPath } = config
+        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
+        const envObject = envContent
+            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            : {}
+        const missingKeys = Array.from( envKeysNeeded )
+            .filter( ( key ) => {
+                const value = envObject[ key ]
+
+                return value === undefined || String( value ).length === 0
+            } )
+
+        checks.push( {
+            'check': 'key-coverage',
+            'severity': 'INFO',
+            'ok': missingKeys.length === 0,
+            'code': missingKeys.length === 0 ? null : 'ENV-001',
+            'detail': missingKeys.length === 0
+                ? `${envKeysNeeded.size} required key(s), all present`
+                : `${missingKeys.length}/${envKeysNeeded.size} key(s) missing (tools needing them are disabled): ${missingKeys.slice( 0, 8 ).join( ', ' )}${missingKeys.length > 8 ? ', …' : ''}`
+        } )
+
+        // Check 7 — cli-version stamp.
+        checks.push( { 'check': 'cli-version', 'severity': 'INFO', 'ok': cliVersion !== 'unknown', 'code': cliVersion !== 'unknown' ? null : 'CLI-028', 'detail': `${cliName}@${cliVersion}` } )
+
+        const result = FlowMcpCli.#doctorResult( { cliName, cliVersion, checks } )
+
+        return { result }
+    }
+
+
+    // Memo 149 Strang D — assemble the doctor result. Overall status is healthy when no
+    // ERROR-severity check failed (INFO failures — e.g. missing API keys — do not flip it).
+    static #doctorResult( { cliName, cliVersion, checks, fix = null } ) {
+        const errorFailures = checks
+            .filter( ( check ) => check[ 'ok' ] === false && check[ 'severity' ] === 'ERROR' )
+        const infoFailures = checks
+            .filter( ( check ) => check[ 'ok' ] === false && check[ 'severity' ] !== 'ERROR' )
+
+        const result = {
+            'status': errorFailures.length === 0,
+            'cli': `${cliName}@${cliVersion}`,
+            'summary': {
+                'checks': checks.length,
+                'passed': checks.filter( ( check ) => check[ 'ok' ] === true ).length,
+                'errors': errorFailures.length,
+                'info': infoFailures.length
+            },
+            checks
+        }
+
+        if( fix ) {
+            result[ 'fix' ] = fix
+        }
+
+        return result
+    }
+
+
+    // Memo 149 Strang D — concise human header for `flowmcp doctor`, to STDERR (stdout
+    // stays pure JSON so a piped `... | jq` is never polluted). Suppressed by --json.
+    static printDoctorSummary( { result, json } ) {
+        if( json === true ) {
+            return
+        }
+
+        const cli = result[ 'cli' ] || 'unknown'
+        const summary = result[ 'summary' ] || {}
+        const verdict = result[ 'status' ] === true ? 'healthy' : 'has errors'
+        process.stderr.write( `\nflowmcp doctor — ${cli} — ${verdict}\n` )
+
+        ;( result[ 'checks' ] || [] )
+            .forEach( ( check ) => {
+                const mark = check[ 'ok' ] === true ? '✓' : ( check[ 'severity' ] === 'ERROR' ? '✗' : '–' )
+                const code = check[ 'code' ] ? ` [${check[ 'code' ]}]` : ''
+                process.stderr.write( `  ${mark} ${check[ 'check' ]}${code}: ${check[ 'detail' ]}\n` )
+            } )
+
+        process.stderr.write( `  ${summary[ 'passed' ]}/${summary[ 'checks' ]} passed · ${summary[ 'errors' ] || 0} error(s) · ${summary[ 'info' ] || 0} info\n\n` )
     }
 
 
@@ -10004,7 +10409,8 @@ allowlist, migrate-config, etc.).
             await unlink( filePath )
 
             return { 'removed': true }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'SCH-005', 'location': 'removeToolSchema: tool file unlink failed', err } )
             return { 'removed': false }
         }
     }
@@ -10031,7 +10437,8 @@ allowlist, migrate-config, etc.).
         try {
             const v4 = await import( 'flowmcp/v4' )
             return v4
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-022', 'location': 'loadV4Module: flowmcp/v4 import failed', err } )
             return null
         }
     }
@@ -10046,7 +10453,8 @@ allowlist, migrate-config, etc.).
         try {
             const grading = await import( 'flowmcp-grading' )
             return grading
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'GRD-001', 'location': 'loadGradingModule: flowmcp-grading import failed', err } )
             return null
         }
     }
@@ -10103,7 +10511,7 @@ allowlist, migrate-config, etc.).
             const combinedStatus = status && sqliteGtfsErrors.length === 0
             return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
         } catch( err ) {
-            const combinedMessages = [ err.message, ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+            const combinedMessages = [ `SKL-003 validateSingleSchema: ${err.message}`, ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
             return {
                 file, namespace,
                 'status': false,
@@ -10232,7 +10640,7 @@ allowlist, migrate-config, etc.).
         try {
             manifest = await FlowMcpCli.#readJsonFile( { filePath: fullManifestPath } )
         } catch( err ) {
-            return { result: FlowMcpCli.#error( { error: `Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
+            return { result: FlowMcpCli.#error( { error: `IMP-003 importAgent: Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
         }
 
         if( !manifest ) {
@@ -10378,7 +10786,7 @@ allowlist, migrate-config, etc.).
             schemaModule = await import( fileUrl )
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Failed to load schema: ${err.message}`,
+                'error': `SQL-015 resourceCreate: Failed to load schema: ${err.message}`,
                 'fix': 'Ensure the schema file exports a valid "main" object.'
             } )
 
@@ -10478,6 +10886,7 @@ allowlist, migrate-config, etc.).
                         'tables': tableStatements.length
                     } )
                 } catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'SQL-016', 'location': 'resourceCreate: db creation failed', err } )
                     failed += 1
                     results.push( { resourceName, dbPath, 'action': 'failed', 'reason': err.message } )
                 }
@@ -10528,7 +10937,8 @@ allowlist, migrate-config, etc.).
         try {
             const { files } = await FlowMcpCli.#findSchemaFiles( { 'dirPath': schemasDir } )
             schemaFiles = files
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'SQL-017', 'location': 'resourceMigrate: schema files scan failed', err } )
             schemaFiles = []
         }
 
@@ -10571,8 +10981,9 @@ allowlist, migrate-config, etc.).
                                 'oldExists': existsSync( oldPath )
                             } )
                         } )
-                } catch {
+                } catch( err ) {
                     // Skip schemas that fail to load
+                    FlowMcpCli.#emitCoded( { 'code': 'SQL-018', 'location': 'resourceMigrate: schema module load failed', err } )
                 }
             } ), Promise.resolve() )
 
@@ -10692,6 +11103,7 @@ allowlist, migrate-config, etc.).
                         'action': 'migrated'
                     } )
                 } catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'SQL-019', 'location': 'resourceMigrate: rename failed', err } )
                     migrateFailed += 1
                     results.push( {
                         schemaFile,
@@ -10850,8 +11262,8 @@ allowlist, migrate-config, etc.).
         }
 
         try {
-            const schemasBaseDir = FlowMcpCli.#schemasDir()
-            const schemaFilePath = matchedFile ? join( schemasBaseDir, matchedFile ) : null
+            // Memo 149 Strang B — single-source helper (was: join( #schemasDir(), matchedFile )).
+            const { filePath: schemaFilePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: matchedFile } )
             const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( {
                 'main': matchedMain,
                 'handlersFn': matchedHandlersFn,
@@ -10884,7 +11296,7 @@ allowlist, migrate-config, etc.).
             return { result }
         } catch( err ) {
             const result = FlowMcpCli.#error( {
-                'error': `Resource query failed: ${err.message}`,
+                'error': `SQL-020 callResourceQuery: Resource query failed: ${err.message}`,
                 'fix': 'Check that the database file exists and is accessible.'
             } )
 
@@ -11176,7 +11588,7 @@ allowlist, migrate-config, etc.).
 
             return { 'success': true, 'path': cachePath }
         } catch( err ) {
-            return { 'success': false, 'error': err.message }
+            return { 'success': false, 'error': `CCH-008 writeNamespaceIndexCache: ${err.message}` }
         }
     }
 
@@ -11188,7 +11600,8 @@ allowlist, migrate-config, etc.).
             let content
             try {
                 content = await readFile( cachePath, 'utf-8' )
-            } catch {
+            } catch( err ) {
+                FlowMcpCli.#emitCoded( { 'code': 'CCH-009', 'location': 'readNamespaceIndexCache: cache read failed', err } )
                 return { 'exists': false, 'index': null }
             }
 
@@ -11197,10 +11610,10 @@ allowlist, migrate-config, etc.).
 
                 return { 'exists': true, index, 'stale': false }
             } catch( parseErr ) {
-                return { 'exists': true, 'index': null, 'stale': true, 'error': parseErr.message }
+                return { 'exists': true, 'index': null, 'stale': true, 'error': `CCH-010 readNamespaceIndexCache: ${parseErr.message}` }
             }
         } catch( err ) {
-            return { 'exists': false, 'index': null, 'error': err.message }
+            return { 'exists': false, 'index': null, 'error': `CCH-011 readNamespaceIndexCache: ${err.message}` }
         }
     }
 
@@ -11213,13 +11626,13 @@ allowlist, migrate-config, etc.).
                 await unlink( cachePath )
             } catch( unlinkErr ) {
                 if( unlinkErr.code !== 'ENOENT' ) {
-                    return { 'success': false, 'error': unlinkErr.message }
+                    return { 'success': false, 'error': `VAL-005 invalidateNamespaceIndexCache: ${unlinkErr.message}` }
                 }
             }
 
             return { 'success': true }
         } catch( err ) {
-            return { 'success': false, 'error': err.message }
+            return { 'success': false, 'error': `VAL-006 invalidateNamespaceIndexCache: ${err.message}` }
         }
     }
 
@@ -11395,7 +11808,7 @@ allowlist, migrate-config, etc.).
         } catch {
             const result = {
                 'status': false,
-                'error': `Config not found at ${configPath}`
+                'error': `CFG-004 migrateConfig: Config not found at ${configPath}`
             }
 
             return { result }
@@ -11407,7 +11820,7 @@ allowlist, migrate-config, etc.).
         } catch( parseErr ) {
             const result = {
                 'status': false,
-                'error': `Invalid JSON in config at ${configPath}: ${parseErr.message}`
+                'error': `CFG-005 migrateConfig: Invalid JSON in config at ${configPath}: ${parseErr.message}`
             }
 
             return { result }
@@ -11659,8 +12072,9 @@ allowlist, migrate-config, etc.).
             if( !config[ 'allowlist' ] || !Array.isArray( config[ 'allowlist' ] ) ) {
                 config[ 'allowlist' ] = []
             }
-        } catch {
+        } catch( err ) {
             // File does not exist or is invalid — use default structure
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-023', 'location': 'allowlist: config read failed', err } )
         }
 
         const configAllowlist = config[ 'allowlist' ]
@@ -11732,7 +12146,8 @@ allowlist, migrate-config, etc.).
                 console.warn( 'LibraryLoader.mergeAllowlist not available in installed flowmcp-core; allowlist extensions stored in flowmcp.config.json will be honored once core is updated.' )
                 mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
             }
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'CLI-024', 'location': 'allowlist: LibraryLoader import failed', err } )
             mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
         }
 
@@ -11768,7 +12183,8 @@ allowlist, migrate-config, etc.).
 
                 try {
                     entries = await readdir( sourceDir, { recursive: true } )
-                } catch {
+                } catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'SEL-001', 'location': 'selectionList: source dir read failed', err } )
                     return
                 }
 
@@ -11810,8 +12226,9 @@ allowlist, migrate-config, etc.).
                             }
 
                             selections.push( entry )
-                        } catch {
+                        } catch( err ) {
                             // skip unreadable files
+                            FlowMcpCli.#emitCoded( { 'code': 'SEL-002', 'location': 'selectionList: selection file load failed', err } )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
@@ -11861,7 +12278,7 @@ allowlist, migrate-config, etc.).
         } catch( error ) {
             const result = {
                 'status': false,
-                'error': `Failed to load selection file: ${error.message}`
+                'error': `SEL-003 selectionShow: Failed to load selection file: ${error.message}`
             }
 
             return { result }
@@ -11940,8 +12357,9 @@ allowlist, migrate-config, etc.).
 
                 return { result }
             }
-        } catch {
+        } catch( err ) {
             // v4 not available — use inline fallback below
+            FlowMcpCli.#emitCoded( { 'code': 'VAL-008', 'location': 'selectionValidate: v4 SelectionValidator import failed', err } )
         }
 
         // Inline fallback validator
@@ -13013,7 +13431,7 @@ allowlist, migrate-config, etc.).
         try {
             rebuilt = await RebuildIndex.rebuildNamespaceIndex( { namespaceDir } )
         } catch( rebuildError ) {
-            return { 'status': false, 'error': `Index rebuild threw: ${rebuildError.message}`, 'fix': 'Resolve the island state above and re-run.' }
+            return { 'status': false, 'error': `CLI-025 deterministicRollup: Index rebuild threw: ${rebuildError.message}`, 'fix': 'Resolve the island state above and re-run.' }
         }
         if( rebuilt.status !== true ) {
             return { 'status': false, 'error': `Index rebuild failed: ${( rebuilt.errors || [] ).join( '; ' )}`, 'fix': 'Resolve the index errors above and re-run.' }
@@ -13319,7 +13737,7 @@ allowlist, migrate-config, etc.).
             } )
             typedResults = typedRun[ 'results' ] || []
         } catch( err ) {
-            typedResults = [ { 'primitive': 'tool', 'name': '*', 'status': false, 'error': err.message } ]
+            typedResults = [ { 'primitive': 'tool', 'name': '*', 'status': false, 'error': `CLI-026 deterministicPrimitiveView: ${err.message}` } ]
         }
 
         // Restrict to the requested primitives, and to the addressed tool when a
@@ -14719,7 +15137,7 @@ allowlist, migrate-config, etc.).
 
             return { 'status': true, written }
         } catch( err ) {
-            return { 'status': false, 'error': err.message }
+            return { 'status': false, 'error': `SCH-006 writeSchemaGradingsFromScores: ${err.message}` }
         }
     }
 
@@ -14791,7 +15209,7 @@ allowlist, migrate-config, etc.).
 
             return { 'status': true, written }
         } catch( err ) {
-            return { 'status': false, 'error': err.message }
+            return { 'status': false, 'error': `GRD-002 writeNamespaceGradingsFromScores: ${err.message}` }
         }
     }
 
@@ -14875,7 +15293,7 @@ allowlist, migrate-config, etc.).
 
             return { 'status': true, written }
         } catch( err ) {
-            return { 'status': false, 'error': err.message }
+            return { 'status': false, 'error': `GRD-003 writePersonaNamespaceGradings: ${err.message}` }
         }
     }
 
@@ -15120,7 +15538,8 @@ allowlist, migrate-config, etc.).
         let entries = []
         try {
             entries = await readdir( targetDir, { 'withFileTypes': true } )
-        } catch {
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'SCH-007', 'location': 'listGradingSchemaDirs: target dir read failed', err } )
             return []
         }
 
@@ -15177,7 +15596,8 @@ allowlist, migrate-config, etc.).
                     const found = [ ...text.matchAll( /namespace\s*:\s*['"]([a-z][a-z0-9-]*)['"]/g ) ]
                         .map( ( match ) => match[ 1 ] )
                     isCandidate = found.length === 0 || found.includes( namespace )
-                } catch {
+                } catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'SCH-008', 'location': 'resolveSchemasForTarget: namespace probe read failed', err } )
                     isCandidate = true
                 }
                 if( isCandidate ) { acc.push( { source, schemaInfo, filePath } ) }
@@ -15818,7 +16238,10 @@ allowlist, migrate-config, etc.).
 
                 let raw = null
                 try { raw = await readFile( resolved.path, 'utf-8' ) }
-                catch { return }
+                catch( err ) {
+                    FlowMcpCli.#emitCoded( { 'code': 'CLI-027', 'location': 'collectLastTips: grading entry read failed', err } )
+                    return
+                }
 
                 const read = Grading.readEntry( { 'json': raw } )
                 if( read.entry === null ) { return }
@@ -15844,7 +16267,10 @@ allowlist, migrate-config, etc.).
     static #gradingsLogicalName( { gradingsDir } ) {
         let entries = []
         try { entries = readdirSync( gradingsDir ) }
-        catch { return '' }
+        catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'GRD-004', 'location': 'gradingsLogicalName: gradings dir read failed', err } )
+            return ''
+        }
         const first = entries
             .filter( ( name ) => name.endsWith( '.json' ) === true )
             .sort()
@@ -15873,7 +16299,10 @@ allowlist, migrate-config, etc.).
     static async #findGradingsDirs( { root } ) {
         let entries = []
         try { entries = await readdir( root, { 'withFileTypes': true } ) }
-        catch { return [] }
+        catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'GRD-005', 'location': 'findGradingsDirs: dir read failed', err } )
+            return []
+        }
 
         const found = await entries
             .filter( ( entry ) => entry.isDirectory() === true )
@@ -16139,4 +16568,4 @@ allowlist, migrate-config, etc.).
 }
 
 
-export { FlowMcpCli }
+export { FlowMcpCli, CliError }

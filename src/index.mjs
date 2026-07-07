@@ -61,7 +61,8 @@ const args = parseArgs( {
         'set-data-dir': { type: 'string' },
         'set-export-dir': { type: 'string' },
         'target': { type: 'string' },
-        'throttle': { type: 'string' }
+        'throttle': { type: 'string' },
+        'version': { type: 'boolean' }
     }
 } )
 
@@ -200,6 +201,28 @@ const runCommand = async () => {
 
     if( command === 'status' ) {
         const { result } = await FlowMcpCli.status( { cwd } )
+        output( { result } )
+
+        return true
+    }
+
+    // Memo 149 Strang D — `flowmcp doctor`: structural health check over schemaFolders[],
+    // reported by error code. `flowmcp version` (also `flowmcp --version`): the CLI stamp.
+    if( command === 'doctor' ) {
+        const json = values[ 'json' ] === true
+        const { result } = await FlowMcpCli.doctor( { cwd } )
+        output( { result } )
+        FlowMcpCli.printDoctorSummary( { result, json } )
+
+        if( result[ 'status' ] !== true ) {
+            process.exit( 1 )
+        }
+
+        return true
+    }
+
+    if( command === 'version' ) {
+        const { result } = await FlowMcpCli.version()
         output( { result } )
 
         return true
@@ -731,6 +754,14 @@ const runCommand = async () => {
 }
 
 const main = async () => {
+    // Memo 149 Strang D (F5=A) — `flowmcp --version` (no command needed).
+    if( values[ 'version' ] === true && !command ) {
+        const { result } = await FlowMcpCli.version()
+        output( { result } )
+
+        return
+    }
+
     if( values[ 'help' ] || !command ) {
         await FlowMcpCli.help( { cwd } )
 
