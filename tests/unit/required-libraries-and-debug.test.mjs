@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals'
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals'
 import { writeFile, mkdir, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
@@ -207,7 +207,7 @@ describe( 'FlowMcpCli.callTool with requiredLibraries — exercises #resolveHand
 } )
 
 
-describe( 'FlowMcpCli.callTool — #resolveHandlers surfaces resolution failures (No Silent Defaults)', () => {
+describe( 'FlowMcpCli.callTool — #resolveHandlers fails loud on unresolvable required library (Memo 150 D1)', () => {
     const CWD = join( tmpdir(), `flowmcp-debug-call-${Date.now()}` )
     let originalDebugEnv
 
@@ -243,10 +243,11 @@ describe( 'FlowMcpCli.callTool — #resolveHandlers surfaces resolution failures
     } )
 
 
-    it( 'surfaces the resolution cause when FLOWMCP_DEBUG is set and handler resolution fails', async () => {
+    it( 'fails loud with a coded LIB-001 error + install command when FLOWMCP_DEBUG is set', async () => {
+        // Memo 150 D1: an unresolvable requiredLibrary is now a CODED (LIB-001) fail-loud error that
+        // re-throws instead of silently degrading to empty handlers. callTool surfaces status:false
+        // with the exact `npm install --prefix` command. Replaces the former silent-degrade behavior.
         process.env[ 'FLOWMCP_DEBUG' ] = 'true'
-
-        const errorSpy = jest.spyOn( console, 'error' ).mockImplementation( () => {} )
 
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_debugsrc',
@@ -254,30 +255,16 @@ describe( 'FlowMcpCli.callTool — #resolveHandlers surfaces resolution failures
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'content' ] ).toBeDefined()
-
-        const debugMessages = errorSpy.mock.calls
-            .filter( ( callArgs ) => {
-                const firstArg = String( callArgs[ 0 ] || '' )
-                const isResolveHandler = firstArg.includes( '[resolveHandlers]' )
-
-                return isResolveHandler
-            } )
-
-        expect( debugMessages.length ).toBeGreaterThanOrEqual( 1 )
-
-        errorSpy.mockRestore()
+        expect( result[ 'status' ] ).toBe( false )
+        expect( String( result[ 'error' ] ) ).toContain( 'LIB-001' )
+        expect( String( result[ 'error' ] ) ).toContain( 'npm install --prefix' )
     }, 15000 )
 
 
-    it( 'still surfaces the resolution cause when FLOWMCP_DEBUG is not set (No Silent Defaults)', async () => {
-        // PRD-015 / Befund B: an unresolvable required library or ref must NOT be silently
-        // swallowed into empty handlers (which later surface as a confusing "No response
-        // received from server"). The cause is reported regardless of FLOWMCP_DEBUG.
+    it( 'fails loud identically when FLOWMCP_DEBUG is not set (No Silent Defaults)', async () => {
+        // The coded fail-loud is independent of FLOWMCP_DEBUG — a declared-but-unresolvable library
+        // is a contract violation that must always surface, never a confusing empty content:[].
         delete process.env[ 'FLOWMCP_DEBUG' ]
-
-        const errorSpy = jest.spyOn( console, 'error' ).mockImplementation( () => {} )
 
         const { result } = await FlowMcpCli.callTool( {
             'toolName': 'ping_debugsrc',
@@ -285,19 +272,8 @@ describe( 'FlowMcpCli.callTool — #resolveHandlers surfaces resolution failures
             'cwd': CWD
         } )
 
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'content' ] ).toBeDefined()
-
-        const debugMessages = errorSpy.mock.calls
-            .filter( ( callArgs ) => {
-                const firstArg = String( callArgs[ 0 ] || '' )
-                const isResolveHandler = firstArg.includes( '[resolveHandlers]' )
-
-                return isResolveHandler
-            } )
-
-        expect( debugMessages.length ).toBeGreaterThanOrEqual( 1 )
-
-        errorSpy.mockRestore()
+        expect( result[ 'status' ] ).toBe( false )
+        expect( String( result[ 'error' ] ) ).toContain( 'LIB-001' )
+        expect( String( result[ 'error' ] ) ).toContain( 'npm install --prefix' )
     }, 15000 )
 } )

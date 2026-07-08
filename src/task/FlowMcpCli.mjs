@@ -8055,10 +8055,18 @@ Validation & Testing:
        --only=<csv>                   v4-primitive view: tools | resources | skills | prompts | selections)
 
 Configuration:
-  dev allowlist --add <library>       Add library to allowlist (flowmcp.config.json)
-  dev allowlist --remove <library>    Remove library from allowlist
-  dev allowlist --list                Show current allowlist
+  dev allowlist list                  List libraries installed in allowed-libraries (installed = allowed)
+  dev allowlist add <library>         (deprecated) prints: npm install --prefix <allowedLibrariesPath> <lib>
+  dev allowlist remove <library>      (deprecated) prints the manual uninstall command
   dev migrate-config                  Migrate config from v3 path::route format to v4 spec-IDs
+
+Libraries (allowed-libraries):
+  External requiredLibraries load from allowed-libraries (config "allowedLibrariesPath",
+  default ~/.flowmcp/allowed-libraries). The CLI never installs — folder presence is the gate.
+  Install a missing lib:   npm install --prefix <allowedLibrariesPath> <lib>
+  See what is missing:     flowmcp doctor
+  Native libs after a Node major upgrade (talib, canvas, better-sqlite3) break until rebuilt:
+  Rebuild native bindings: npm rebuild --prefix <allowedLibrariesPath>
 
 Schema Management:
   dev schemas                         List all schemas from the configured schemaFolders
@@ -9396,14 +9404,21 @@ allowlist, migrate-config, etc.).
                 // deterministic base first, then fall back to the schema-anchored require for
                 // local dev where a schema ships its own deps. A genuinely unresolvable lib is
                 // surfaced explicitly (No Silent Defaults) rather than swallowed.
+                // Memo 150 — resolution chain: allowed-libraries FIRST (the user-owned folder,
+                // config allowedLibrariesPath — this is where the 49 external libs live and where
+                // `npm install --prefix` puts them), then the CLI base (ships ethers/better-sqlite3),
+                // then the schema dir (local dev). First hit wins. Non-breaking: the two legacy bases
+                // stay as fallbacks so the CLI's own runtime deps keep loading.
+                const { allowedLibrariesBase } = await FlowMcpCli.#resolveAllowedLibrariesBase()
                 const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+                const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
                 const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
                 const schemaRequire = createRequire( resolve( filePath ) )
                 const unresolved = []
 
                 await requiredLibraries
                     .reduce( ( promise, lib ) => promise.then( async () => {
-                        const loaded = await FlowMcpCli.#loadOneLibrary( { lib, baseRequire, schemaRequire } )
+                        const loaded = await FlowMcpCli.#loadOneLibrary( { lib, 'requires': [ allowedRequire, baseRequire, schemaRequire ] } )
 
                         if( loaded[ 'status' ] === true ) {
                             libraries[ lib ] = loaded[ 'module' ]
@@ -9413,7 +9428,10 @@ allowlist, migrate-config, etc.).
                     } ), Promise.resolve() )
 
                 if( unresolved.length > 0 ) {
-                    throw new Error( `LIB-RESOLVE: required librar${unresolved.length === 1 ? 'y' : 'ies'} not resolvable from CLI base (${resolveBase}) nor schema dir: ${unresolved.join( ', ' )}. Install the librar${unresolved.length === 1 ? 'y' : 'ies'} into the CLI (npm install <lib>) so handlers can load deterministically.` )
+                    // Memo 150 D1 — CODE the throw (LIB-001) so it matches the isCoded regex below and
+                    // re-throws (fail-loud) instead of silently degrading to empty handlers. The message
+                    // carries the exact, copy-pasteable install command (F3=B: we SHOW it, never install).
+                    throw new Error( `LIB-001 required librar${unresolved.length === 1 ? 'y' : 'ies'} not resolvable from allowed-libraries (${allowedLibrariesBase}), CLI base, nor schema dir: ${unresolved.join( ', ' )}. Install into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${unresolved.join( ' ' )}` )
                 }
             }
 
@@ -9445,10 +9463,9 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async #loadOneLibrary( { lib, baseRequire, schemaRequire } ) {
-        // Deterministic base first (CLI install node_modules), then schema-dir fallback.
-        const requires = [ baseRequire, schemaRequire ]
-
+    static async #loadOneLibrary( { lib, requires } ) {
+        // Memo 150 — `requires` is the ordered resolution chain (allowed-libraries, CLI base,
+        // schema dir). First require that resolves + imports the lib wins; the rest are skipped.
         const attempt = await requires
             .reduce( async ( accPromise, req ) => {
                 const acc = await accPromise
@@ -9486,6 +9503,70 @@ allowlist, migrate-config, etc.).
         const resolveBase = join( here, '..', '..' )
 
         return { resolveBase }
+    }
+
+
+    // Memo 150 — the allowed-libraries base: the user-owned folder whose node_modules holds
+    // external requiredLibraries (config "allowedLibrariesPath", default ~/.flowmcp/allowed-libraries,
+    // ~/-expansion via #resolvePath). Absence-tolerant: a missing config key falls back to the default
+    // (non-breaking, no forced config write). The folder need not exist yet — createRequire anchors on a
+    // noop.cjs inside it (the file need not exist; only its directory is used to seed module resolution).
+    // Folder presence IS the gate (F7=A): a lib only resolves here if it was deliberately installed.
+    static async #resolveAllowedLibrariesBase() {
+        const defaultBase = join( FlowMcpCli.#globalConfigDir(), 'allowed-libraries' )
+        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': FlowMcpCli.#globalConfigPath() } )
+        const rawValue = globalConfig ? globalConfig[ 'allowedLibrariesPath' ] : null
+        const configured = typeof rawValue === 'string' && rawValue.length > 0 ? rawValue : null
+        const allowedLibrariesPathRaw = configured || defaultBase
+        const { resolvedPath } = FlowMcpCli.#resolvePath( { 'path': allowedLibrariesPathRaw } )
+
+        return { 'allowedLibrariesBase': resolvedPath, allowedLibrariesPathRaw, 'configured': configured !== null }
+    }
+
+
+    // Memo 150 D3/F7 — enumerate the top-level packages installed in allowed-libraries/node_modules
+    // (installed = allowed). Scoped packages (@scope/pkg) are expanded one level. Absent folder = [].
+    static #listInstalledLibraries( { allowedLibrariesBase } ) {
+        const nodeModulesDir = join( allowedLibrariesBase, 'node_modules' )
+
+        if( existsSync( nodeModulesDir ) === false ) {
+            return { 'installed': [] }
+        }
+
+        let topEntries = []
+
+        try {
+            topEntries = readdirSync( nodeModulesDir, { 'withFileTypes': true } )
+        } catch( err ) {
+            FlowMcpCli.#emitCoded( { 'code': 'LIB-003', 'location': 'listInstalledLibraries: node_modules unreadable', err } )
+
+            return { 'installed': [] }
+        }
+
+        const installed = topEntries
+            .filter( ( entry ) => entry.isDirectory() === true || entry.isSymbolicLink() === true )
+            .map( ( entry ) => entry[ 'name' ] )
+            .filter( ( name ) => name.startsWith( '.' ) === false )
+            .reduce( ( acc, name ) => {
+                if( name.startsWith( '@' ) === false ) {
+                    return [ ...acc, name ]
+                }
+
+                let scopedNames = []
+
+                try {
+                    scopedNames = readdirSync( join( nodeModulesDir, name ), { 'withFileTypes': true } )
+                        .filter( ( entry ) => entry.isDirectory() === true || entry.isSymbolicLink() === true )
+                        .map( ( entry ) => `${name}/${entry[ 'name' ]}` )
+                } catch( err ) {
+                    scopedNames = []
+                }
+
+                return [ ...acc, ...scopedNames ]
+            }, [] )
+            .sort()
+
+        return { installed }
     }
 
 
@@ -9936,8 +10017,14 @@ allowlist, migrate-config, etc.).
         // Checks 3-5 — per schema: shared-list resolve (list-present + ref/version), module-present.
         const sharedListFailures = []
         const libraryFailures = []
+        const missingLibs = new Set()
         const envKeysNeeded = new Set()
+        // Memo 150 — measure the SAME resolution chain the real load path uses (allowed-libraries
+        // first, then the CLI base), so doctor reflects runtime reality and its install hint points
+        // at the user-owned folder.
+        const { allowedLibrariesBase } = await FlowMcpCli.#resolveAllowedLibrariesBase()
         const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+        const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
         const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
 
         await schemas
@@ -9977,12 +10064,22 @@ allowlist, migrate-config, etc.).
                 if( requiredLibraries.length > 0 ) {
                     requiredLibraries
                         .forEach( ( lib ) => {
-                            try {
-                                baseRequire.resolve( lib )
-                            } catch( err ) {
-                                // LIB-001 — requiredLibrary not resolvable from the CLI base
-                                // (aggregated into the module-present check below).
+                            const resolvable = [ allowedRequire, baseRequire ]
+                                .some( ( req ) => {
+                                    try {
+                                        req.resolve( lib )
+
+                                        return true
+                                    } catch( err ) {
+                                        return false
+                                    }
+                                } )
+
+                            if( resolvable === false ) {
+                                // LIB-001 — requiredLibrary not resolvable from allowed-libraries nor
+                                // the CLI base (aggregated into module-present + the install hint below).
                                 libraryFailures.push( `${namespace}: LIB-001 ${lib}` )
+                                missingLibs.add( lib )
                             }
                         } )
                 }
@@ -10004,7 +10101,7 @@ allowlist, migrate-config, etc.).
             'ok': libraryFailures.length === 0,
             'code': libraryFailures.length === 0 ? null : 'LIB-001',
             'detail': libraryFailures.length === 0
-                ? 'all requiredLibraries resolvable from the CLI base'
+                ? 'all requiredLibraries resolvable from allowed-libraries or the CLI base'
                 : `${libraryFailures.length} unresolvable: ${libraryFailures.slice( 0, 8 ).join( '; ' )}`
         } )
 
@@ -10036,7 +10133,14 @@ allowlist, migrate-config, etc.).
         // Check 7 — cli-version stamp.
         checks.push( { 'check': 'cli-version', 'severity': 'INFO', 'ok': cliVersion !== 'unknown', 'code': cliVersion !== 'unknown' ? null : 'CLI-028', 'detail': `${cliName}@${cliVersion}` } )
 
-        const result = FlowMcpCli.#doctorResult( { cliName, cliVersion, checks } )
+        // Memo 150 P2 (F3=B) — SHOW the exact, copy-pasteable install command for missing libraries.
+        // The CLI never installs itself; it points at allowed-libraries so the user (or the AI on
+        // request) can run it. `npm install --prefix <path>` also scaffolds the folder on first use.
+        const libFix = missingLibs.size > 0
+            ? `Install missing librar${missingLibs.size === 1 ? 'y' : 'ies'} into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${Array.from( missingLibs ).join( ' ' )}`
+            : null
+
+        const result = FlowMcpCli.#doctorResult( { cliName, cliVersion, checks, 'fix': libFix } )
 
         return { result }
     }
@@ -10089,7 +10193,14 @@ allowlist, migrate-config, etc.).
                 process.stderr.write( `  ${mark} ${check[ 'check' ]}${code}: ${check[ 'detail' ]}\n` )
             } )
 
-        process.stderr.write( `  ${summary[ 'passed' ]}/${summary[ 'checks' ]} passed · ${summary[ 'errors' ] || 0} error(s) · ${summary[ 'info' ] || 0} info\n\n` )
+        process.stderr.write( `  ${summary[ 'passed' ]}/${summary[ 'checks' ]} passed · ${summary[ 'errors' ] || 0} error(s) · ${summary[ 'info' ] || 0} info\n` )
+
+        // Memo 150 P2 — surface the install hint for missing libraries (F3=B: show, never install).
+        if( result[ 'fix' ] ) {
+            process.stderr.write( `  → ${result[ 'fix' ]}\n` )
+        }
+
+        process.stderr.write( `\n` )
     }
 
 
@@ -12063,101 +12174,42 @@ allowlist, migrate-config, etc.).
             }
         }
 
-        let config = { 'allowlist': [] }
+        // Memo 150 D3/F7 — the separate config allowlist is obsolete: folder presence in
+        // allowed-libraries IS the permission gate. `list` shows what is actually installed there;
+        // `add`/`remove` no longer mutate any config — they point at the manual install (F3=B: the
+        // CLI never installs itself). This removes the dead getDefaultAllowlist key-mismatch (core
+        // returns { allowlist }, the old CLI read { defaultAllowlist } -> the list was always empty).
+        const { allowedLibrariesBase } = await FlowMcpCli.#resolveAllowedLibrariesBase()
 
-        try {
-            const raw = await readFile( configPath, 'utf-8' )
-            config = JSON.parse( raw )
-
-            if( !config[ 'allowlist' ] || !Array.isArray( config[ 'allowlist' ] ) ) {
-                config[ 'allowlist' ] = []
-            }
-        } catch( err ) {
-            // File does not exist or is invalid — use default structure
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-023', 'location': 'allowlist: config read failed', err } )
-        }
-
-        const configAllowlist = config[ 'allowlist' ]
-
-        if( action === 'add' ) {
-            const alreadyPresent = configAllowlist.includes( library )
-
-            if( !alreadyPresent ) {
-                configAllowlist.push( library )
-                config[ 'allowlist' ] = configAllowlist
-                await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
-            }
+        if( action === 'add' || action === 'remove' ) {
+            const command = action === 'add'
+                ? `npm install --prefix ${allowedLibrariesBase} ${library}`
+                : `npm uninstall --prefix ${allowedLibrariesBase} ${library}`
 
             const result = {
                 'status': true,
                 action,
                 library,
-                'added': !alreadyPresent,
-                'allowlist': configAllowlist,
+                'deprecated': true,
+                allowedLibrariesBase,
+                'message': `"dev allowlist ${action}" is deprecated (Memo 150). Folder presence in allowed-libraries is the gate — the CLI never installs. Run this yourself:`,
+                command,
                 configPath
             }
 
             return { result }
         }
 
-        if( action === 'remove' ) {
-            const wasPresent = configAllowlist.includes( library )
-            const updatedAllowlist = configAllowlist
-                .filter( ( entry ) => {
-                    const shouldKeep = entry !== library
-
-                    return shouldKeep
-                } )
-
-            config[ 'allowlist' ] = updatedAllowlist
-            await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
-
-            const result = {
-                'status': true,
-                action,
-                library,
-                'removed': wasPresent,
-                'allowlist': updatedAllowlist,
-                configPath
-            }
-
-            return { result }
-        }
-
-        // action === 'list'
-        let defaultAllowlist = []
-        let mergedAllowlist = [ ...configAllowlist ]
-        let hasMergeAllowlist = false
-
-        try {
-            const { LibraryLoader } = await import( 'flowmcp/v2' )
-            hasMergeAllowlist = typeof LibraryLoader.mergeAllowlist === 'function'
-            const hasGetDefault = typeof LibraryLoader.getDefaultAllowlist === 'function'
-
-            if( hasGetDefault ) {
-                const { defaultAllowlist: defaults } = LibraryLoader.getDefaultAllowlist()
-                defaultAllowlist = defaults || []
-            }
-
-            if( hasMergeAllowlist ) {
-                const { mergedAllowlist: merged } = LibraryLoader.mergeAllowlist( { 'extraAllowlist': configAllowlist } )
-                mergedAllowlist = merged || [ ...defaultAllowlist, ...configAllowlist ]
-            } else {
-                console.warn( 'LibraryLoader.mergeAllowlist not available in installed flowmcp-core; allowlist extensions stored in flowmcp.config.json will be honored once core is updated.' )
-                mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
-            }
-        } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-024', 'location': 'allowlist: LibraryLoader import failed', err } )
-            mergedAllowlist = [ ...new Set( [ ...defaultAllowlist, ...configAllowlist ] ) ]
-        }
+        // action === 'list' — the modules installed in allowed-libraries/node_modules (installed = allowed).
+        const { installed } = FlowMcpCli.#listInstalledLibraries( { allowedLibrariesBase } )
 
         const result = {
             'status': true,
             action,
-            'default': defaultAllowlist,
-            'extensions': configAllowlist,
-            'merged': mergedAllowlist,
-            hasMergeAllowlist,
+            allowedLibrariesBase,
+            installed,
+            'count': installed.length,
+            'note': `Folder presence is the gate (Memo 150 F7). Install with: npm install --prefix ${allowedLibrariesBase} <lib>`,
             configPath
         }
 
