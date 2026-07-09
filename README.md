@@ -247,7 +247,7 @@ flowmcp grading export providers/defillama
 | `flowmcp doctor` | Structural health check over the configured `schemaFolders[]` — are the shared lists, required modules, refs and config present and consistent? Reports by error code, offline (no live API probe). Exits `1` if any `ERROR`-severity check fails. |
 | `flowmcp version` / `flowmcp --version` | Print the CLI name and version — answers "which flowmcp is running?" |
 
-`doctor` runs seven checks: `config-single-source` (every `schemaFolders[]` path exists), `schema-load` (every schema module loads), `shared-list-resolve` (every declared `sharedLists` ref resolves non-empty — `LST-001`/`HND-001`/`LST-006`), `module-present` (every `requiredLibraries` entry resolves from the CLI base — `LIB-001`), `key-coverage` (`requiredServerParams` vs `.env` — `INFO` only; missing keys disable individual tools, they are not a structural failure), and `cli-version`. The machine-readable result is JSON on stdout; a human summary prints to stderr (suppressed by `--json`).
+`doctor` runs seven checks: `config-single-source` (every `schemaFolders[]` path exists), `schema-load` (every schema module loads), `shared-list-resolve` (every declared `sharedLists` ref resolves non-empty — `LST-001`/`HND-001`/`LST-006`), `module-present` (every `requiredLibraries` entry resolves from allowed-libraries or the CLI base — `LIB-001`), `key-coverage` (`requiredServerParams` vs `.env` — `INFO` only; missing keys disable individual tools, they are not a structural failure), and `cli-version`. The machine-readable result is JSON on stdout; a human summary prints to stderr (suppressed by `--json`).
 
 ### Error Codes
 
