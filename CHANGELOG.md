@@ -2,10 +2,16 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
-## 4.7.0 — 2026-06-20
+## 4.8.0 — 2026-06-20 (Memos 119 + 128 + 141)
 
 ### Added
 
+- Lazy schema-resolution for `call <namespace>/tool/<name>` (Spec-ID): the call now
+  consults the prebuilt `.flowmcp/namespace-index.json` and imports ONLY the single
+  schema file that owns the tool, instead of importing every configured schema
+  (~549) before matching. For a keyless pure-calculation tool this collapses the
+  call from ~1.3–1.8 s to ~0.6 s (measured on `geo/tool/geoExtent`). Every other
+  FlowMCP consumer that shells to `flowmcp call` benefits — there is no API change.
 - **Schema-Persona threading into grading emit** — the emit path now resolves the
   per-namespace Schema-Persona (base + lens) and threads it into the emit substitution
   context, so the persona-required Schema-Areas (`about-namespace`, `namespace-skills`)
@@ -15,13 +21,45 @@ All notable changes to `flowmcp-cli` are documented here.
   persona-required namespace areas (`about-namespace`/`namespace-skills`) under
   `<ns>/<schema>/resources/about/_gradings/`. This was the missing writer behind the
   "0 About graded" symptom; the About-Persona path now works end-to-end (`about:graded`).
+- Version-consistency gate in structural validation: a schema declaring a 4.x version
+  is now checked to be SHAPED like v4 — no populated v2 `routes` (VERSION-001), no v3
+  `skills` (VERSION-002), and at most 8 tools per file (VERSION-003). Because v4 reuses
+  the v2 transport, a mis-declared schema otherwise only fails at runtime.
+- Perf-guard test for the O(matched) namespace resolver: the deterministic grading run
+  compiles only the schema files that declare the target namespace, never the rest.
+
+### Changed (BREAKING)
+
+- The `validate` command was renamed to `schema-check` to make its offline,
+  structure-only nature explicit (vs. `grading deterministic`, which also runs the
+  live data pretest). The old `validate` name is **removed** — there is no deprecated
+  alias (`flowmcp validate` now reports "Unknown command"). The sibling commands
+  `validate-catalog`, `validate-lists` and `validate-agent` are unaffected.
 
 ### Changed
 
+- `callTool` schema resolution and wire-name matching were extracted into reusable
+  helpers (`#resolveSchemasForCall`, `#matchToolInSchemas`, `#resolveSchemaByIndex`).
+  A Spec-ID call that misses the index, hits a stale entry, or fails the wire-name
+  re-verify falls back transparently to the full scan — behaviour is identical to
+  the previous full-scan path, only the import count changes. A `<source>:` prefix
+  still scopes resolution to exactly that source (no first-wins). Bare wire-names and
+  `flowmcp run`/serve are unaffected (full scan as before).
 - Re-pinned `flowmcp-grading` to `2.5.0` (`2974ae8`) for the persona-area emit composition,
   and `geo-dzt-toolkit` to its `getTrails` build.
 
-## 4.4.0 — 2026-06-04
+### Fixed
+
+- A required native library that is installed but fails to load (a missing or
+  ABI-mismatched `.node` binding, e.g. better-sqlite3 after a broken build) now reports a
+  clear `LIB-BINDING` error that says to rebuild the native module — instead of the
+  misleading `LIB-RESOLVE` "library not resolvable / install it" message.
+- Empty/whitespace `.env` values for a `requiredServerParam` are now treated as MISSING
+  (key-gated, DPT-007) instead of being injected as an empty credential that fired a
+  live 401 recorded as a false FAIL. Consistent with how `search`/`list` flag a tool as
+  `[disabled: missing KEY]`.
+
+## 4.4.0 — 2026-06-04 (Memo 107)
 
 ### Added
 

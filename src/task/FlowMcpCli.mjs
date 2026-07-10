@@ -2179,6 +2179,9 @@ class FlowMcpCli {
         // PRD-008 — an optional "<source>:" prefix scopes the call to one
         // schemaFolders[] source (no first-wins guess on a collision).
         let sourceFilter = null
+        // Memo 128 Kap 10 — for a tool Spec-ID we can resolve via the prebuilt
+        // namespace-index (one import) instead of scanning all schemas.
+        let lazySpec = null
 
         if( FlowMcpCli.#isSpecId( { 'ref': toolName } ) ) {
             const { valid, namespace, type, name: specName, source } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
@@ -2211,33 +2214,39 @@ class FlowMcpCli {
             }
 
             sourceFilter = source
+            lazySpec = { namespace, 'routeName': specName }
             const { toolName: mcpToolName } = FlowMcpCli.#buildToolName( { 'routeName': specName, 'namespace': namespace } )
             resolvedToolName = mcpToolName
         }
 
-        // Memo 099 Kap 5 — no activation: resolve against ALL configured schemaFolders.
-        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        // Memo 128 Kap 10 — Lazy Schema-Resolution: for a tool Spec-ID, import only
+        // the single indexed schema file. Memo 099 Kap 5 — no activation: the full
+        // scan (lazy miss / bare name) resolves against ALL configured schemaFolders.
+        let resolvedSchemas = null
+        let lazyUsed = false
 
-        // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
-        if( resolveError !== null && resolveError !== undefined ) {
-            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
-
-            return { result }
-        }
-
-        // PRD-008 — when a "<source>:" prefix is given, restrict resolution to that
-        // source so the qualified call hits exactly that folder (no first-wins).
-        const resolvedSchemas = sourceFilter === null || sourceFilter === undefined
-            ? allSchemas
-            : allSchemas.filter( ( entry ) => entry[ 'source' ] === sourceFilter )
-
-        if( ( sourceFilter !== null && sourceFilter !== undefined ) && resolvedSchemas.length === 0 ) {
-            const result = FlowMcpCli.#error( {
-                'error': `No schemaFolders[] source named "${sourceFilter}" provides the requested tool.`,
-                'fix': `Check the source name (run "${appConfig[ 'cliCommand' ]} call list-tools" to see each tool's "source"), or drop the "<source>:" prefix.`
+        if( lazySpec !== null ) {
+            const { schemas: lazySchemas } = await FlowMcpCli.#resolveSchemaByIndex( {
+                'namespace': lazySpec[ 'namespace' ],
+                'routeName': lazySpec[ 'routeName' ],
+                sourceFilter,
+                cwd
             } )
 
-            return { result }
+            if( lazySchemas !== null ) {
+                resolvedSchemas = lazySchemas
+                lazyUsed = true
+            }
+        }
+
+        if( resolvedSchemas === null ) {
+            const { resolvedSchemas: scanned, errorResult } = await FlowMcpCli.#resolveSchemasForCall( { sourceFilter } )
+
+            if( errorResult ) {
+                return { 'result': errorResult }
+            }
+
+            resolvedSchemas = scanned
         }
 
         const { config } = await FlowMcpCli.#readConfig( { cwd } )
@@ -2261,42 +2270,23 @@ class FlowMcpCli {
             }
         }
 
-        let matchedMain = null
-        let matchedHandlersFn = null
-        let matchedFile = null
-        let matchedToolName = null
-        let matchedRouteName = null
+        // Memo 128 Kap 10 — wire-name match (also the lazy-resolution re-verify).
+        let matched = FlowMcpCli.#matchToolInSchemas( { resolvedSchemas, resolvedToolName } )
 
-        resolvedSchemas
-            .forEach( ( { main, handlersFn, file } ) => {
-                if( matchedMain ) {
-                    return
-                }
+        // Stale-index guard: a lazy single-file load that does not contain the
+        // requested wire-name (index drifted) falls back to the full scan.
+        if( !matched[ 'matchedMain' ] && lazyUsed ) {
+            const { resolvedSchemas: scanned, errorResult } = await FlowMcpCli.#resolveSchemasForCall( { sourceFilter } )
 
-                const namespace = main[ 'namespace' ] || 'unknown'
-                const routes = main[ 'routes' ] || main[ 'tools' ] || {}
+            if( errorResult ) {
+                return { 'result': errorResult }
+            }
 
-                Object.keys( routes )
-                    .forEach( ( routeName ) => {
-                        if( matchedMain ) {
-                            return
-                        }
+            resolvedSchemas = scanned
+            matched = FlowMcpCli.#matchToolInSchemas( { resolvedSchemas, resolvedToolName } )
+        }
 
-                        try {
-                            const { toolName: candidateName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
-
-                            if( candidateName === resolvedToolName ) {
-                                matchedMain = main
-                                matchedHandlersFn = handlersFn
-                                matchedFile = file
-                                matchedToolName = candidateName
-                                matchedRouteName = routeName
-                            }
-                        } catch( err ) {
-                            process.stderr.write( `CAL-002 callTool: tool name match failed: ${err.message}\n` )
-                        }
-                    } )
-            } )
+        const { matchedMain, matchedHandlersFn, matchedFile, matchedToolName, matchedRouteName } = matched
 
         if( !matchedMain ) {
             const resourceResult = await FlowMcpCli.#callResourceQuery( { toolName, jsonArgs, resolvedSchemas } )
@@ -8015,7 +8005,7 @@ Schema Folders (Memo 099):
 
 Development & Schema Maintenance:
   ${cmd} dev <subcommand>             See "${cmd} dev --help" for all dev commands
-                                      (validate, test, allowlist, migrate-config,
+                                      (schema-check, allowlist, migrate-config,
                                        selection, lists, schemas, status,
                                        prompt, resource, etc.)
 
@@ -8047,8 +8037,12 @@ Development & Schema Maintenance commands. Tier 2 — used by schema authors
 and maintainers. AI agents typically use Tier 1 commands (${cmd} --help).
 
 Validation & Testing:
-  dev validate [path]                 Validate schema(s) structurally
-  (Memo 102: "dev test project/user/single" removed — its PASS criterion was a
+  ${cmd} schema-check [path]          Structure-only check (OFFLINE). Verifies the
+                                      schema shape against the v4 spec. It does NOT
+                                      call any API or check liveness — run
+                                      "grading deterministic" before shipping.
+  (Memo 119: "validate" was renamed to "schema-check" — old name removed, no alias.
+   Memo 102: "dev test project/user/single" removed — its PASS criterion was a
    strict subset of the deterministic grading pretest. Use:
      grading deterministic <namespace>/<schema>        structural validate + data pretest
      grading deterministic <namespace>/tool/<name>     restrict to one tool
@@ -8187,7 +8181,7 @@ ${cmd} list
 
 ## Development Commands
 
-Run \`${cmd} dev --help\` for development commands (validate, test,
+Run \`${cmd} dev --help\` for development commands (schema-check,
 allowlist, migrate-config, etc.).
 `
 
@@ -9414,7 +9408,8 @@ allowlist, migrate-config, etc.).
                 const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
                 const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
                 const schemaRequire = createRequire( resolve( filePath ) )
-                const unresolved = []
+                const notInstalled = []
+                const loadFailed = []
 
                 await requiredLibraries
                     .reduce( ( promise, lib ) => promise.then( async () => {
@@ -9422,16 +9417,30 @@ allowlist, migrate-config, etc.).
 
                         if( loaded[ 'status' ] === true ) {
                             libraries[ lib ] = loaded[ 'module' ]
+                        } else if( loaded[ 'loadError' ] !== null && loaded[ 'loadError' ] !== undefined ) {
+                            // Installed but unloadable — a broken/ABI-mismatched native binding.
+                            loadFailed.push( { lib, 'reason': loaded[ 'loadError' ] } )
                         } else {
-                            unresolved.push( lib )
+                            notInstalled.push( lib )
                         }
                     } ), Promise.resolve() )
 
-                if( unresolved.length > 0 ) {
+                if( loadFailed.length > 0 ) {
+                    // Memo 119 — an installed-but-unloadable native binding (ABI mismatch / missing
+                    // .node) needs a REBUILD, not an install. Deliberately left UNCODED so
+                    // #resolveHandlers logs+degrades (see lib-binding-error test) rather than taking
+                    // the LIB-001 fail-loud path used for a genuinely unresolvable library.
+                    const detail = loadFailed
+                        .map( ( entry ) => `${entry.lib} (${entry.reason})` )
+                        .join( '; ' )
+                    throw new Error( `LIB-BINDING: required librar${loadFailed.length === 1 ? 'y is' : 'ies are'} installed but failed to load — a native binding is missing or built for a different Node.js ABI: ${detail}. Rebuild the native module (e.g. "npm rebuild ${loadFailed[ 0 ].lib}" in the CLI, or reinstall it). This is NOT a missing dependency.` )
+                }
+
+                if( notInstalled.length > 0 ) {
                     // Memo 150 D1 — CODE the throw (LIB-001) so it matches the isCoded regex below and
                     // re-throws (fail-loud) instead of silently degrading to empty handlers. The message
                     // carries the exact, copy-pasteable install command (F3=B: we SHOW it, never install).
-                    throw new Error( `LIB-001 required librar${unresolved.length === 1 ? 'y' : 'ies'} not resolvable from allowed-libraries (${allowedLibrariesBase}), CLI base, nor schema dir: ${unresolved.join( ', ' )}. Install into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${unresolved.join( ' ' )}` )
+                    throw new Error( `LIB-001 required librar${notInstalled.length === 1 ? 'y' : 'ies'} not resolvable from allowed-libraries (${allowedLibrariesBase}), CLI base, nor schema dir: ${notInstalled.join( ', ' )}. Install into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${notInstalled.join( ' ' )}` )
                 }
             }
 
@@ -9465,7 +9474,15 @@ allowlist, migrate-config, etc.).
 
     static async #loadOneLibrary( { lib, requires } ) {
         // Memo 150 — `requires` is the ordered resolution chain (allowed-libraries, CLI base,
-        // schema dir). First require that resolves + imports the lib wins; the rest are skipped.
+        // schema dir), supplied by the caller. First require that resolves + imports the lib
+        // wins; the rest are skipped.
+        // Memo 119 — a library can fail in two distinct ways: NOT INSTALLED (resolve throws) or
+        // INSTALLED-BUT-UNLOADABLE (resolve succeeds, load throws — e.g. a native module such as
+        // better-sqlite3 whose .node binding is missing or built for a different ABI). They need
+        // different fixes, so the load error is captured separately and never collapsed into a
+        // misleading "not installed" message.
+        let loadError = null
+
         const attempt = await requires
             .reduce( async ( accPromise, req ) => {
                 const acc = await accPromise
@@ -9474,24 +9491,31 @@ allowlist, migrate-config, etc.).
                     return acc
                 }
 
+                let resolvedPath = null
                 try {
-                    const resolvedPath = req.resolve( lib )
-
-                    try {
-                        const mod = await import( pathToFileURL( resolvedPath ).href )
-                        return { 'status': true, 'module': mod.default || mod }
-                    } catch( importErr ) {
-                        FlowMcpCli.#emitCoded( { 'code': 'LIB-001', 'location': 'loadOneLibrary: esm import failed, trying cjs require', 'err': importErr } )
-                        const mod = req( lib )
-                        return { 'status': true, 'module': mod.default || mod }
-                    }
+                    resolvedPath = req.resolve( lib )
                 } catch( resolveErr ) {
                     FlowMcpCli.#emitCoded( { 'code': 'LIB-002', 'location': 'loadOneLibrary: require base could not resolve lib', 'err': resolveErr } )
                     return acc
                 }
+
+                // Present from this base — any failure now is a LOAD error (native
+                // binding / ABI), not a missing dependency.
+                try {
+                    const mod = await import( pathToFileURL( resolvedPath ).href )
+                    return { 'status': true, 'module': mod.default || mod }
+                } catch( importErr ) {
+                    try {
+                        const mod = req( lib )
+                        return { 'status': true, 'module': mod.default || mod }
+                    } catch( requireErr ) {
+                        loadError = requireErr.message || importErr.message
+                        return acc
+                    }
+                }
             }, Promise.resolve( { 'status': false, 'module': null } ) )
 
-        return attempt
+        return { ...attempt, loadError }
     }
 
 
@@ -9786,7 +9810,12 @@ allowlist, migrate-config, etc.).
         const serverParams = requiredServerParams
             .reduce( ( acc, paramName ) => {
                 const value = envObject[ paramName ]
-                if( value !== undefined ) {
+                // Memo 119 Kap 5a — an empty/whitespace env value is treated as MISSING,
+                // not injected as an empty credential. Injecting '' fired a live request
+                // with an empty key (401) that was recorded as a false FAIL; omitting it
+                // routes the schema to the key-gated "not evaluable" path (DPT-007),
+                // consistent with how `search`/`list` flag a tool as disabled.
+                if( FlowMcpCli.#isKeyFilled( { value } ) ) {
                     acc[ paramName ] = value
                 }
 
@@ -10587,6 +10616,24 @@ allowlist, migrate-config, etc.).
     }
 
 
+    static #v4ConsistencyErrors( { main, toolCount } ) {
+        const errors = []
+        const routeKeys = main && main[ 'routes' ] ? Object.keys( main[ 'routes' ] ) : []
+        if( routeKeys.length > 0 ) {
+            errors.push( 'VERSION-001: a 4.x schema must not declare populated "routes" (use "tools")' )
+        }
+        const skills = main && Array.isArray( main[ 'skills' ] ) ? main[ 'skills' ] : []
+        if( skills.length > 0 ) {
+            errors.push( 'VERSION-002: a 4.x schema must not declare "skills"' )
+        }
+        if( toolCount > 8 ) {
+            errors.push( `VERSION-003: a 4.x schema declares ${toolCount} tools; the per-file cap is 8 (split the namespace)` )
+        }
+
+        return errors
+    }
+
+
     static #validateSingleSchema( { main, file, v4 } ) {
         const namespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : 'unknown'
         const toolCount = Object.keys( ( main && ( main[ 'tools' ] || main[ 'routes' ] ) ) || {} ).length
@@ -10607,12 +10654,17 @@ allowlist, migrate-config, etc.).
                         'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
                     }
                 }
+                // Memo 119 Kap 3 — version-consistency gate. A schema declaring a 4.x
+                // version must be SHAPED like v4: no populated v2 `routes`, no populated
+                // v3 `skills`, and at most 8 tools per file. Because v4 reuses the v2
+                // transport, a mis-declared schema otherwise only fails at runtime.
+                const consistencyErrors = FlowMcpCli.#v4ConsistencyErrors( { main, toolCount } )
                 const enriched = v4[ 'MetaGenerator' ]
                     ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
                     : main
                 const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
-                const combinedMessages = [ ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
-                const combinedStatus = status && sqliteGtfsErrors.length === 0
+                const combinedMessages = [ ...consistencyErrors, ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+                const combinedStatus = status && sqliteGtfsErrors.length === 0 && consistencyErrors.length === 0
                 return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
             }
 
@@ -11766,6 +11818,157 @@ allowlist, migrate-config, etc.).
         await FlowMcpCli.#writeNamespaceIndexCache( { cwd, index } )
 
         return { index, 'source': 'rebuilt' }
+    }
+
+
+    // Memo 128 Kap 10 — Lazy Schema-Resolution for a tool Spec-ID call.
+    // Consults the prebuilt namespace-index and imports ONLY the one schema file
+    // that owns "<namespace>/tool/<routeName>", instead of importing all ~549
+    // schemas via #resolveAllSchemas(). Returns a single-element schemas array in
+    // the exact shape #resolveAllSchemas() produces, or { schemas: null } on a
+    // miss (caller then falls back to the full scan). The wire-name re-verify
+    // happens in callTool's match loop, so a stale index can never mis-resolve.
+    static async #resolveSchemaByIndex( { namespace, routeName, sourceFilter, cwd } ) {
+        const indexResult = await FlowMcpCli.#tryGetNamespaceIndex( { cwd } )
+        if( indexResult === null ) {
+            return { 'schemas': null }
+        }
+
+        const { index } = indexResult
+        const tools = index && index[ 'tools' ] ? index[ 'tools' ] : {}
+        const specId = `${namespace}/tool/${routeName}`
+        const entry = tools[ specId ]
+
+        if( !entry || !entry[ 'file' ] || !entry[ 'source' ] ) {
+            return { 'schemas': null }
+        }
+
+        // A "<source>:" prefix must hit exactly that source — never first-wins.
+        if( ( sourceFilter !== null && sourceFilter !== undefined ) && entry[ 'source' ] !== sourceFilter ) {
+            return { 'schemas': null }
+        }
+
+        const schemaRef = `${entry[ 'source' ]}/${entry[ 'file' ]}`
+        const loaded = await FlowMcpCli.#tryLoadSingleSchema( { schemaRef } )
+        if( loaded === null ) {
+            return { 'schemas': null }
+        }
+
+        const { main, handlersFn } = loaded
+        if( !main ) {
+            return { 'schemas': null }
+        }
+
+        const schemas = [ {
+            main,
+            handlersFn,
+            'file': schemaRef,
+            'source': entry[ 'source' ],
+            'requiredServerParams': main[ 'requiredServerParams' ] || []
+        } ]
+
+        return { schemas }
+    }
+
+
+    static async #tryGetNamespaceIndex( { cwd } ) {
+        try {
+            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
+
+            return { index }
+        } catch {
+            return null
+        }
+    }
+
+
+    static async #tryLoadSingleSchema( { schemaRef } ) {
+        try {
+            const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+            const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
+
+            return { main, handlersFn }
+        } catch {
+            return null
+        }
+    }
+
+
+    // Memo 099 Kap 5 — full-scan resolution against ALL configured schemaFolders[].
+    // Memo 128 Kap 10 — extracted so callTool can use it as the lazy-resolution
+    // fallback (lazy miss / bare name / stale index). Returns either an
+    // errorResult (config error / unknown source) or the source-filtered schemas.
+    static async #resolveSchemasForCall( { sourceFilter } ) {
+        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+
+        // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
+        if( resolveError !== null && resolveError !== undefined ) {
+            const errorResult = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+
+            return { 'resolvedSchemas': [], errorResult }
+        }
+
+        // PRD-008 — when a "<source>:" prefix is given, restrict resolution to that
+        // source so the qualified call hits exactly that folder (no first-wins).
+        const resolvedSchemas = sourceFilter === null || sourceFilter === undefined
+            ? allSchemas
+            : allSchemas.filter( ( entry ) => entry[ 'source' ] === sourceFilter )
+
+        if( ( sourceFilter !== null && sourceFilter !== undefined ) && resolvedSchemas.length === 0 ) {
+            const errorResult = FlowMcpCli.#error( {
+                'error': `No schemaFolders[] source named "${sourceFilter}" provides the requested tool.`,
+                'fix': `Check the source name (run "${appConfig[ 'cliCommand' ]} call list-tools" to see each tool's "source"), or drop the "<source>:" prefix.`
+            } )
+
+            return { 'resolvedSchemas': [], errorResult }
+        }
+
+        return { resolvedSchemas, 'errorResult': null }
+    }
+
+
+    // Memo 128 Kap 10 — wire-name match over a schema list (first-wins). Extracted
+    // so callTool can run it twice: once over the lazy single-file result, and
+    // again over the full scan if the lazy result drifted from the index.
+    static #matchToolInSchemas( { resolvedSchemas, resolvedToolName } ) {
+        let matchedMain = null
+        let matchedHandlersFn = null
+        let matchedFile = null
+        let matchedToolName = null
+        let matchedRouteName = null
+
+        resolvedSchemas
+            .forEach( ( { main, handlersFn, file } ) => {
+                if( matchedMain ) {
+                    return
+                }
+
+                const namespace = main[ 'namespace' ] || 'unknown'
+                const routes = main[ 'routes' ] || main[ 'tools' ] || {}
+
+                Object.keys( routes )
+                    .forEach( ( routeName ) => {
+                        if( matchedMain ) {
+                            return
+                        }
+
+                        try {
+                            const { toolName: candidateName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+
+                            if( candidateName === resolvedToolName ) {
+                                matchedMain = main
+                                matchedHandlersFn = handlersFn
+                                matchedFile = file
+                                matchedToolName = candidateName
+                                matchedRouteName = routeName
+                            }
+                        } catch {
+                            // skip
+                        }
+                    } )
+            } )
+
+        return { matchedMain, matchedHandlersFn, matchedFile, matchedToolName, matchedRouteName }
     }
 
 

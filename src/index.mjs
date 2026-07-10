@@ -82,370 +82,424 @@ const isDevHelp = () => {
 }
 
 
-const runCommand = async () => {
-    if( command === 'how-to' ) {
-        await FlowMcpCli.howTo( { cwd } )
+// ---------------------------------------------------------------------------
+// Tree-Literal (Branch/Leaf) — Spec-Kap 22 / context/01.
+//
+// A leaf does something: { description, execute }. The execute closures
+// reproduce the exact args-mapping of the former flat if-chain — business
+// logic stays in FlowMcpCli.mjs (no duplication).
+//
+// A branch is a bag of tools: { description, children, fallback }. The
+// fallback runs when no child key matches the sub-command (it reproduces the
+// former "Unknown <x> command" / passthrough / allowlist-error behaviour, per
+// branch, identically).
+//
+// isBranch / isLeaf distinguish the node kinds structurally.
+// ---------------------------------------------------------------------------
 
-        return true
-    }
+const isBranch = ( node ) => node !== undefined && node[ 'children' ] !== undefined
+const isLeaf = ( node ) => node !== undefined && node[ 'execute' ] !== undefined
 
-    if( command === 'dev' && isDevHelp() ) {
-        FlowMcpCli.devHelp()
 
-        return true
-    }
-
-    if( command === 'init' ) {
-        await FlowMcpCli.init( { cwd } )
-
-        return true
-    }
-
-    if( command === 'search' ) {
-        const query = positionals.slice( 1 ).join( ' ' ) || undefined
-        const { result } = await FlowMcpCli.search( { query } )
-        output( { result } )
-
-        return true
-    }
-
-    // Memo 099 Kap 5 — `add`/`reload`/`remove` removed. All tools from the
-    // configured schemaFolders are immediately available via search/list/call.
-
-    if( command === 'list' ) {
-        const { result } = await FlowMcpCli.list( { cwd } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'lists' ) {
-        const subOrName = positionals[ 1 ] || null
-
-        if( subOrName === 'add-entry' ) {
-            const listName = positionals[ 2 ]
-            const jsonEntry = positionals[ 3 ]
-            const { result } = await FlowMcpCli.listsAddEntry( { cwd, listName, jsonEntry } )
-            output( { result } )
-
-            return true
+const cacheBranch = {
+    'description': 'Inspect or clear the response cache.',
+    'children': {
+        'status': {
+            'description': 'Show cache namespaces, entry counts and sizes.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.cacheStatus()
+                output( { result } )
+            }
+        },
+        'clear': {
+            'description': 'Clear the cache (optionally a single namespace).',
+            'execute': async () => {
+                const namespace = positionals[ 2 ] || undefined
+                const { result } = await FlowMcpCli.cacheClear( { namespace } )
+                output( { result } )
+            }
         }
-
-        if( subOrName === 'refs' ) {
-            const alias = positionals[ 2 ]
-            const { result } = await FlowMcpCli.listsRefs( { cwd, alias } )
-            output( { result } )
-
-            return true
-        }
-
-        // passthrough: 'list' shows all, 'show <name>' shows one, or bare name
-        const listName = subOrName === 'list' ? null
-            : subOrName === 'show' ? ( positionals[ 2 ] || null )
-            : subOrName
-        const { result } = await FlowMcpCli.listSharedLists( { listName } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'call' ) {
+    },
+    'fallback': async () => {
         const subCommand = positionals[ 1 ]
-
-        if( subCommand === 'list-tools' ) {
-            const group = values[ 'group' ]
-            const { result } = await FlowMcpCli.callListTools( { group, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        const toolName = subCommand
-        const jsonArgs = positionals[ 2 ] || null
-        const group = values[ 'group' ]
-        const noCache = values[ 'no-cache' ] || false
-        const refresh = values[ 'refresh' ] || false
-        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd, noCache, refresh } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'cache' ) {
-        const subCommand = positionals[ 1 ]
-
-        if( subCommand === 'status' ) {
-            const { result } = await FlowMcpCli.cacheStatus()
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'clear' ) {
-            const namespace = positionals[ 2 ] || undefined
-            const { result } = await FlowMcpCli.cacheClear( { namespace } )
-            output( { result } )
-
-            return true
-        }
-
         const result = {
             'status': false,
             'error': `Unknown cache command "${subCommand}".`,
             'fix': `Available: ${appConfig[ 'cliCommand' ]} cache status, ${appConfig[ 'cliCommand' ]} cache clear [namespace]`
         }
         output( { result } )
-
-        return true
     }
+}
 
-    if( command === 'status' ) {
-        const { result } = await FlowMcpCli.status( { cwd } )
-        output( { result } )
 
-        return true
-    }
-
-    // Memo 149 Strang D — `flowmcp doctor`: structural health check over schemaFolders[],
-    // reported by error code. `flowmcp version` (also `flowmcp --version`): the CLI stamp.
-    if( command === 'doctor' ) {
-        const json = values[ 'json' ] === true
-        const { result } = await FlowMcpCli.doctor( { cwd } )
-        output( { result } )
-        FlowMcpCli.printDoctorSummary( { result, json } )
-
-        if( result[ 'status' ] !== true ) {
-            process.exit( 1 )
+const callBranch = {
+    'description': 'Call a tool by name, or list the callable tools.',
+    'children': {
+        'list-tools': {
+            'description': 'List all callable tools (optionally filtered by --group).',
+            'execute': async () => {
+                const group = values[ 'group' ]
+                const { result } = await FlowMcpCli.callListTools( { group, cwd } )
+                output( { result } )
+            }
         }
-
-        return true
-    }
-
-    if( command === 'version' ) {
-        const { result } = await FlowMcpCli.version()
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'run' ) {
+    },
+    'fallback': async () => {
+        // passthrough: any non-`list-tools` sub-command is a tool name.
+        const toolName = positionals[ 1 ]
+        const jsonArgs = positionals[ 2 ] || null
         const group = values[ 'group' ]
-        const { result } = await FlowMcpCli.run( { group, cwd } )
-
-        if( !result[ 'status' ] ) {
-            output( { result } )
-            process.exit( 1 )
-        }
-
-        return true
-    }
-
-    // Memo 099 Kap 7 — `import`/`import-registry` removed (no registry/internet sync).
-    // Add a schema folder by editing schemaFolders[] in ~/.flowmcp/config.json;
-    // clone repos yourself with `gh repo clone`.
-
-    if( command === 'import-agent' ) {
-        const agentName = positionals[ 1 ]
-        const { result } = await FlowMcpCli.importAgent( { agentName, cwd } )
+        const noCache = values[ 'no-cache' ] || false
+        const refresh = values[ 'refresh' ] || false
+        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd, noCache, refresh } )
         output( { result } )
-
-        return true
     }
+}
 
-    if( command === 'skill' ) {
-        const subCommand = positionals[ 1 ]
 
-        if( subCommand === 'generate' ) {
-            const toolId = positionals[ 2 ]
-            const { result } = await FlowMcpCli.generateSkill( { toolId } )
-            output( { result } )
-
-            return true
+const listsBranch = {
+    'description': 'Inspect the shared lists and their entries.',
+    'children': {
+        'add-entry': {
+            'description': 'Append a JSON entry to a named shared list.',
+            'execute': async () => {
+                const listName = positionals[ 2 ]
+                const jsonEntry = positionals[ 3 ]
+                const { result } = await FlowMcpCli.listsAddEntry( { cwd, listName, jsonEntry } )
+                output( { result } )
+            }
+        },
+        'refs': {
+            'description': 'Resolve and show the references of an alias.',
+            'execute': async () => {
+                const alias = positionals[ 2 ]
+                const { result } = await FlowMcpCli.listsRefs( { cwd, alias } )
+                output( { result } )
+            }
         }
+    },
+    'fallback': async () => {
+        const subOrName = positionals[ 1 ] || null
+        // passthrough: 'list' shows all, 'show <name>' shows one, or bare name.
+        const listName = subOrName === 'list' ? null
+            : subOrName === 'show' ? ( positionals[ 2 ] || null )
+            : subOrName
+        const { result } = await FlowMcpCli.listSharedLists( { listName } )
+        output( { result } )
+    }
+}
 
+
+const skillBranch = {
+    'description': 'Generate an agent skill from a tool definition.',
+    'children': {
+        'generate': {
+            'description': 'Generate a skill for a tool id.',
+            'execute': async () => {
+                const toolId = positionals[ 2 ]
+                const { result } = await FlowMcpCli.generateSkill( { toolId } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
+        const subCommand = positionals[ 1 ]
         const result = {
             'status': false,
             'error': `Unknown skill command "${subCommand}".`,
             'fix': `Available: ${appConfig[ 'cliCommand' ]} skill generate <tool-name>`
         }
         output( { result } )
-
-        return true
     }
+}
 
-    if( command === 'catalog' ) {
+
+const catalogBranch = {
+    'description': 'Build and manage the local tool catalog.',
+    'children': {
+        'generate': {
+            'description': 'Generate the catalog from the configured schema folders.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.generateCatalog( { cwd } )
+                output( { result } )
+            }
+        },
+        'link': {
+            'description': 'Link a named catalog source to a path.',
+            'execute': async () => {
+                const name = positionals[ 2 ]
+                const path = positionals[ 3 ]
+                const { result } = await FlowMcpCli.catalogLink( { name, path } )
+                output( { result } )
+            }
+        },
+        'unlink': {
+            'description': 'Unlink a named catalog source.',
+            'execute': async () => {
+                const name = positionals[ 2 ]
+                const { result } = await FlowMcpCli.catalogUnlink( { name } )
+                output( { result } )
+            }
+        },
+        'sources': {
+            'description': 'List the linked catalog sources.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.catalogSources()
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
         const subCommand = positionals[ 1 ]
-
-        if( subCommand === 'generate' ) {
-            const { result } = await FlowMcpCli.generateCatalog( { cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'link' ) {
-            const name = positionals[ 2 ]
-            const path = positionals[ 3 ]
-            const { result } = await FlowMcpCli.catalogLink( { name, path } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'unlink' ) {
-            const name = positionals[ 2 ]
-            const { result } = await FlowMcpCli.catalogUnlink( { name } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'sources' ) {
-            const { result } = await FlowMcpCli.catalogSources()
-            output( { result } )
-
-            return true
-        }
-
         const result = {
             'status': false,
             'error': `Unknown catalog command "${subCommand}".`,
             'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate | link <name> <path> | unlink <name> | sources`
         }
         output( { result } )
-
-        return true
     }
+}
 
-    if( command === 'validate-catalog' ) {
-        const catalogDir = positionals[ 1 ]
-        const { result } = await FlowMcpCli.validateCatalog( { catalogDir, cwd } )
-        output( { result } )
 
-        return true
-    }
-
-    // Memo 099 Kap 7 — `update` removed (no registry polling / internet sync).
-
-    if( command === 'schemas' ) {
-        const { result } = await FlowMcpCli.schemas()
-        output( { result } )
-
-        return true
-    }
-
-    // Memo 099 Kap 5 — `group` removed (it was bound to the project-local config).
-    // `selection` remains for named display/filter subsets.
-
-    if( command === 'prompt' ) {
-        const subCommand = positionals[ 1 ]
-
-        if( subCommand === 'list' ) {
-            const { result } = await FlowMcpCli.promptList( { cwd } )
-            output( { result } )
-
-            return true
+const promptBranch = {
+    'description': 'Manage and inspect shared prompts.',
+    'children': {
+        'list': {
+            'description': 'List all available prompts.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.promptList( { cwd } )
+                output( { result } )
+            }
+        },
+        'search': {
+            'description': 'Search prompts by query.',
+            'execute': async () => {
+                const query = positionals[ 2 ]
+                const { result } = await FlowMcpCli.promptSearch( { query, cwd } )
+                output( { result } )
+            }
+        },
+        'show': {
+            'description': 'Show a single prompt by group/name reference.',
+            'execute': async () => {
+                const ref = positionals[ 2 ] || ''
+                const slashIndex = ref.indexOf( '/' )
+                const group = slashIndex > 0 ? ref.slice( 0, slashIndex ) : undefined
+                const name = slashIndex > 0 ? ref.slice( slashIndex + 1 ) : undefined
+                const { result } = await FlowMcpCli.promptShow( { group, name, cwd } )
+                output( { result } )
+            }
+        },
+        'add': {
+            'description': 'Add a prompt from a --file into a group.',
+            'execute': async () => {
+                const group = positionals[ 2 ]
+                const name = positionals[ 3 ]
+                const file = values[ 'file' ]
+                const { result } = await FlowMcpCli.promptAdd( { group, name, file, cwd } )
+                output( { result } )
+            }
+        },
+        'remove': {
+            'description': 'Remove a prompt from a group.',
+            'execute': async () => {
+                const group = positionals[ 2 ]
+                const name = positionals[ 3 ]
+                const { result } = await FlowMcpCli.promptRemove( { group, name, cwd } )
+                output( { result } )
+            }
         }
-
-        if( subCommand === 'search' ) {
-            const query = positionals[ 2 ]
-            const { result } = await FlowMcpCli.promptSearch( { query, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'show' ) {
-            const ref = positionals[ 2 ] || ''
-            const slashIndex = ref.indexOf( '/' )
-            const group = slashIndex > 0 ? ref.slice( 0, slashIndex ) : undefined
-            const name = slashIndex > 0 ? ref.slice( slashIndex + 1 ) : undefined
-            const { result } = await FlowMcpCli.promptShow( { group, name, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'add' ) {
-            const group = positionals[ 2 ]
-            const name = positionals[ 3 ]
-            const file = values[ 'file' ]
-            const { result } = await FlowMcpCli.promptAdd( { group, name, file, cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'remove' ) {
-            const group = positionals[ 2 ]
-            const name = positionals[ 3 ]
-            const { result } = await FlowMcpCli.promptRemove( { group, name, cwd } )
-            output( { result } )
-
-            return true
-        }
-
+    },
+    'fallback': async () => {
+        // bare `prompt` (or unknown sub-command) prints the general help.
         await FlowMcpCli.help( { cwd } )
-
-        return true
     }
+}
 
-    if( command === 'migrate' ) {
-        const targetPath = positionals[ 1 ]
-        const all = values[ 'all' ] || false
-        const dryRun = values[ 'dry-run' ] || false
-        const { result } = await FlowMcpCli.migrate( { 'schemaPath': targetPath, cwd, all, dryRun } )
-        output( { result } )
 
-        return true
-    }
-
-    if( command === 'migrate-config' ) {
-        const isGlobal = values[ 'global' ] || false
-        const dryRun = values[ 'dry-run' ] || false
-        const { result } = await FlowMcpCli.migrateConfig( { cwd, isGlobal, dryRun } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'selection' ) {
+const selectionBranch = {
+    'description': 'Inspect named selection subsets.',
+    'children': {
+        'list': {
+            'description': 'List all selections.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.selectionList( { cwd } )
+                output( { result } )
+            }
+        },
+        'show': {
+            'description': 'Show a single selection by name.',
+            'execute': async () => {
+                const name = positionals[ 2 ]
+                const { result } = await FlowMcpCli.selectionShow( { cwd, name } )
+                output( { result } )
+            }
+        },
+        'validate': {
+            'description': 'Validate a selection file at a path.',
+            'execute': async () => {
+                const selectionPath = positionals[ 2 ]
+                const { result } = await FlowMcpCli.selectionValidate( { cwd, 'path': selectionPath } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
         const subCommand = positionals[ 1 ]
-
-        if( subCommand === 'list' ) {
-            const { result } = await FlowMcpCli.selectionList( { cwd } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'show' ) {
-            const name = positionals[ 2 ]
-            const { result } = await FlowMcpCli.selectionShow( { cwd, name } )
-            output( { result } )
-
-            return true
-        }
-
-        if( subCommand === 'validate' ) {
-            const selectionPath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.selectionValidate( { cwd, 'path': selectionPath } )
-            output( { result } )
-
-            return true
-        }
-
         const result = {
             'status': false,
             'error': `Unknown selection command "${subCommand}".`,
             'fix': `Available: ${appConfig[ 'cliCommand' ]} dev selection list, ${appConfig[ 'cliCommand' ]} dev selection show <name>, ${appConfig[ 'cliCommand' ]} dev selection validate <path>`
         }
         output( { result } )
-
-        return true
     }
+}
 
-    if( command === 'grading' ) {
+
+const allowlistBranch = {
+    'description': 'Manage the npm-install allowlist.',
+    'children': {
+        'add': {
+            'description': 'Add a library to the allowlist.',
+            'execute': async () => {
+                const library = positionals[ 2 ]
+                const { result } = await FlowMcpCli.allowlist( { cwd, 'action': 'add', library } )
+                output( { result } )
+            }
+        },
+        'remove': {
+            'description': 'Remove a library from the allowlist.',
+            'execute': async () => {
+                const library = positionals[ 2 ]
+                const { result } = await FlowMcpCli.allowlist( { cwd, 'action': 'remove', library } )
+                output( { result } )
+            }
+        },
+        'list': {
+            'description': 'List the allowlisted libraries.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.allowlist( { cwd, 'action': 'list', 'library': null } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
+        const result = {
+            'status': false,
+            'error': 'Missing or unknown allowlist sub-command.',
+            'fix': `Use: ${appConfig[ 'cliCommand' ]} dev allowlist add <library>, ${appConfig[ 'cliCommand' ]} dev allowlist remove <library>, or ${appConfig[ 'cliCommand' ]} dev allowlist list`
+        }
+        output( { result } )
+    }
+}
+
+
+const envBranch = {
+    'description': 'Diagnose and manage the environment-variable keys.',
+    'children': {
+        'doctor': {
+            'description': 'Coverage check — which keys are missing.',
+            'execute': async () => {
+                const schema = values[ 'schema' ] || null
+                const strict = values[ 'strict' ] || false
+                const fixTemplate = values[ 'fix-template' ] || false
+                const json = values[ 'json' ] || false
+                const printSignups = values[ 'print-signups' ] || false
+                const { result } = await FlowMcpCli.devEnvDoctor( { schema, strict, fixTemplate, json, printSignups, cwd } )
+                output( { result } )
+            }
+        },
+        'acquire': {
+            'description': 'Sign-up help (step-by-step per provider).',
+            'execute': async () => {
+                const key = values[ 'key' ] || null
+                const mode = values[ 'mode' ] || null
+                const printGuide = values[ 'print-guide' ] || false
+                const json = values[ 'json' ] || false
+                const { result } = await FlowMcpCli.devEnvAcquire( { key, mode, printGuide, json, cwd } )
+                output( { result } )
+            }
+        },
+        'backup': {
+            'description': 'Snapshot the current env keys.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.devEnvBackup( { cwd } )
+                output( { result } )
+            }
+        },
+        'restore': {
+            'description': 'Restore env keys from a backup file.',
+            'execute': async () => {
+                const file = positionals[ 2 ]
+                const { result } = await FlowMcpCli.devEnvRestore( { file, cwd } )
+                output( { result } )
+            }
+        },
+        'diff': {
+            'description': 'Diff the current env against a backup file.',
+            'execute': async () => {
+                const file = positionals[ 2 ]
+                const { result } = await FlowMcpCli.devEnvDiff( { file, cwd } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
+        const result = {
+            'status': false,
+            'error': 'Missing or unknown env sub-command.',
+            'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env doctor | acquire | backup | restore <file> | diff <file>`
+        }
+        output( { result } )
+    }
+}
+
+
+const resourceBranch = {
+    'description': 'Create or migrate MCP resource schemas.',
+    'children': {
+        'create': {
+            'description': 'Create a resource schema at a path.',
+            'execute': async () => {
+                const basis = values[ 'basis' ] || 'flowmcp'
+                const autoConfirm = values[ 'yes' ] || false
+                const targetPath = positionals[ 2 ]
+                const { result } = await FlowMcpCli.resourceCreate( { 'schemaPath': targetPath, cwd, basis, autoConfirm } )
+                output( { result } )
+            }
+        },
+        'migrate': {
+            'description': 'Migrate existing resource schemas.',
+            'execute': async () => {
+                const basis = values[ 'basis' ] || 'flowmcp'
+                const autoConfirm = values[ 'yes' ] || false
+                const dryRun = values[ 'dry-run' ] || false
+                const { result } = await FlowMcpCli.resourceMigrate( { cwd, basis, dryRun, autoConfirm } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
+        const subCommand = positionals[ 1 ]
+        const result = {
+            'status': false,
+            'error': `Unknown resource command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} resource create <schema-path>, ${appConfig[ 'cliCommand' ]} resource migrate`
+        }
+        output( { result } )
+    }
+}
+
+
+// `grading` keeps its own dispatch as a single leaf-style execute: the
+// sub-command set is allowlist-guarded (alias-normalized BEFORE the check),
+// the arg-extraction is shared across all sub-commands, and a few sub-commands
+// have bespoke stdout handling. Reproducing that block verbatim preserves
+// behavior 1:1; splitting it into children would duplicate the shared
+// arg-extraction and risk drift.
+const gradingBranch = {
+    'description': 'Run the deterministic + non-deterministic grading flow.',
+    'execute': async () => {
         // PRD-001 / PRD-010 — normalize the short aliases to their full command
         // names BEFORE the allowlist check (no silent default: an unknown
         // sub-command still errors). `det` -> deterministic, `nondet` ->
@@ -472,7 +526,7 @@ const runCommand = async () => {
             }
             output( { result } )
 
-            return true
+            return
         }
 
         const target = positionals[ 2 ]
@@ -514,7 +568,7 @@ const runCommand = async () => {
             // (pure machine mode).
             FlowMcpCli.printDeterministicSummary( { result, quiet, json } )
 
-            return true
+            return
         }
 
         if( subCommand === 'reload' ) {
@@ -523,7 +577,7 @@ const runCommand = async () => {
             const { result } = await FlowMcpCli.gradingReload( { cwd, target, gradingDataDir, withKeys, quiet, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'skill' ) {
@@ -537,14 +591,14 @@ const runCommand = async () => {
                 output( { result } )
             }
 
-            return true
+            return
         }
 
         if( subCommand === 'export' ) {
             const { result } = await FlowMcpCli.gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'run' || subCommand === 'non-deterministic' ) {
@@ -565,28 +619,28 @@ const runCommand = async () => {
                 output( { result } )
             }
 
-            return true
+            return
         }
 
         if( subCommand === 'state' ) {
             const { result } = await FlowMcpCli.gradingState( { cwd, target, gradingDataDir, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'worklist' ) {
             const { result } = await FlowMcpCli.gradingWorklist( { cwd, target, gradingDataDir, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'doctor' ) {
             const { result } = await FlowMcpCli.gradingDoctor( { cwd, target, gradingDataDir, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'config' ) {
@@ -595,7 +649,7 @@ const runCommand = async () => {
             const { result } = await FlowMcpCli.gradingConfig( { cwd, setDataDir, setExportDir, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'finalize' ) {
@@ -603,7 +657,7 @@ const runCommand = async () => {
             const { result } = await FlowMcpCli.gradingFinalize( { cwd, target, gradingDataDir, gradingExportDir, targetGrade, json } )
             output( { result } )
 
-            return true
+            return
         }
 
         if( subCommand === 'plan' ) {
@@ -611,150 +665,249 @@ const runCommand = async () => {
             const { result } = await FlowMcpCli.gradingPlan( { cwd, target, gradingDataDir, targetGrade, json } )
             output( { result } )
 
-            return true
+            return
         }
-
-        return true
     }
+}
 
-    if( command === 'allowlist' ) {
-        const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'add', 'remove', 'list' ]
 
-        if( !subCommand || !validSubCommands.includes( subCommand ) ) {
-            const result = {
-                'status': false,
-                'error': 'Missing or unknown allowlist sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev allowlist add <library>, ${appConfig[ 'cliCommand' ]} dev allowlist remove <library>, or ${appConfig[ 'cliCommand' ]} dev allowlist list`
+// Root branch — every top-level command is a child. Leaves wrap a single
+// FlowMcpCli method; branches group sub-commands.
+const tree = {
+    'description': `${appConfig[ 'cliCommand' ]} — agent-facing CLI (JSON I/O, non-interactive).`,
+    'children': {
+        'how-to': {
+            'description': 'Print the getting-started guide.',
+            'execute': async () => {
+                await FlowMcpCli.howTo( { cwd } )
             }
-            output( { result } )
-
-            return true
-        }
-
-        const library = ( subCommand === 'add' || subCommand === 'remove' )
-            ? positionals[ 2 ]
-            : null
-
-        const { result } = await FlowMcpCli.allowlist( { cwd, 'action': subCommand, library } )
-        output( { result } )
-
-        return true
-    }
-
-    if( command === 'env' ) {
-        const subCommand = positionals[ 1 ]
-        const validSubCommands = [ 'doctor', 'acquire', 'backup', 'restore', 'diff' ]
-
-        if( !subCommand || !validSubCommands.includes( subCommand ) ) {
-            const result = {
-                'status': false,
-                'error': 'Missing or unknown env sub-command.',
-                'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env doctor | acquire | backup | restore <file> | diff <file>`
+        },
+        'init': {
+            'description': 'Interactive first-run setup (the only interactive command).',
+            'execute': async () => {
+                await FlowMcpCli.init( { cwd } )
             }
-            output( { result } )
+        },
+        'search': {
+            'description': 'Search the available tools by free-text query.',
+            'execute': async () => {
+                const query = positionals.slice( 1 ).join( ' ' ) || undefined
+                const { result } = await FlowMcpCli.search( { query } )
+                output( { result } )
+            }
+        },
+        // Memo 099 Kap 5 — `add`/`reload`/`remove` removed. All tools from the
+        // configured schemaFolders are immediately available via search/list/call.
+        'list': {
+            'description': 'List all available tools.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.list( { cwd } )
+                output( { result } )
+            }
+        },
+        'lists': listsBranch,
+        'call': callBranch,
+        'cache': cacheBranch,
+        'status': {
+            'description': 'Show the CLI / config status.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.status( { cwd } )
+                output( { result } )
+            }
+        },
+        // Memo 149 Strang D — `flowmcp doctor`: structural health check over
+        // schemaFolders[], reported by error code (exits 1 on error). `flowmcp version`
+        // (also `flowmcp --version`) prints the CLI name + version.
+        'doctor': {
+            'description': 'Structural health check over schemaFolders[], reported by error code (exits 1 on error).',
+            'execute': async () => {
+                const json = values[ 'json' ] === true
+                const { result } = await FlowMcpCli.doctor( { cwd } )
+                output( { result } )
+                FlowMcpCli.printDoctorSummary( { result, json } )
 
-            return true
+                if( result[ 'status' ] !== true ) {
+                    process.exit( 1 )
+                }
+            }
+        },
+        'version': {
+            'description': 'Print the CLI name and version.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.version()
+                output( { result } )
+            }
+        },
+        'run': {
+            'description': 'Run the configured group (exits 1 on failure).',
+            'execute': async () => {
+                const group = values[ 'group' ]
+                const { result } = await FlowMcpCli.run( { group, cwd } )
+
+                if( !result[ 'status' ] ) {
+                    output( { result } )
+                    process.exit( 1 )
+                }
+            }
+        },
+        // Memo 099 Kap 7 — `import`/`import-registry` removed (no registry/internet sync).
+        // Add a schema folder by editing schemaFolders[] in ~/.flowmcp/config.json;
+        // clone repos yourself with `gh repo clone`.
+        'import-agent': {
+            'description': 'Import an agent definition by name.',
+            'execute': async () => {
+                const agentName = positionals[ 1 ]
+                const { result } = await FlowMcpCli.importAgent( { agentName, cwd } )
+                output( { result } )
+            }
+        },
+        'skill': skillBranch,
+        'catalog': catalogBranch,
+        'validate-catalog': {
+            'description': 'Validate a catalog directory.',
+            'execute': async () => {
+                const catalogDir = positionals[ 1 ]
+                const { result } = await FlowMcpCli.validateCatalog( { catalogDir, cwd } )
+                output( { result } )
+            }
+        },
+        // Memo 099 Kap 7 — `update` removed (no registry polling / internet sync).
+        'schemas': {
+            'description': 'List the configured schema namespaces.',
+            'execute': async () => {
+                const { result } = await FlowMcpCli.schemas()
+                output( { result } )
+            }
+        },
+        // Memo 099 Kap 5 — `group` removed (it was bound to the project-local config).
+        // `selection` remains for named display/filter subsets.
+        'prompt': promptBranch,
+        'migrate': {
+            'description': 'Migrate schema(s) to the current format.',
+            'execute': async () => {
+                const targetPath = positionals[ 1 ]
+                const all = values[ 'all' ] || false
+                const dryRun = values[ 'dry-run' ] || false
+                const { result } = await FlowMcpCli.migrate( { 'schemaPath': targetPath, cwd, all, dryRun } )
+                output( { result } )
+            }
+        },
+        'migrate-config': {
+            'description': 'Migrate the config file to the current format.',
+            'execute': async () => {
+                const isGlobal = values[ 'global' ] || false
+                const dryRun = values[ 'dry-run' ] || false
+                const { result } = await FlowMcpCli.migrateConfig( { cwd, isGlobal, dryRun } )
+                output( { result } )
+            }
+        },
+        'selection': selectionBranch,
+        'grading': gradingBranch,
+        'allowlist': allowlistBranch,
+        'env': envBranch,
+        'resource': resourceBranch,
+        // Memo 119 Kap 7 (F3) — `validate` was renamed to `schema-check` to make the
+        // offline structural-only nature explicit (vs. `grading deterministic`, which
+        // also runs the live data pretest). The old `validate` name is REMOVED, no
+        // deprecated alias (deliberate breaking change).
+        'schema-check': {
+            'description': 'Offline structural-only schema check.',
+            'execute': async () => {
+                const group = values[ 'group' ]
+                const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
+                output( { result } )
+            }
         }
+        // Memo 102 / PRD-002 — `dev test` (project/user/single) removed. Its PASS
+        // criterion (HTTP 200 only) is a strict subset of the deterministic grading
+        // pretest (HTTP 200 + non-empty data). Use `grading deterministic <id>`
+        // instead; the v4-primitive view lives on its --only flag.
+    }
+}
 
-        if( subCommand === 'doctor' ) {
-            const schema = values[ 'schema' ] || null
-            const strict = values[ 'strict' ] || false
-            const fixTemplate = values[ 'fix-template' ] || false
-            const json = values[ 'json' ] || false
-            const printSignups = values[ 'print-signups' ] || false
-            const { result } = await FlowMcpCli.devEnvDoctor( { schema, strict, fixTemplate, json, printSignups, cwd } )
-            output( { result } )
 
-            return true
-        }
+// ---------------------------------------------------------------------------
+// describe() — tree-derived help tree (Spec-Kap 22). Renders the root branch
+// and, one level down, every child with its description. Used by --describe.
+// ---------------------------------------------------------------------------
 
-        if( subCommand === 'acquire' ) {
-            const key = values[ 'key' ] || null
-            const mode = values[ 'mode' ] || null
-            const printGuide = values[ 'print-guide' ] || false
-            const json = values[ 'json' ] || false
-            const { result } = await FlowMcpCli.devEnvAcquire( { key, mode, printGuide, json, cwd } )
-            output( { result } )
+const describeNode = ( { name, node, depth } ) => {
+    const indent = '  '.repeat( depth )
+    const kind = isBranch( node ) ? ( isLeaf( node ) ? 'leaf+branch' : 'branch' ) : 'leaf'
+    const head = `${indent}${name} [${kind}] — ${node[ 'description' ]}`
+    const childLines = isBranch( node )
+        ? Object.keys( node[ 'children' ] )
+            .map( ( childName ) => describeNode( { 'name': childName, 'node': node[ 'children' ][ childName ], 'depth': depth + 1 } ) )
+        : []
 
-            return true
-        }
+    return [ head, ...childLines ].join( '\n' )
+}
 
-        if( subCommand === 'backup' ) {
-            const { result } = await FlowMcpCli.devEnvBackup( { cwd } )
-            output( { result } )
+const describe = () => {
+    return describeNode( { 'name': appConfig[ 'cliCommand' ], 'node': tree, 'depth': 0 } )
+}
 
-            return true
-        }
 
-        if( subCommand === 'restore' ) {
-            const file = positionals[ 2 ]
-            const { result } = await FlowMcpCli.devEnvRestore( { file, cwd } )
-            output( { result } )
+// ---------------------------------------------------------------------------
+// Generic dispatcher — walks the tree by command/subCommand positionals and
+// calls the matched leaf execute. A node that is both branch and leaf (its
+// sub-command set is allowlist-guarded internally, e.g. `grading`) runs its
+// own execute. A branch with a matching child runs that child; otherwise it
+// runs its fallback. Returns true if the path was handled, false otherwise.
+// No for/while — array methods / direct indexing only.
+// ---------------------------------------------------------------------------
 
-            return true
-        }
+const dispatch = async ( { node, depth } ) => {
+    if( node === undefined ) {
+        return false
+    }
 
-        if( subCommand === 'diff' ) {
-            const file = positionals[ 2 ]
-            const { result } = await FlowMcpCli.devEnvDiff( { file, cwd } )
-            output( { result } )
-
-            return true
-        }
+    // A branch+leaf hybrid (own execute AND children) handles its own
+    // sub-command allowlist internally — run its execute.
+    if( isBranch( node ) && isLeaf( node ) ) {
+        await node[ 'execute' ]()
 
         return true
     }
 
-    if( command === 'resource' ) {
-        const subCommand = positionals[ 1 ]
-        const basis = values[ 'basis' ] || 'flowmcp'
-        const autoConfirm = values[ 'yes' ] || false
+    if( isBranch( node ) ) {
+        const subCommand = positionals[ depth + 1 ]
+        const child = subCommand !== undefined ? node[ 'children' ][ subCommand ] : undefined
 
-        if( subCommand === 'create' ) {
-            const targetPath = positionals[ 2 ]
-            const { result } = await FlowMcpCli.resourceCreate( { 'schemaPath': targetPath, cwd, basis, autoConfirm } )
-            output( { result } )
-
-            return true
+        if( child !== undefined ) {
+            return await dispatch( { 'node': child, 'depth': depth + 1 } )
         }
 
-        if( subCommand === 'migrate' ) {
-            const dryRun = values[ 'dry-run' ] || false
-            const { result } = await FlowMcpCli.resourceMigrate( { cwd, basis, dryRun, autoConfirm } )
-            output( { result } )
-
-            return true
-        }
-
-        const result = {
-            'status': false,
-            'error': `Unknown resource command "${subCommand}".`,
-            'fix': `Available: ${appConfig[ 'cliCommand' ]} resource create <schema-path>, ${appConfig[ 'cliCommand' ]} resource migrate`
-        }
-        output( { result } )
+        // No matching child: run the branch fallback (passthrough / error).
+        await node[ 'fallback' ]()
 
         return true
     }
 
-    if( command === 'validate' ) {
-        const group = values[ 'group' ]
-        const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
-        output( { result } )
+    if( isLeaf( node ) ) {
+        await node[ 'execute' ]()
 
         return true
     }
-
-    // Memo 102 / PRD-002 — `dev test` (project/user/single) removed. Its PASS
-    // criterion (HTTP 200 only) is a strict subset of the deterministic grading
-    // pretest (HTTP 200 + non-empty data). Use `grading deterministic <id>`
-    // instead; the v4-primitive view lives on its --only flag.
 
     return false
 }
 
+
+const runCommand = async () => {
+    if( command === 'dev' && isDevHelp() ) {
+        FlowMcpCli.devHelp()
+
+        return true
+    }
+
+    const node = tree[ 'children' ][ command ]
+
+    return await dispatch( { node, 'depth': 0 } )
+}
+
 const main = async () => {
-    // Memo 149 Strang D (F5=A) — `flowmcp --version` (no command needed).
+    // Memo 149 Strang D (F5=A) — `flowmcp --version` with no command prints the stamp.
     if( values[ 'version' ] === true && !command ) {
         const { result } = await FlowMcpCli.version()
         output( { result } )

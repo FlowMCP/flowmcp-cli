@@ -93,8 +93,8 @@ Every tool in every folder is now callable — no `add`. `path` may be `~`- or a
 
 | Command | Description |
 |---------|-------------|
-| `flowmcp validate [path]` | Validate schema structure against FlowMCP spec |
-| `flowmcp validate` (no path) | Validate all schemas in the default group |
+| `flowmcp schema-check [path]` | Structure-only check (OFFLINE) against the FlowMCP spec — no API calls. Run `grading deterministic` before shipping |
+| `flowmcp schema-check` (no path) | Structure-check all schemas in the default group |
 | `flowmcp validate-catalog <dir>` | Validate a catalog directory (registry, schemas, agents) |
 | `flowmcp grading deterministic <namespace>/<schema>` | Structural validate + deterministic data pretest (HTTP 200 + non-empty data), no scoring (alias: `det`) |
 | `flowmcp grading deterministic <namespace>/tool/<name>` | Restrict the pretest to one tool |
@@ -464,11 +464,11 @@ flowmcp run
 ### Schema Development
 
 ```bash
-# Validate a single schema file
-flowmcp validate ./my-schema.mjs
+# Structure-check a single schema file (offline, no API calls)
+flowmcp schema-check ./my-schema.mjs
 
-# Validate an entire directory
-flowmcp validate ./schemas/my-provider/
+# Structure-check an entire directory
+flowmcp schema-check ./schemas/my-provider/
 
 # Deterministic validation (structural validate + data pretest) for one schema
 flowmcp grading deterministic my-namespace/my-schema
