@@ -727,7 +727,7 @@ class GradingStatus {
         const pretests = prompts !== null && Array.isArray( prompts[ 'pretests' ] ) ? prompts[ 'pretests' ] : []
 
         const schemaDirs = await GradingTarget.listGradingSchemaDirs( { 'targetDir': detected.targetDir } )
-        const aboutProbe = await GradingEmit.detectAboutResourcePresent( { 'targetDir': detected.targetDir, schemaDirs } )
+        const aboutProbe = await grading.GradingEmit.detectAboutResourcePresent( { 'targetDir': detected.targetDir, schemaDirs } )
 
         const schemaLevels = pretests
             .map( ( pretest ) => {
