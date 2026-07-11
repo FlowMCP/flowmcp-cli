@@ -21,7 +21,7 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader, SchemaLoader } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -33,9 +33,11 @@ import { CliOutput, CliError } from '../lib/CliOutput.mjs'
 import { FsUtils } from '../lib/FsUtils.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { SchemaSource } from '../lib/SchemaSource.mjs'
-import { NamespaceIndexCache } from '../lib/NamespaceIndexCache.mjs'
 import { HttpCache } from '../lib/HttpCache.mjs'
 import { EnvResolver } from '../lib/EnvResolver.mjs'
+import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
+import { NamespaceIndex } from '../lib/NamespaceIndex.mjs'
+import { CliBase } from '../lib/CliBase.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
 import { SelectionCommand } from '../commands/SelectionCommand.mjs'
 import { CacheCommand } from '../commands/CacheCommand.mjs'
@@ -274,7 +276,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { schemas, error: loadError } = await FlowMcpCli.#loadSchemasFromPath( { schemaPath } )
+        const { schemas, error: loadError } = await SchemaLoaderBridge.loadSchemasFromPath( { schemaPath } )
         if( !schemas ) {
             const result = CliOutput.error( { error: loadError } )
 
@@ -848,7 +850,7 @@ class FlowMcpCli {
         }
 
         // Memo 099 Kap 5 — list ALL tools from the configured schemaFolders (no group/activation).
-        const { schemas: resolvedSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas: resolvedSchemas, error: resolveError, fix: resolveFix } = await SchemaLoaderBridge.resolveAllSchemas()
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
@@ -1325,7 +1327,7 @@ class FlowMcpCli {
                 const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
 
                 try {
-                    const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                    const { main } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                     if( main ) {
                         // Memo 099 Kap 6 — flag tools whose required keys are missing
@@ -1433,7 +1435,7 @@ class FlowMcpCli {
             ? EnvResolver.parseEnvFile( { envContent } ).envObject
             : {}
 
-        const { schemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas, error: resolveError, fix: resolveFix } = await SchemaLoaderBridge.resolveAllSchemas()
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
@@ -1575,7 +1577,7 @@ class FlowMcpCli {
                 const filePath = join( schemasBaseDir, schemaRef )
 
                 try {
-                    const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                    const { main } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                     if( main && main[ 'tags' ] ) {
                         tagsByNamespace[ namespace ] = main[ 'tags' ]
@@ -1742,7 +1744,7 @@ class FlowMcpCli {
 
         const schemasBaseDir = ConfigStore.schemasDir()
         const filePath = join( schemasBaseDir, matchedTool[ 'schemaRef' ] )
-        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+        const { main } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
         if( !main ) {
             const result = CliOutput.error( {
@@ -2535,7 +2537,7 @@ class FlowMcpCli {
                         const { file, namespace } = schemaEntry
                         const schemaRef = `${sourceName}/${file}`
                         const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
-                        const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                        const { main } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                         const effectiveNamespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : namespace
 
@@ -3150,7 +3152,7 @@ class FlowMcpCli {
         await Object.entries( schemaRouteMap )
             .reduce( ( promise, [ schemaRef, routeNames ] ) => promise.then( async () => {
                 const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
-                const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+                const { main, handlersFn, error } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                 if( main ) {
                     if( routeNames.length > 0 ) {
@@ -3214,7 +3216,7 @@ class FlowMcpCli {
                 loadedFiles.add( fileKey )
 
                 const filePath = join( schemasBaseDir, source, file )
-                const { main } = await FlowMcpCli.#loadSchema( { filePath } )
+                const { main } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                 if( !main ) {
                     return
@@ -4647,7 +4649,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
                 // (re-thrown by the catch below); LIB-BINDING stays uncoded (logs+degrades — a broken
                 // binding needs a rebuild, not an install). The LIB-002 emit is wired to CliOutput.
                 const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
-                const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+                const { resolveBase } = CliBase.resolveBase()
                 const schemaBase = dirname( resolve( filePath ) )
                 const resolved = await LibraryLoader.resolveExternal( {
                     'requiredLibraries': requiredLibraries,
@@ -4690,15 +4692,9 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // the requiredLibraries block of #resolveHandlers now delegates to LibraryLoader.resolveExternal.
 
 
-    static #resolveLibraryBase() {
-        // The CLI package root: src/task/FlowMcpCli.mjs -> ../../ . Its node_modules ships the
-        // allowlisted runtime libs (ethers, better-sqlite3). createRequire wants a referencing
-        // filename, so callers anchor on an index.js inside this base (need not exist).
-        const here = dirname( fileURLToPath( import.meta.url ) )
-        const resolveBase = join( here, '..', '..' )
-
-        return { resolveBase }
-    }
+    // Memo 152 / PRD-019 (D-08 foundation cluster "handler-libraries") — #resolveLibraryBase
+    // and #cliVersion moved to src/lib/CliBase.mjs (CliBase.resolveBase / CliBase.cliVersion),
+    // decoupling version() and doctor() from the monolith.
 
 
     // Memo 152 / PRD-019 (D-08) — the allowed-libraries base + installed-list helpers
@@ -4716,88 +4712,10 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // The former CLI copy + local ZodBuilder fork are deleted (drift fix, B-03).
 
 
-    // Memo 152 / PRD-018 (D-06) — the raw module import is delegated to the core v4
-    // SchemaLoader.load (the single load leaf). The CLI keeps only the SCH-003 error
-    // adapter: SchemaLoader throws on a bad import and returns main:null on a module
-    // without a main export, whereas the CLI callers expect a { main, handlersFn, error }
-    // shape. This wrapper preserves that contract while the load logic itself lives in core.
-    static async #loadSchema( { filePath, bustCache = false } ) {
-        try {
-            const resolvedPath = resolve( filePath )
-            const { main, handlersFn } = await SchemaLoader.load( { 'filePath': resolvedPath, bustCache } )
-
-            if( !main ) {
-                return { 'main': null, 'handlersFn': null, 'error': `No main export in: ${filePath}` }
-            }
-
-            return { main, handlersFn, 'error': null }
-        } catch( err ) {
-            return { 'main': null, 'handlersFn': null, 'error': `SCH-003 loadSchema: Failed to load schema: ${filePath} - ${err.message}` }
-        }
-    }
-
-
-    static async #loadSchemasFromPath( { schemaPath } ) {
-        const resolvedPath = resolve( schemaPath )
-
-        let pathStat
-        try {
-            pathStat = await stat( resolvedPath )
-        } catch {
-            return { 'schemas': null, 'error': `SCH-004 loadSchemasFromPath: Path not found: ${schemaPath}` }
-        }
-
-        if( pathStat.isFile() ) {
-            const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath: resolvedPath } )
-            if( !main ) {
-                return { 'schemas': null, error }
-            }
-
-            const file = basename( resolvedPath )
-            const schemas = [ { main, handlersFn, file } ]
-
-            return { schemas, 'error': null }
-        }
-
-        if( pathStat.isDirectory() ) {
-            const files = await readdir( resolvedPath )
-            const schemaFiles = files
-                .filter( ( file ) => {
-                    const ext = extname( file )
-                    const isSchema = ext === '.mjs' || ext === '.js'
-
-                    return isSchema
-                } )
-                .sort()
-
-            if( schemaFiles.length === 0 ) {
-                return { 'schemas': null, 'error': `No schema files (.mjs, .js) found in: ${schemaPath}` }
-            }
-
-            const schemas = []
-
-            await schemaFiles
-                .reduce( ( promise, file ) => promise.then( async () => {
-                    const filePath = join( resolvedPath, file )
-                    const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
-
-                    if( main ) {
-                        schemas.push( { main, handlersFn, file } )
-                    } else {
-                        schemas.push( {
-                            'main': { 'namespace': file },
-                            'handlersFn': null,
-                            file,
-                            'loadError': error
-                        } )
-                    }
-                } ), Promise.resolve() )
-
-            return { schemas, 'error': null }
-        }
-
-        return { 'schemas': null, 'error': `Path is neither a file nor a directory: ${schemaPath}` }
-    }
+    // Memo 152 / PRD-019 (D-08 foundation cluster "schema-loading-bridge") — #loadSchema /
+    // #loadSchemasFromPath / #resolveAllSchemas / #loadAllSchemas / #tryLoadSingleSchema moved
+    // to src/lib/SchemaLoaderBridge.mjs as public statics (SchemaLoaderBridge.loadSchema etc.).
+    // Call sites here call the bridge directly; the bridge owns the core SchemaLoader delegation.
 
 
     // Memo 152 / PRD-019 (D-08) — parseEnvFile / buildServerParams moved to
@@ -4848,75 +4766,14 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    // Memo 099 Kap 5 — load ALL schemas from the configured schemaFolders[].
-    // No activation: every tool in every folder is immediately resolvable.
-    static async #resolveAllSchemas() {
-        const { sources, error: sourcesError, fix: sourcesFix } = await SchemaSource.listSources()
 
-        // PRD-008 — a duplicate schemaFolders[] name is a hard config error; surface
-        // it instead of silently resolving an empty / ambiguous schema list.
-        if( sourcesError !== null && sourcesError !== undefined ) {
-            return { 'schemas': [], 'error': sourcesError, 'fix': sourcesFix }
-        }
-
-        const schemas = []
-
-        await sources
-            .reduce( ( promise, source ) => promise.then( async () => {
-                const { name: sourceName, schemas: sourceSchemas } = source
-
-                await sourceSchemas
-                    .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
-                        const { file, requiredServerParams } = schemaEntry
-                        const schemaRef = `${sourceName}/${file}`
-                        const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
-                        const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
-
-                        if( main ) {
-                            schemas.push( {
-                                main,
-                                handlersFn,
-                                'file': schemaRef,
-                                // PRD-008 — carry the source coordinate (folder name) so the
-                                // serve/list/call layers can disambiguate identical providers.
-                                'source': sourceName,
-                                'requiredServerParams': Array.isArray( requiredServerParams ) ? requiredServerParams : ( main[ 'requiredServerParams' ] || [] )
-                            } )
-                        }
-                    } ), Promise.resolve() )
-            } ), Promise.resolve() )
-
-        return { schemas, 'error': null, 'fix': null }
-    }
-
-
-
-
-
-    // Memo 149 Strang D — the CLI's own version, read from its package.json (same
-    // deterministic base as #resolveLibraryBase). Answers "which flowmcp is running?"
-    // without guessing.
-    static #cliVersion() {
-        try {
-            const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
-            const pkgPath = join( resolveBase, 'package.json' )
-            const raw = readFileSync( pkgPath, 'utf-8' )
-            const pkg = JSON.parse( raw )
-
-            return { 'name': pkg[ 'name' ] || appConfig[ 'appName' ], 'version': pkg[ 'version' ] || 'unknown' }
-        } catch( err ) {
-            CliOutput.emitCoded( { 'code': 'CLI-028', 'location': 'cliVersion: package.json unreadable', err } )
-
-            return { 'name': appConfig[ 'appName' ], 'version': 'unknown' }
-        }
-    }
 
 
     // Memo 149 Strang D (F5=A) — `flowmcp --version` / `flowmcp version`. The version
     // stamp that ends the "is an old CLI running?" guessing, without bloating every
     // response.
     static async version() {
-        const { name, version } = FlowMcpCli.#cliVersion()
+        const { name, version } = CliBase.cliVersion()
         const result = { 'status': true, name, version }
 
         return { result }
@@ -4936,7 +4793,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             return { result }
         }
 
-        const { name: cliName, version: cliVersion } = FlowMcpCli.#cliVersion()
+        const { name: cliName, version: cliVersion } = CliBase.cliVersion()
         const checks = []
 
         // Check 1 — config single-source: every schemaFolders[] path must exist on disk.
@@ -4962,7 +4819,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         }
 
         // Load all schemas once (structural — no network).
-        const { schemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas, error: resolveError, fix: resolveFix } = await SchemaLoaderBridge.resolveAllSchemas()
         if( resolveError !== null && resolveError !== undefined ) {
             checks.push( { 'check': 'schema-load', 'severity': 'ERROR', 'ok': false, 'code': 'SCH-001', 'detail': resolveError } )
             const result = FlowMcpCli.#doctorResult( { cliName, cliVersion, checks, 'fix': resolveFix } )
@@ -4982,7 +4839,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         // first, then the CLI base), so doctor reflects runtime reality and its install hint points
         // at the user-owned folder.
         const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
-        const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
+        const { resolveBase } = CliBase.resolveBase()
         const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
         const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
 
@@ -5274,42 +5131,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         const allInstalled = missing.length === 0
 
         return { allInstalled, installed, missing }
-    }
-
-
-    static async #loadAllSchemas() {
-        const { sources, error: sourcesError, fix: sourcesFix } = await SchemaSource.listSources()
-
-        // PRD-008 — duplicate schemaFolders[] name is a hard config error.
-        if( sourcesError !== null && sourcesError !== undefined ) {
-            return { 'schemas': [], 'error': sourcesError, 'fix': sourcesFix }
-        }
-
-        const allSchemas = []
-
-        await sources
-            .reduce( ( promise, source ) => promise.then( async () => {
-                await source[ 'schemas' ]
-                    .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
-                        const { file } = schemaInfo
-                        const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef: `${source[ 'name' ]}/${file}` } )
-                        const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
-
-                        if( main ) {
-                            allSchemas.push( { main, handlersFn, file, 'source': source[ 'name' ] } )
-                        } else {
-                            allSchemas.push( {
-                                'main': null,
-                                'handlersFn': null,
-                                file,
-                                'source': source[ 'name' ],
-                                'loadError': error
-                            } )
-                        }
-                    } ), Promise.resolve() )
-            } ), Promise.resolve() )
-
-        return { 'schemas': allSchemas }
     }
 
 
@@ -5885,35 +5706,12 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    // Memo 152 / PRD-018 (D-07) — schema discovery stays CLI-side (schemaFolders[]
-    // iteration + source coordinate), the catalog transform is the core v4
-    // CatalogIndex.build. The on-disk cache IO lives in lib/NamespaceIndexCache.
-    static async #buildNamespaceIndex( { cwd } ) {
-        const { schemas } = await FlowMcpCli.#loadAllSchemas()
-
-        return CatalogIndex.build( { schemas } )
-    }
-
-
-
+    // Memo 152 / PRD-019 (D-08 foundation cluster "namespace-index") — build + get
+    // orchestration moved to src/lib/NamespaceIndex.mjs (build/get/tryGet). getNamespaceIndex
+    // stays public here as a delegation because tests call FlowMcpCli.getNamespaceIndex and
+    // mcp-geo-app reads the on-disk file (Memo 128, frozen format, D-07 byte-stable).
     static async getNamespaceIndex( { cwd, forceRebuild = false } ) {
-        if( forceRebuild ) {
-            const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
-            await NamespaceIndexCache.write( { cwd, index } )
-
-            return { index, 'source': 'rebuilt' }
-        }
-
-        const { exists, index: cachedIndex, stale } = await NamespaceIndexCache.read( { cwd } )
-
-        if( exists && cachedIndex && !stale ) {
-            return { 'index': cachedIndex, 'source': 'cache' }
-        }
-
-        const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
-        await NamespaceIndexCache.write( { cwd, index } )
-
-        return { index, 'source': 'rebuilt' }
+        return NamespaceIndex.get( { cwd, forceRebuild } )
     }
 
 
@@ -5925,7 +5723,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // miss (caller then falls back to the full scan). The wire-name re-verify
     // happens in callTool's match loop, so a stale index can never mis-resolve.
     static async #resolveSchemaByIndex( { namespace, routeName, sourceFilter, cwd } ) {
-        const indexResult = await FlowMcpCli.#tryGetNamespaceIndex( { cwd } )
+        const indexResult = await NamespaceIndex.tryGet( { cwd } )
         if( indexResult === null ) {
             return { 'schemas': null }
         }
@@ -5945,7 +5743,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         }
 
         const schemaRef = `${entry[ 'source' ]}/${entry[ 'file' ]}`
-        const loaded = await FlowMcpCli.#tryLoadSingleSchema( { schemaRef } )
+        const loaded = await SchemaLoaderBridge.tryLoadSingleSchema( { schemaRef } )
         if( loaded === null ) {
             return { 'schemas': null }
         }
@@ -5967,35 +5765,12 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    static async #tryGetNamespaceIndex( { cwd } ) {
-        try {
-            const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
-
-            return { index }
-        } catch {
-            return null
-        }
-    }
-
-
-    static async #tryLoadSingleSchema( { schemaRef } ) {
-        try {
-            const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
-            const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
-
-            return { main, handlersFn }
-        } catch {
-            return null
-        }
-    }
-
-
     // Memo 099 Kap 5 — full-scan resolution against ALL configured schemaFolders[].
     // Memo 128 Kap 10 — extracted so callTool can use it as the lazy-resolution
     // fallback (lazy miss / bare name / stale index). Returns either an
     // errorResult (config error / unknown source) or the source-filtered schemas.
     static async #resolveSchemasForCall( { sourceFilter } ) {
-        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
+        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await SchemaLoaderBridge.resolveAllSchemas()
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
@@ -6211,7 +5986,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
                         const { schemaRef, routeName } = FlowMcpCli.#parseToolRef( { 'toolRef': toolRef } )
                         const filePath = join( schemasBaseDir, schemaRef )
-                        const { main, error: loadError } = await FlowMcpCli.#loadSchema( { filePath } )
+                        const { main, error: loadError } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                         if( !main || loadError ) {
                             newTools.push( toolRef )
@@ -9543,7 +9318,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
             .reduce( ( promise, candidate ) => promise.then( async () => {
                 const { source, schemaInfo, filePath } = candidate
                 const { file } = schemaInfo
-                const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
+                const { main, handlersFn, error } = await SchemaLoaderBridge.loadSchema( { filePath } )
 
                 if( main === null || main === undefined ) {
                     // A load failure is only relevant if the file might belong to
