@@ -21,36 +21,23 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator, MainValidator, MetaGenerator } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
 import { PathVariableResolver } from '../path/resolvePathVariables.mjs'
 import { AddonLoader } from '../addons/loadAddon.mjs'
 import { SqliteGtfsResourceValidator } from '../validators/SqliteGtfsResourceValidator.mjs'
+import { ModuleRegistry } from '../lib/ModuleRegistry.mjs'
+import { CliOutput, CliError } from '../lib/CliOutput.mjs'
+import { FsUtils } from '../lib/FsUtils.mjs'
+import { ConfigStore } from '../lib/ConfigStore.mjs'
+import { SchemaSource } from '../lib/SchemaSource.mjs'
 
 
-// Memo 149 Strang C — canonical error-code helpers. The CLI grew for a year with
-// try/catch sites that swallowed silently or threw uncoded strings (deterministic
-// census: 111 sites). Every surfaced failure now carries a `PREFIX-NNN` code
-// (node-error-codes format: 3-4 uppercase letters, 3-digit number, regex
-// /^([A-Z]{3,4}-\d{3})/). Severity ERROR blocks grade A+B, WARNING blocks A, INFO is
-// advisory — the doctor (Strang D) reads these back.
-const ERROR_CODE_PATTERN = /^([A-Z]{3,4}-\d{3})/
-
-
-class CliError extends Error {
-    constructor( { code, severity = 'ERROR', source = null, message, originalError = null } ) {
-        super( message )
-        this.name = 'CliError'
-        this.code = code
-        this.severity = severity
-        this.source = source
-        this.originalError = originalError
-    }
-}
-
-
+// TODO(next major): remove this delegation facade — the command/lib modules live
+// in src/lib + src/commands (Memo 152 Phase 4). The facade is retained (F12=A) so
+// the 80+ test suites that bind FlowMcpCli statically stay green through the split.
 class FlowMcpCli {
     static async init( { cwd } ) {
         FlowMcpCli.#printHeadline()
@@ -137,7 +124,7 @@ class FlowMcpCli {
         }
         console.log( '' )
 
-        const { data: finalGlobalConfig } = await FlowMcpCli.#readJson( { filePath: FlowMcpCli.#globalConfigPath() } )
+        const { data: finalGlobalConfig } = await FsUtils.readJson( { filePath: ConfigStore.globalConfigPath() } )
         const result = {
             'status': true,
             'healthy': finalHealthy,
@@ -179,9 +166,9 @@ class FlowMcpCli {
 
 
     static async schemas() {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -202,15 +189,15 @@ class FlowMcpCli {
 
 
     static async promptList( { cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] ) {
             const result = {
@@ -251,9 +238,9 @@ class FlowMcpCli {
 
 
     static async promptSearch( { query, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -270,7 +257,7 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] ) {
             const result = {
@@ -316,9 +303,9 @@ class FlowMcpCli {
 
 
     static async promptShow( { group, name, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -335,10 +322,10 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ group ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Group "${group}" not found.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} group list to see available groups.`
             } )
@@ -350,7 +337,7 @@ class FlowMcpCli {
         const groupPrompts = groupData[ 'prompts' ] || {}
 
         if( !groupPrompts[ name ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Prompt "${name}" not found in group "${group}".`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} prompt list to see available prompts.`
             } )
@@ -360,10 +347,10 @@ class FlowMcpCli {
 
         const { file, title, description } = groupPrompts[ name ]
         const filePath = resolve( cwd, file )
-        const { data: content, error: readError } = await FlowMcpCli.#readText( { filePath } )
+        const { data: content, error: readError } = await FsUtils.readText( { filePath } )
 
         if( !content ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Cannot read prompt file: ${readError}`,
                 'fix': `Check that the file exists at ${file}`
             } )
@@ -386,9 +373,9 @@ class FlowMcpCli {
 
 
     static async promptAdd( { group, name, file, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -405,10 +392,10 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ group ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Group "${group}" not found.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} group list to see available groups. Create one with: ${appConfig[ 'cliCommand' ]} group append <name> --tools <list>`
             } )
@@ -420,7 +407,7 @@ class FlowMcpCli {
         const toolRefs = groupData[ 'tools' ] || groupData[ 'schemas' ] || []
 
         if( toolRefs.length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM006 "${group}": Group must have at least one tool to have prompts.`,
                 'fix': `Add tools first: ${appConfig[ 'cliCommand' ]} group append ${group} --tools <list>`
             } )
@@ -430,7 +417,7 @@ class FlowMcpCli {
 
         const namePattern = /^[a-z][a-z0-9-]*$/
         if( !namePattern.test( name ) ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM001 "${name}": Name must match ^[a-z][a-z0-9-]*$`,
                 'fix': `Use lowercase letters, numbers, and hyphens. Must start with a letter.`
             } )
@@ -441,7 +428,7 @@ class FlowMcpCli {
         const expectedFilename = `${name}.md`
         const actualFilename = basename( file )
         if( actualFilename !== expectedFilename ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM008 "${name}": File must be named ${expectedFilename}, got ${actualFilename}`,
                 'fix': `Rename the file to ${expectedFilename} or use a matching prompt name.`
             } )
@@ -450,10 +437,10 @@ class FlowMcpCli {
         }
 
         const filePath = resolve( cwd, file )
-        const { data: content, error: readError } = await FlowMcpCli.#readText( { filePath } )
+        const { data: content, error: readError } = await FsUtils.readText( { filePath } )
 
         if( !content ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM002 "${name}": File not found at ${file}`,
                 'fix': `Create the prompt file first, then add it.`
             } )
@@ -465,7 +452,7 @@ class FlowMcpCli {
         const firstLine = lines[ 0 ] || ''
 
         if( !firstLine.startsWith( '# ' ) ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM003 "${name}": Missing required section # Title (first line)`,
                 'fix': `The first line of the prompt file must be a level-1 heading: # Your Title`
             } )
@@ -483,7 +470,7 @@ class FlowMcpCli {
             } )
 
         if( !hasWorkflow ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `PRM004 "${name}": Missing required section ## Workflow`,
                 'fix': `Add a ## Workflow section to the prompt file.`
             } )
@@ -512,7 +499,7 @@ class FlowMcpCli {
             'file': file
         }
 
-        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -530,9 +517,9 @@ class FlowMcpCli {
 
 
     static async promptRemove( { group, name, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -549,10 +536,10 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ group ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Group "${group}" not found.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} group list to see available groups.`
             } )
@@ -564,7 +551,7 @@ class FlowMcpCli {
         const groupPrompts = groupData[ 'prompts' ] || {}
 
         if( !groupPrompts[ name ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Prompt "${name}" not found in group "${group}".`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} prompt list to see available prompts.`
             } )
@@ -579,7 +566,7 @@ class FlowMcpCli {
             delete groupData[ 'prompts' ]
         }
 
-        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( localConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -594,9 +581,9 @@ class FlowMcpCli {
 
 
     static async validate( { schemaPath, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -606,7 +593,7 @@ class FlowMcpCli {
         if( !schemaPath && cwd ) {
             const { schemas: groupSchemas, error: groupError } = await FlowMcpCli.#resolveDefaultGroupSchemas( { cwd } )
             if( groupError ) {
-                const result = FlowMcpCli.#error( { error: groupError } )
+                const result = CliOutput.error( { error: groupError } )
 
                 return { result }
             }
@@ -644,7 +631,7 @@ class FlowMcpCli {
 
         const { schemas, error: loadError } = await FlowMcpCli.#loadSchemasFromPath( { schemaPath } )
         if( !schemas ) {
-            const result = FlowMcpCli.#error( { error: loadError } )
+            const result = CliOutput.error( { error: loadError } )
 
             return { result }
         }
@@ -675,9 +662,9 @@ class FlowMcpCli {
 
 
     static async migrate( { schemaPath, cwd, all = false, dryRun = false } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -724,13 +711,13 @@ class FlowMcpCli {
             try {
                 dirStat = await stat( resolvedDir )
             } catch {
-                const result = FlowMcpCli.#error( { 'error': `SKL-001 findMainSkillsBlock: Path not found: ${dirPath}` } )
+                const result = CliOutput.error( { 'error': `SKL-001 findMainSkillsBlock: Path not found: ${dirPath}` } )
 
                 return { result }
             }
 
             if( !dirStat.isDirectory() ) {
-                const result = FlowMcpCli.#error( { 'error': `Path is not a directory: ${dirPath}. Use --all with a directory.` } )
+                const result = CliOutput.error( { 'error': `Path is not a directory: ${dirPath}. Use --all with a directory.` } )
 
                 return { result }
             }
@@ -744,7 +731,7 @@ class FlowMcpCli {
             try {
                 pathStat = await stat( resolvedPath )
             } catch {
-                const result = FlowMcpCli.#error( { 'error': `SKL-002 findMainSkillsBlock: Path not found: ${schemaPath}` } )
+                const result = CliOutput.error( { 'error': `SKL-002 findMainSkillsBlock: Path not found: ${schemaPath}` } )
 
                 return { result }
             }
@@ -833,7 +820,7 @@ class FlowMcpCli {
                     warnings.push( 'main.skills removed — keep skill files in providers/<ns>/skills/*.mjs (Memo 022 REV-08)' )
                 }
 
-                await FlowMcpCli.#writeGuarded( { 'path': filePath, 'content': updatedContent, 'onExists': 'overwrite' } )
+                await FsUtils.writeGuarded( { 'path': filePath, 'content': updatedContent, 'onExists': 'overwrite' } )
                 migrated += 1
                 const targetVersion = ( hasV3Version || hasMainSkills ) ? 'v4' : 'v3'
                 const reasonParts = [ `Successfully migrated to ${targetVersion}` ]
@@ -901,10 +888,10 @@ class FlowMcpCli {
     static async status( { cwd } ) {
         const { checks, healthy } = await FlowMcpCli.#healthCheck( { cwd } )
 
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { config } = await ConfigStore.readConfig( { cwd } )
 
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const sourcesInfo = {}
 
         if( globalConfig && globalConfig[ 'sources' ] ) {
@@ -916,7 +903,7 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
         const groupsInfo = {}
         let defaultGroup = null
 
@@ -962,9 +949,9 @@ class FlowMcpCli {
 
 
     static async run( { group, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -975,7 +962,7 @@ class FlowMcpCli {
         if( !group ) {
             const { schemas: agentSchemas, error: agentError, fix: agentFix } = await FlowMcpCli.#resolveAgentSchemas( { cwd } )
             if( !agentSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': agentError, 'fix': agentFix } )
+                const result = CliOutput.error( { 'error': agentError, 'fix': agentFix } )
 
                 return { result }
             }
@@ -985,14 +972,14 @@ class FlowMcpCli {
         } else {
             const { groupName, error: groupNameError, fix: groupNameFix } = await FlowMcpCli.#resolveGroupName( { group, cwd } )
             if( !groupName ) {
-                const result = FlowMcpCli.#error( { 'error': groupNameError, 'fix': groupNameFix } )
+                const result = CliOutput.error( { 'error': groupNameError, 'fix': groupNameFix } )
 
                 return { result }
             }
 
             const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await FlowMcpCli.#resolveGroupSchemas( { groupName, cwd } )
             if( !groupSchemas ) {
-                const result = FlowMcpCli.#error( { 'error': schemasError, 'fix': schemasFix } )
+                const result = CliOutput.error( { 'error': schemasError, 'fix': schemasFix } )
 
                 return { result }
             }
@@ -1001,11 +988,11 @@ class FlowMcpCli {
             serverName = groupName
         }
 
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { config } = await ConfigStore.readConfig( { cwd } )
         const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
+        const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         if( !envContent ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Cannot read .env file at: ${envPath}`,
                 'fix': `Ensure the .env file exists at ${envPath}`
             } )
@@ -1057,7 +1044,7 @@ class FlowMcpCli {
             const stdioModule = await import( '@modelcontextprotocol/sdk/server/stdio.js' )
             StdioServerTransport = stdioModule.StdioServerTransport
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `CLI-003 run: Failed to load MCP SDK: ${err.message}`,
                 'fix': 'Run: npm install @modelcontextprotocol/sdk'
             } )
@@ -1092,7 +1079,7 @@ class FlowMcpCli {
                 const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
                 // Memo 149 Strang B — resolve via the single-source helper (was:
                 // join( #schemasDir(), file ) against the dead staging dir).
-                const { filePath: schemaFilePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: file } )
+                const { filePath: schemaFilePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: file } )
                 const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
                 const namespaceForTools = main[ 'namespace' ] || 'unknown'
 
@@ -1208,9 +1195,9 @@ class FlowMcpCli {
 
 
     static async callListTools( { group, cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -1220,7 +1207,7 @@ class FlowMcpCli {
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
-            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+            const result = CliOutput.error( { 'error': resolveError, 'fix': resolveFix } )
 
             return { result }
         }
@@ -1266,15 +1253,15 @@ class FlowMcpCli {
 
 
     static async callTool( { toolName, jsonArgs, group, cwd, noCache = false, refresh = false } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( !toolName ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing tool name.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} call <tool-name> [json]. Run ${appConfig[ 'cliCommand' ]} call list-tools to see available tools.`
             } )
@@ -1305,7 +1292,7 @@ class FlowMcpCli {
             const { valid, namespace, type, name: specName, source } = FlowMcpCli.#parseSpecId( { 'specId': toolName } )
 
             if( !valid ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Invalid Spec-ID "${toolName}".`,
                     'fix': `Use format: <namespace>/tool/<name> (optional prefix "<source>:").`
                 } )
@@ -1314,7 +1301,7 @@ class FlowMcpCli {
             }
 
             if( type === 'schema' ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Cannot call a container Spec-ID "${toolName}". Specify a tool Spec-ID: <namespace>/tool/<name>`,
                     'fix': `Use format: ${namespace}/tool/<route-name>`
                 } )
@@ -1323,7 +1310,7 @@ class FlowMcpCli {
             }
 
             if( type !== 'tool' ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Spec-ID type "${type}" cannot be called directly.`,
                     'fix': `Only tool Spec-IDs are callable: <namespace>/tool/<name>`
                 } )
@@ -1367,9 +1354,9 @@ class FlowMcpCli {
             resolvedSchemas = scanned
         }
 
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { config } = await ConfigStore.readConfig( { cwd } )
         const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
+        const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
@@ -1379,7 +1366,7 @@ class FlowMcpCli {
             try {
                 userParams = JSON.parse( jsonArgs )
             } catch {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': 'CAL-001 callTool: Invalid JSON argument.',
                     'fix': `Provide valid JSON: ${appConfig[ 'cliCommand' ]} call ${toolName} '{"param": "value"}'`
                 } )
@@ -1413,7 +1400,7 @@ class FlowMcpCli {
                 return resourceResult
             }
 
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Tool "${toolName}" not found.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} search <query> or ${appConfig[ 'cliCommand' ]} list to see available tool names.`
             } )
@@ -1434,7 +1421,7 @@ class FlowMcpCli {
         if( matchedMissingKeys.length > 0 ) {
             const { tools: availableTools } = await FlowMcpCli.#listAvailableTools()
             const otherCount = availableTools.length > 0 ? availableTools.length - 1 : 0
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Tool "${toolName}" is not available — missing key(s): ${matchedMissingKeys.join( ', ' )}.`,
                 'fix': `Add the key(s) to ${envPath}. ${otherCount} other tool(s) remain callable.`
             } )
@@ -1445,7 +1432,7 @@ class FlowMcpCli {
         const matchedRouteConfig = ( matchedMain[ 'routes' ] || matchedMain[ 'tools' ] )[ matchedRouteName ]
         const matchedRouteParameters = matchedRouteConfig[ 'parameters' ] || []
         const { filePath: matchedSchemaFilePath } = matchedFile
-            ? await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: matchedFile } )
+            ? await SchemaSource.resolveSchemaFilePath( { schemaRef: matchedFile } )
             : { filePath: null }
         const { sharedLists: matchedSharedLists } = await FlowMcpCli.#resolveSharedListsForSchema( { 'main': matchedMain, 'filePath': matchedSchemaFilePath } )
         const { parameters: expectedParameters } = FlowMcpCli.#extractParameters( { 'routeParameters': matchedRouteParameters, 'sharedLists': matchedSharedLists } )
@@ -1466,7 +1453,7 @@ class FlowMcpCli {
             } )
 
         if( missingParams.length > 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Missing required parameter(s): ${missingParams.join( ', ' )}`,
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} call ${toolName} '${JSON.stringify( expectedParameters, null, 0 )}'`
             } )
@@ -1594,7 +1581,7 @@ class FlowMcpCli {
 
             return { result }
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `CFG-001 matchedRouteConfig: Tool execution failed: ${err.message}`,
                 'fix': `Check the tool parameters and env vars. Run ${appConfig[ 'cliCommand' ]} call list-tools for details.`
             } )
@@ -1605,15 +1592,15 @@ class FlowMcpCli {
 
 
     static async search( { query } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( !query || typeof query !== 'string' || query.trim().length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing search query.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} search <query>`
             } )
@@ -1625,10 +1612,10 @@ class FlowMcpCli {
         const queryTokens = query.toLowerCase().trim().split( /\s+/ )
 
         // Memo 099 Kap 6 — read env so search can flag key-gated (disabled) tools
-        const { config: searchConfig } = await FlowMcpCli.#readConfig( { cwd: process.cwd() } )
+        const { config: searchConfig } = await ConfigStore.readConfig( { cwd: process.cwd() } )
         const searchEnvPath = searchConfig ? searchConfig[ 'envPath' ] : null
         const { data: searchEnvContent } = searchEnvPath
-            ? await FlowMcpCli.#readText( { filePath: searchEnvPath } )
+            ? await FsUtils.readText( { filePath: searchEnvPath } )
             : { data: null }
         const searchEnvObject = searchEnvContent
             ? FlowMcpCli.#parseEnvFile( { envContent: searchEnvContent } ).envObject
@@ -1690,7 +1677,7 @@ class FlowMcpCli {
         const enrichedTools = await limitedTools
             .reduce( ( promise, tool ) => promise.then( async ( acc ) => {
                 const { schemaRef, routeName, name: toolName } = tool
-                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
 
                 try {
                     const { main } = await FlowMcpCli.#loadSchema( { filePath } )
@@ -1784,9 +1771,9 @@ class FlowMcpCli {
 
 
     static async list( { cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -1794,9 +1781,9 @@ class FlowMcpCli {
         // Memo 099 Kap 5/6 — list ALL tools from the configured schemaFolders.
         // A tool whose required keys are missing from .env is flagged disabled
         // (visible, never hidden) so the user sees exactly what is unavailable.
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { config } = await ConfigStore.readConfig( { cwd } )
         const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
+        const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
@@ -1805,7 +1792,7 @@ class FlowMcpCli {
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
-            const result = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+            const result = CliOutput.error( { 'error': resolveError, 'fix': resolveFix } )
 
             return { result }
         }
@@ -1817,7 +1804,7 @@ class FlowMcpCli {
         await schemas
             .reduce( ( promise, { main, file } ) => promise.then( async () => {
                 if( main && main[ 'sharedLists' ] && main[ 'sharedLists' ].length > 0 && file ) {
-                    const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef: file } )
+                    const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef: file } )
                     const { sharedLists: resolved } = await FlowMcpCli.#resolveSharedListsForSchema( { main, filePath } )
                     sharedListsMap[ file ] = resolved
                 }
@@ -1905,9 +1892,9 @@ class FlowMcpCli {
 
 
     static async listSharedLists( { listName } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -1915,7 +1902,7 @@ class FlowMcpCli {
         const { sources } = await FlowMcpCli.#listSources()
 
         if( sources.length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'No schema sources found.',
                 'fix': `Run: ${appConfig[ 'cliCommand' ]} import <url>`
             } )
@@ -1923,7 +1910,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const allLists = []
 
         await sources
@@ -1937,7 +1924,7 @@ class FlowMcpCli {
                     listFiles = entries
                         .filter( ( f ) => f.endsWith( '.mjs' ) )
                 } catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'LST-001', 'location': 'listSharedLists: lists dir read failed', err } )
+                    CliOutput.emitCoded( { 'code': 'LST-001', 'location': 'listSharedLists: lists dir read failed', err } )
                     return
                 }
 
@@ -1995,7 +1982,7 @@ class FlowMcpCli {
             const availableNames = allLists
                 .map( ( l ) => l[ 'name' ] )
                 .join( ', ' )
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `List "${listName}" not found.`,
                 'fix': `Available lists: ${availableNames}`
             } )
@@ -2017,9 +2004,9 @@ class FlowMcpCli {
 
 
     static async listsAddEntry( { cwd: _cwd, listName, jsonEntry } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
@@ -2027,7 +2014,7 @@ class FlowMcpCli {
         const normalizedName = listName && !listName.endsWith( '.mjs' ) ? `${listName}.mjs` : listName
 
         if( !normalizedName ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing listName.',
                 'fix': 'Provide a list name, e.g. evm-chains or evm-chains.mjs'
             } )
@@ -2039,7 +2026,7 @@ class FlowMcpCli {
         try {
             parsedEntry = JSON.parse( jsonEntry )
         } catch {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `CLI-007 listsAddEntry: Invalid JSON entry: "${jsonEntry}"`,
                 'fix': 'Provide a valid JSON object, e.g. \'{"alias":"FOO","chainId":99}\''
             } )
@@ -2048,7 +2035,7 @@ class FlowMcpCli {
         }
 
         if( typeof parsedEntry !== 'object' || parsedEntry === null || Array.isArray( parsedEntry ) ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Entry must be a JSON object (not an array or primitive).',
                 'fix': 'Provide a plain JSON object, e.g. \'{"alias":"FOO","chainId":99}\''
             } )
@@ -2057,7 +2044,7 @@ class FlowMcpCli {
         }
 
         const { sources } = await FlowMcpCli.#listSources()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
 
         let listFilePath = null
 
@@ -2078,7 +2065,7 @@ class FlowMcpCli {
             } ), Promise.resolve() )
 
         if( !listFilePath ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `List file "${normalizedName}" not found in any source.`,
                 'fix': `Check available lists with: ${appConfig[ 'cliCommand' ]} dev lists list`
             } )
@@ -2094,7 +2081,7 @@ class FlowMcpCli {
             listObj = Object.values( mod )
                 .find( ( v ) => v && typeof v === 'object' && v[ 'meta' ] && Array.isArray( v[ 'entries' ] ) )
         } catch {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `CLI-009 listsAddEntry: Failed to import list file "${normalizedName}".`,
                 'fix': 'Check the list file for syntax errors.'
             } )
@@ -2103,7 +2090,7 @@ class FlowMcpCli {
         }
 
         if( !listObj ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `List file "${normalizedName}" does not contain a valid list object with meta and entries.`,
                 'fix': 'The file must export an object with { meta: { fields: [...] }, entries: [...] }'
             } )
@@ -2130,7 +2117,7 @@ class FlowMcpCli {
                 .filter( ( key ) => !allFieldKeys.includes( key ) )
 
             if( missingRequired.length > 0 ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Entry is missing required fields: ${missingRequired.join( ', ')}`,
                     'fix': `Required fields: ${requiredFields.join( ', ' )}`
                 } )
@@ -2139,7 +2126,7 @@ class FlowMcpCli {
             }
 
             if( unknownKeys.length > 0 ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Entry contains unknown fields: ${unknownKeys.join( ', ')}`,
                     'fix': `Known fields: ${allFieldKeys.join( ', ' )}`
                 } )
@@ -2158,7 +2145,7 @@ class FlowMcpCli {
                 .filter( ( key ) => !referenceKeys.includes( key ) )
 
             if( missingKeys.length > 0 || extraKeys.length > 0 ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Entry shape mismatch. Missing: ${missingKeys.join( ', ' ) || 'none'}, extra: ${extraKeys.join( ', ' ) || 'none'}`,
                     'fix': `Entry must have the same keys as existing entries: ${referenceKeys.join( ', ' )}`
                 } )
@@ -2176,7 +2163,7 @@ class FlowMcpCli {
         const exportVarName = 'list'
         const newContent = `export const ${exportVarName} = ${JSON.stringify( updatedList, null, 4 )}\n`
 
-        await FlowMcpCli.#writeGuarded( { 'path': listFilePath, 'content': newContent, 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': listFilePath, 'content': newContent, 'onExists': 'overwrite' } )
 
         const result = {
             'status': true,
@@ -2191,15 +2178,15 @@ class FlowMcpCli {
 
 
     static async listsRefs( { cwd: _cwd, alias } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( !alias ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing alias.',
                 'fix': 'Provide an alias to look up, e.g. ETHEREUM_MAINNET'
             } )
@@ -2208,7 +2195,7 @@ class FlowMcpCli {
         }
 
         const { sources } = await FlowMcpCli.#listSources()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const matchingSchemas = []
 
         await sources
@@ -2295,15 +2282,15 @@ class FlowMcpCli {
 
 
     static async generateCatalog( { cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         const { tools: allTools } = await FlowMcpCli.#listAvailableTools()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
 
         const tagsByNamespace = {}
 
@@ -2434,7 +2421,7 @@ class FlowMcpCli {
         const outputPath = join( outputDir, 'flowmcp-catalog.md' )
 
         await mkdir( outputDir, { 'recursive': true } )
-        await FlowMcpCli.#writeGuarded( { 'path': outputPath, 'content': markdown, 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': outputPath, 'content': markdown, 'onExists': 'overwrite' } )
 
         const tokenEstimate = Math.ceil( markdown.length / 4 )
 
@@ -2452,15 +2439,15 @@ class FlowMcpCli {
 
 
     static async generateSkill( { toolId } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( !toolId || typeof toolId !== 'string' || toolId.trim().length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing tool ID.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} skill generate <tool-name>`
             } )
@@ -2473,7 +2460,7 @@ class FlowMcpCli {
             .find( ( t ) => t[ 'toolName' ] === toolId )
 
         if( !matchedTool ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Tool "${toolId}" not found.`,
                 'fix': `Use: ${appConfig[ 'cliCommand' ]} search <keyword> to find tool names`
             } )
@@ -2481,12 +2468,12 @@ class FlowMcpCli {
             return { result }
         }
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const filePath = join( schemasBaseDir, matchedTool[ 'schemaRef' ] )
         const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
         if( !main ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Could not load schema for "${toolId}".`,
                 'fix': 'Schema file may be corrupted or missing.'
             } )
@@ -2815,98 +2802,14 @@ class FlowMcpCli {
     }
 
 
-    static #validateGlobalConfig( { globalConfig } ) {
-        const warnings = []
-
-        if( globalConfig[ 'envPath' ] === undefined || typeof globalConfig[ 'envPath' ] !== 'string' || globalConfig[ 'envPath' ].length === 0 ) {
-            warnings.push( 'envPath: Missing or not a non-empty string' )
-        }
-
-        if( globalConfig[ 'initialized' ] === undefined || typeof globalConfig[ 'initialized' ] !== 'string' ) {
-            warnings.push( 'initialized: Missing or not a string' )
-        }
-
-        if( globalConfig[ 'flowmcpCore' ] === undefined || typeof globalConfig[ 'flowmcpCore' ] !== 'object' || globalConfig[ 'flowmcpCore' ] === null ) {
-            warnings.push( 'flowmcpCore: Missing or not an object' )
-        } else {
-            if( globalConfig[ 'flowmcpCore' ][ 'version' ] === undefined || typeof globalConfig[ 'flowmcpCore' ][ 'version' ] !== 'string' ) {
-                warnings.push( 'flowmcpCore.version: Missing or not a string' )
-            }
-
-            if( globalConfig[ 'flowmcpCore' ][ 'schemaSpec' ] === undefined || typeof globalConfig[ 'flowmcpCore' ][ 'schemaSpec' ] !== 'string' ) {
-                warnings.push( 'flowmcpCore.schemaSpec: Missing or not a string' )
-            }
-        }
-
-        if( globalConfig[ 'sources' ] !== undefined ) {
-            if( typeof globalConfig[ 'sources' ] !== 'object' || globalConfig[ 'sources' ] === null ) {
-                warnings.push( 'sources: Must be an object when present' )
-            }
-        }
-
-        const valid = warnings.length === 0
-
-        return { valid, warnings }
-    }
-
-
-    static #validateLocalConfig( { localConfig } ) {
-        const warnings = []
-
-        if( localConfig[ 'root' ] === undefined || typeof localConfig[ 'root' ] !== 'string' || localConfig[ 'root' ].length === 0 ) {
-            warnings.push( 'root: Missing or not a non-empty string' )
-        }
-
-        if( localConfig[ 'groups' ] !== undefined ) {
-            if( typeof localConfig[ 'groups' ] !== 'object' || localConfig[ 'groups' ] === null ) {
-                warnings.push( 'groups: Must be an object when present' )
-            } else {
-                Object.entries( localConfig[ 'groups' ] )
-                    .forEach( ( [ groupName, groupData ] ) => {
-                        if( typeof groupData !== 'object' || groupData === null ) {
-                            warnings.push( `groups.${groupName}: Must be an object` )
-                        } else {
-                            const hasTools = Array.isArray( groupData[ 'tools' ] )
-                            const hasSchemas = Array.isArray( groupData[ 'schemas' ] )
-
-                            if( !hasTools && !hasSchemas ) {
-                                warnings.push( `groups.${groupName}: Must have "tools" or "schemas" array` )
-                            } else {
-                                const items = groupData[ 'tools' ] || groupData[ 'schemas' ] || []
-                                items
-                                    .forEach( ( item, index ) => {
-                                        if( typeof item !== 'string' ) {
-                                            warnings.push( `groups.${groupName}.tools[${index}]: Must be a string` )
-                                        }
-                                    } )
-                            }
-                        }
-                    } )
-            }
-        }
-
-        if( localConfig[ 'defaultGroup' ] !== undefined ) {
-            if( typeof localConfig[ 'defaultGroup' ] !== 'string' ) {
-                warnings.push( 'defaultGroup: Must be a string' )
-            } else if( localConfig[ 'groups' ] && typeof localConfig[ 'groups' ] === 'object' && localConfig[ 'groups' ] !== null ) {
-                if( !localConfig[ 'groups' ][ localConfig[ 'defaultGroup' ] ] ) {
-                    warnings.push( `defaultGroup: "${localConfig[ 'defaultGroup' ]}" does not reference an existing group` )
-                }
-            }
-        }
-
-        const valid = warnings.length === 0
-
-        return { valid, warnings }
-    }
 
 
     static async #healthCheck( { cwd } ) {
         const checks = []
 
         // Level 1: Global Config
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const globalConfigExists = globalConfig !== null && globalConfig[ 'initialized' ] !== undefined
 
         if( !globalConfigExists ) {
@@ -2921,7 +2824,7 @@ class FlowMcpCli {
             return { checks, 'healthy': false }
         }
 
-        const { valid: globalStructureValid, warnings: globalWarnings } = FlowMcpCli.#validateGlobalConfig( { globalConfig } )
+        const { valid: globalStructureValid, warnings: globalWarnings } = ConfigStore.validateGlobalConfig( { globalConfig } )
         const globalConfigCheck = {
             'level': 1,
             'name': 'globalConfig',
@@ -2945,7 +2848,7 @@ class FlowMcpCli {
             await access( envPath, constants.F_OK )
             envOk = true
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'HLT-001', 'location': 'healthCheck: env file access check failed', err } )
+            CliOutput.emitCoded( { 'code': 'HLT-001', 'location': 'healthCheck: env file access check failed', err } )
             envOk = false
         }
 
@@ -2958,7 +2861,7 @@ class FlowMcpCli {
         } )
 
         // Level 3: Schemas
-        const schemasDir = FlowMcpCli.#schemasDir()
+        const schemasDir = ConfigStore.schemasDir()
         let schemaSourceCount = 0
         let sourceDirs = []
         try {
@@ -2975,7 +2878,7 @@ class FlowMcpCli {
             sourceDirs = entryResults
             schemaSourceCount = sourceDirs.length
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'HLT-002', 'location': 'healthCheck: schema dir scan failed', err } )
+            CliOutput.emitCoded( { 'code': 'HLT-002', 'location': 'healthCheck: schema dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -3000,7 +2903,7 @@ class FlowMcpCli {
             await sourceDirs
                 .reduce( ( promise, sourceDir ) => promise.then( async () => {
                     const registryPath = join( schemasDir, sourceDir, '_registry.json' )
-                    const { data: registry } = await FlowMcpCli.#readJson( { filePath: registryPath } )
+                    const { data: registry } = await FsUtils.readJson( { filePath: registryPath } )
 
                     if( registry && Array.isArray( registry[ 'schemas' ] ) ) {
                         registry[ 'schemas' ]
@@ -3056,7 +2959,7 @@ class FlowMcpCli {
 
         // Level 4: Local Config
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
         const localConfigExists = localConfig !== null
 
         if( !localConfigExists ) {
@@ -3068,7 +2971,7 @@ class FlowMcpCli {
                 'fix': `Run: ${appConfig[ 'cliCommand' ]} init (in project directory)`
             } )
         } else {
-            const { valid: localStructureValid, warnings: localWarnings } = FlowMcpCli.#validateLocalConfig( { localConfig } )
+            const { valid: localStructureValid, warnings: localWarnings } = ConfigStore.validateLocalConfig( { localConfig } )
             const localConfigCheck = {
                 'level': 4,
                 'name': 'localConfig',
@@ -3150,193 +3053,17 @@ class FlowMcpCli {
     }
 
 
-    static #globalConfigDir() {
-        const dir = join( homedir(), appConfig[ 'globalConfigDirName' ] )
-
-        return dir
-    }
 
 
-    static #globalConfigPath() {
-        const configPath = join( FlowMcpCli.#globalConfigDir(), 'config.json' )
-
-        return configPath
-    }
 
 
-    static #schemasDir() {
-        const dir = join( FlowMcpCli.#globalConfigDir(), 'schemas' )
-
-        return dir
-    }
 
 
-    // Memo 099 Kap 3 — resolve ~/anchor-relative schemaFolders paths (no hardcoded usernames)
-    static #resolvePath( { path } ) {
-        if( typeof path !== 'string' || path.length === 0 ) {
-            return { resolvedPath: path }
-        }
 
-        if( path === '~' ) {
-            return { resolvedPath: homedir() }
-        }
-
-        if( path.startsWith( '~/' ) === true ) {
-            const resolvedPath = join( homedir(), path.slice( 2 ) )
-
-            return { resolvedPath }
-        }
-
-        if( isAbsolute( path ) === true ) {
-            return { resolvedPath: path }
-        }
-
-        const resolvedPath = resolve( path )
-
-        return { resolvedPath }
-    }
-
-
-    // Memo 099 Kap 3/4 — read schemaFolders[] (name + resolved path) from the global config
-    static async #readSchemaFolders() {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
-        const raw = globalConfig && globalConfig[ 'schemaFolders' ]
-
-        if( raw === undefined || raw === null || Array.isArray( raw ) === false ) {
-            return { schemaFolders: [] }
-        }
-
-        const schemaFolders = raw
-            .filter( ( entry ) => entry && typeof entry === 'object' && Array.isArray( entry ) === false )
-            .filter( ( entry ) => typeof entry[ 'name' ] === 'string' && entry[ 'name' ].length > 0 )
-            .filter( ( entry ) => typeof entry[ 'path' ] === 'string' && entry[ 'path' ].length > 0 )
-            .map( ( entry ) => {
-                const { name, path } = entry
-                const { resolvedPath } = FlowMcpCli.#resolvePath( { path } )
-
-                return { name, 'path': resolvedPath }
-            } )
-
-        // PRD-008 — the schemaFolders[] `name` is the source coordinate. It MUST be
-        // unique across folders, otherwise "<source>:" cannot select a folder. Two
-        // folders with the same name = hard config error (no silent first-wins).
-        const seenNames = {}
-        const duplicateNames = []
-        schemaFolders
-            .forEach( ( entry ) => {
-                const { name } = entry
-                if( seenNames[ name ] === true ) {
-                    if( duplicateNames.includes( name ) === false ) {
-                        duplicateNames.push( name )
-                    }
-                } else {
-                    seenNames[ name ] = true
-                }
-            } )
-
-        if( duplicateNames.length > 0 ) {
-            return {
-                schemaFolders,
-                'duplicateError': {
-                    'error': `Duplicate schemaFolders[] name(s): ${duplicateNames.join( ', ' )}. Each folder name must be unique (it is the "<source>:" coordinate).`,
-                    'fix': `Edit ${FlowMcpCli.#globalConfigPath()} and give every schemaFolders[] entry a distinct "name".`
-                }
-            }
-        }
-
-        return { schemaFolders, 'duplicateError': null }
-    }
-
-
-    static async #readLocalSources() {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
-        const raw = globalConfig && globalConfig[ 'localSources' ]
-
-        if( raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray( raw ) ) {
-            return { localSources: {} }
-        }
-
-        const localSources = Object.entries( raw )
-            .reduce( ( acc, [ name, entry ] ) => {
-                const path = entry && typeof entry === 'object' ? entry[ 'path' ] : null
-                if( typeof path === 'string' && path.length > 0 ) {
-                    acc[ name ] = { path }
-                }
-
-                return acc
-            }, {} )
-
-        return { localSources }
-    }
-
-
-    static async #resolveSourceDir( { sourceName } ) {
-        // Memo 099 Kap 4 — schemaFolders[] win: source dir = <path>/providers (direct, no disk-copy)
-        const { schemaFolders } = await FlowMcpCli.#readSchemaFolders()
-        const folder = schemaFolders
-            .find( ( entry ) => entry[ 'name' ] === sourceName )
-
-        if( folder !== undefined ) {
-            const sourceDir = join( folder[ 'path' ], 'providers' )
-
-            return { sourceDir, isLocal: true }
-        }
-
-        const { localSources } = await FlowMcpCli.#readLocalSources()
-        const local = localSources[ sourceName ]
-
-        if( local !== undefined ) {
-            return { sourceDir: local[ 'path' ], isLocal: true }
-        }
-
-        const sourceDir = join( FlowMcpCli.#schemasDir(), sourceName )
-
-        return { sourceDir, isLocal: false }
-    }
-
-
-    static async #resolveSchemaPath( { schemaRef } ) {
-        if( typeof schemaRef !== 'string' || schemaRef.length === 0 ) {
-            return { filePath: join( FlowMcpCli.#schemasDir(), String( schemaRef ) ), isLocal: false }
-        }
-
-        const slashIndex = schemaRef.indexOf( '/' )
-        if( slashIndex === -1 ) {
-            return { filePath: join( FlowMcpCli.#schemasDir(), schemaRef ), isLocal: false }
-        }
-
-        const sourceName = schemaRef.slice( 0, slashIndex )
-        const rest = schemaRef.slice( slashIndex + 1 )
-        const { sourceDir, isLocal } = await FlowMcpCli.#resolveSourceDir( { sourceName } )
-        const filePath = join( sourceDir, rest )
-
-        return { filePath, isLocal }
-    }
-
-
-    // Memo 149 Strang B (F4=B) — single source of truth for a schema's on-disk file
-    // path. callTool (param + handler path), serve and the resource-query path all
-    // resolve through here. Before, the handler path rebuilt the path via
-    // join( #schemasDir(), file ) against the obsolete ~/.flowmcp/schemas staging dir
-    // (a 099-migration rest), so _lists/ was never found and declared sharedLists (e.g.
-    // evmChains) silently resolved to {} -> content:[]. Routing every caller through one
-    // helper makes that "one path correct, one on the dead dir" asymmetry structurally
-    // impossible to reintroduce.
-    static async #resolveSchemaFilePath( { schemaRef } ) {
-        if( !schemaRef ) {
-            return { filePath: '' }
-        }
-
-        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
-
-        return { filePath }
-    }
 
 
     static #cacheDir() {
-        const dir = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'cacheDirName' ] )
+        const dir = join( ConfigStore.globalConfigDir(), appConfig[ 'cacheDirName' ] )
 
         return dir
     }
@@ -3384,7 +3111,7 @@ class FlowMcpCli {
 
             return { data, meta, isExpired, cachePath }
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CCH-001', 'location': 'readCache: cache read failed', err } )
+            CliOutput.emitCoded( { 'code': 'CCH-001', 'location': 'readCache: cache read failed', err } )
 
             return { data: null, meta: null, isExpired: true, cachePath }
         }
@@ -3411,7 +3138,7 @@ class FlowMcpCli {
         }
 
         // Cache refresh is a deliberate, named overwrite (Memo 068 R2 verschärft) — never silent.
-        await FlowMcpCli.#writeGuarded( { 'path': cachePath, 'content': JSON.stringify( cacheEntry, null, 2 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': cachePath, 'content': JSON.stringify( cacheEntry, null, 2 ), 'onExists': 'overwrite' } )
 
         return { cachePath, meta: cacheEntry[ 'meta' ] }
     }
@@ -3442,7 +3169,7 @@ class FlowMcpCli {
 
             return { result }
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `CCH-002 cacheClear: Failed to clear cache: ${err.message}`,
                 'fix': `Check permissions on ${cacheBase}`
             } )
@@ -3471,7 +3198,7 @@ class FlowMcpCli {
             await rmdir( dirPath )
         } catch( err ) {
             // directory doesn't exist, nothing to clear
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-013', 'location': 'removeDir: recursive dir removal failed', err } )
+            CliOutput.emitCoded( { 'code': 'CLI-013', 'location': 'removeDir: recursive dir removal failed', err } )
         }
     }
 
@@ -3499,7 +3226,7 @@ class FlowMcpCli {
                 } ), Promise.resolve() )
         } catch( err ) {
             // cache directory doesn't exist yet
-            FlowMcpCli.#emitCoded( { 'code': 'HLT-003', 'location': 'cacheStatus: cache dir scan failed', err } )
+            CliOutput.emitCoded( { 'code': 'HLT-003', 'location': 'cacheStatus: cache dir scan failed', err } )
         }
 
         const totalSize = entries
@@ -3566,7 +3293,7 @@ class FlowMcpCli {
                 } ), Promise.resolve() )
         } catch( err ) {
             // directory doesn't exist
-            FlowMcpCli.#emitCoded( { 'code': 'CCH-004', 'location': 'collectCacheFiles: cache dir read failed', err } )
+            CliOutput.emitCoded( { 'code': 'CCH-004', 'location': 'collectCacheFiles: cache dir read failed', err } )
         }
 
         return collected
@@ -3622,7 +3349,7 @@ class FlowMcpCli {
                         } ), Promise.resolve() )
                 } catch( err ) {
                     // cache dir for this source doesn't exist yet
-                    FlowMcpCli.#emitCoded( { 'code': 'SQL-002', 'location': 'listSealCache: cache dir read failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SQL-002', 'location': 'listSealCache: cache dir read failed', err } )
                 }
             } ), Promise.resolve() )
 
@@ -3698,7 +3425,7 @@ class FlowMcpCli {
             try {
                 userParams = JSON.parse( jsonArgs )
             } catch {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': 'SQL-010 autoTool: Invalid JSON argument.',
                     'fix': `Provide valid JSON: ${appConfig[ 'cliCommand' ]} call ${toolName} '{"param": "value"}'`
                 } )
@@ -3736,7 +3463,7 @@ class FlowMcpCli {
         try {
             addonLoaded = await AddonLoader.loadAddon( { 'sourceKey': entry[ 'sourceKey' ] } )
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `SQL-011 autoTool: Failed to load addon '${entry[ 'addonName' ]}': ${err.message}`,
                 'fix': `Ensure '${entry[ 'addonName' ]}' is installed as a package.json dependency.`
             } )
@@ -3746,7 +3473,7 @@ class FlowMcpCli {
 
         const FlowMcpAdapter = addonLoaded.addonModule.FlowMcpAdapter
         if( !FlowMcpAdapter ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Addon ${entry[ 'addonName' ]} does not export FlowMcpAdapter.`,
                 'fix': `Update ${entry[ 'addonName' ]} to expose the FlowMcpAdapter consumer API.`
             } )
@@ -3762,7 +3489,7 @@ class FlowMcpCli {
             try {
                 await FlowMcpAdapter.loadFromUrl( { 'url': entry[ 'url' ], 'parseConfig': entry[ 'parseConfig' ] } )
             } catch( err ) {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `SQL-012 autoTool: Failed to load url resource '${entry[ 'url' ]}' for '${toolName}': ${err.message}`,
                     'fix': `Verify the url is reachable over HTTPS and returns a valid document.`
                 } )
@@ -3777,7 +3504,7 @@ class FlowMcpCli {
                 ? FlowMcpAdapter.getAvailableMethods( { 'url': entry[ 'url' ] } )
                 : FlowMcpAdapter.getAvailableMethods( { 'dbPath': entry[ 'dbPath' ] } )
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `SQL-013 autoTool: Failed to read addon methods for ${entry[ 'addonName' ]}: ${err.message}`,
                 'fix': `Run '${appConfig[ 'cliCommand' ]} add ${entry[ 'schemaFile' ] || entry[ 'schemaName' ]}' to refresh the cache.`
             } )
@@ -3793,7 +3520,7 @@ class FlowMcpCli {
             } )
 
         if( !method ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Auto-tool '${toolName}' not provided by addon '${entry[ 'addonName' ]}'.`,
                 'fix': `Run '${appConfig[ 'cliCommand' ]} add ${entry[ 'schemaFile' ] || entry[ 'schemaName' ]}' to refresh the cache after a DB change.`
             } )
@@ -3822,7 +3549,7 @@ class FlowMcpCli {
                     'userParams': userParams
                 } )
             } else {
-                const result = FlowMcpCli.#error( {
+                const result = CliOutput.error( {
                     'error': `Addon method '${method.name}' has neither a handler nor a sqlTemplate.`,
                     'fix': `Update '${entry[ 'addonName' ]}' to expose a callable handler or sqlTemplate.`
                 } )
@@ -3830,7 +3557,7 @@ class FlowMcpCli {
                 return { result }
             }
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `SQL-014 autoTool: Auto-tool '${toolName}' handler failed: ${err.message}`,
                 'fix': `Verify input parameters and that the DB is readable at ${entry[ 'dbPath' ]}.`
             } )
@@ -3878,14 +3605,6 @@ class FlowMcpCli {
         return { result }
     }
 
-
-    static async #writeGlobalConfig( { config } ) {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        // Global config is updated deliberately on init/add/remove — named overwrite.
-        await FlowMcpCli.#writeGuarded( { 'path': globalConfigPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
-
-        return { status: true }
-    }
 
 
     static #parseToolRef( { toolRef } ) {
@@ -3959,7 +3678,7 @@ class FlowMcpCli {
                     .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
                         const { file, namespace } = schemaEntry
                         const schemaRef = `${sourceName}/${file}`
-                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                        const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
                         const { main } = await FlowMcpCli.#loadSchema( { filePath } )
 
                         const effectiveNamespace = main && main[ 'namespace' ] ? main[ 'namespace' ] : namespace
@@ -4040,14 +3759,14 @@ class FlowMcpCli {
 
     static async #loadSharedAliases() {
         const { sources } = await FlowMcpCli.#listSources()
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const aliasIndex = []
 
         await sources
             .reduce( ( promise, source ) => promise.then( async () => {
                 const { name: sourceName } = source
                 const registryPath = join( schemasBaseDir, sourceName, '_registry.json' )
-                const { data: registry } = await FlowMcpCli.#readJson( { filePath: registryPath } )
+                const { data: registry } = await FsUtils.readJson( { filePath: registryPath } )
 
                 if( !registry || !Array.isArray( registry[ 'shared' ] ) ) { return }
 
@@ -4100,7 +3819,7 @@ class FlowMcpCli {
                             } )
                         } catch( err ) {
                             // _shared file could not be loaded — skip
-                            FlowMcpCli.#emitCoded( { 'code': 'SCH-002', 'location': 'loadSharedAliases: shared file load failed', err } )
+                            CliOutput.emitCoded( { 'code': 'SCH-002', 'location': 'loadSharedAliases: shared file load failed', err } )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
@@ -4354,15 +4073,15 @@ class FlowMcpCli {
 
 
     static async catalogLink( { name, path } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( typeof name !== 'string' || name.trim().length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing source name.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
             } )
@@ -4371,7 +4090,7 @@ class FlowMcpCli {
         }
 
         if( typeof path !== 'string' || path.trim().length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing source path.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
             } )
@@ -4385,7 +4104,7 @@ class FlowMcpCli {
             .catch( () => false )
 
         if( dirExists === false ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Source path does not exist: ${absolutePath}`,
                 'fix': 'Provide an existing directory that contains FlowMCP schema files.'
             } )
@@ -4393,8 +4112,8 @@ class FlowMcpCli {
             return { result }
         }
 
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: existingConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const globalConfig = existingConfig || {}
 
         if( !globalConfig[ 'localSources' ] || typeof globalConfig[ 'localSources' ] !== 'object' || Array.isArray( globalConfig[ 'localSources' ] ) ) {
@@ -4406,7 +4125,7 @@ class FlowMcpCli {
             'linkedAt': new Date().toISOString()
         }
 
-        await FlowMcpCli.#writeGlobalConfig( { config: globalConfig } )
+        await ConfigStore.writeGlobalConfig( { config: globalConfig } )
 
         const { sources } = await FlowMcpCli.#listSources()
         const linked = sources
@@ -4424,15 +4143,15 @@ class FlowMcpCli {
 
 
     static async catalogUnlink( { name } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
         if( typeof name !== 'string' || name.trim().length === 0 ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing source name.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog unlink <name>`
             } )
@@ -4440,13 +4159,13 @@ class FlowMcpCli {
             return { result }
         }
 
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: existingConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: existingConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const globalConfig = existingConfig || {}
         const localSources = globalConfig[ 'localSources' ]
 
         if( !localSources || typeof localSources !== 'object' || localSources[ name ] === undefined ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Local source "${name}" is not linked.`,
                 'fix': `Run ${appConfig[ 'cliCommand' ]} catalog sources to see linked sources.`
             } )
@@ -4455,7 +4174,7 @@ class FlowMcpCli {
         }
 
         delete localSources[ name ]
-        await FlowMcpCli.#writeGlobalConfig( { config: globalConfig } )
+        await ConfigStore.writeGlobalConfig( { config: globalConfig } )
 
         const result = {
             'status': true,
@@ -4467,7 +4186,7 @@ class FlowMcpCli {
 
 
     static async catalogSources() {
-        const { localSources } = await FlowMcpCli.#readLocalSources()
+        const { localSources } = await ConfigStore.readLocalSources()
 
         const linked = Object.entries( localSources )
             .map( ( [ name, entry ] ) => {
@@ -4487,14 +4206,14 @@ class FlowMcpCli {
 
 
     static async #listSources() {
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const schemasBaseDir = ConfigStore.schemasDir()
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
 
         // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
         // Legacy ~/.flowmcp/schemas scan + localSources are the fallback until migration (Memo 099 Kap 9).
-        const { schemaFolders, duplicateError } = await FlowMcpCli.#readSchemaFolders()
+        const { schemaFolders, duplicateError } = await ConfigStore.readSchemaFolders()
 
         // PRD-008 — a duplicate folder name is a hard config error (the "<source>:"
         // coordinate would be ambiguous). Surface it instead of resolving sources.
@@ -4508,7 +4227,7 @@ class FlowMcpCli {
             allSourceNames = schemaFolders
                 .map( ( entry ) => entry[ 'name' ] )
         } else {
-            const { localSources } = await FlowMcpCli.#readLocalSources()
+            const { localSources } = await ConfigStore.readLocalSources()
 
             let sourceDirs = []
             try {
@@ -4526,7 +4245,7 @@ class FlowMcpCli {
 
                 sourceDirs = dirChecks
             } catch( err ) {
-                FlowMcpCli.#emitCoded( { 'code': 'CFG-002', 'location': 'listSources: schemas dir scan failed', err } )
+                CliOutput.emitCoded( { 'code': 'CFG-002', 'location': 'listSources: schemas dir scan failed', err } )
                 sourceDirs = []
             }
 
@@ -4539,12 +4258,12 @@ class FlowMcpCli {
 
         await allSourceNames
             .reduce( ( promise, sourceDir ) => promise.then( async () => {
-                const { sourceDir: sourcePath, isLocal } = await FlowMcpCli.#resolveSourceDir( { sourceName: sourceDir } )
+                const { sourceDir: sourcePath, isLocal } = await ConfigStore.resolveSourceDir( { sourceName: sourceDir } )
                 const sourceConfig = configSources[ sourceDir ] || {}
                 const { type, repository } = sourceConfig
 
                 const registryPath = join( sourcePath, '_registry.json' )
-                const { data: registry } = await FlowMcpCli.#readJson( { filePath: registryPath } )
+                const { data: registry } = await FsUtils.readJson( { filePath: registryPath } )
 
                 let schemas = []
 
@@ -4636,7 +4355,7 @@ class FlowMcpCli {
 
     static async #resolveDefaultGroupSchemas( { cwd } ) {
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'defaultGroup' ] ) {
             return { 'schemas': null, 'error': 'No default group set. Provide a schema path or set a default group.' }
@@ -4662,7 +4381,7 @@ class FlowMcpCli {
         }
 
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'defaultGroup' ] ) {
             return {
@@ -4680,7 +4399,7 @@ class FlowMcpCli {
 
     static async #resolveGroupSchemas( { groupName, cwd } ) {
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig || !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ groupName ] ) {
             return {
@@ -4717,7 +4436,7 @@ class FlowMcpCli {
 
         await Object.entries( schemaRouteMap )
             .reduce( ( promise, [ schemaRef, routeNames ] ) => promise.then( async () => {
-                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
                 const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
                 if( main ) {
@@ -4741,55 +4460,7 @@ class FlowMcpCli {
     }
 
 
-    static async #readConfig( { cwd } ) {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
 
-        if( !globalConfig ) {
-            return { 'config': null, 'error': `Not initialized. Run: ${appConfig[ 'cliCommand' ]} init` }
-        }
-
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
-
-        const { envPath, flowmcpCore, initialized } = globalConfig
-        const config = {
-            envPath,
-            flowmcpCore,
-            initialized,
-            'local': localConfig || null
-        }
-
-        if( localConfig && localConfig[ 'schemasDir' ] ) {
-            config[ 'schemasDir' ] = localConfig[ 'schemasDir' ]
-        }
-
-        return { config, 'error': null }
-    }
-
-
-    static async #readJson( { filePath } ) {
-        try {
-            const content = await readFile( filePath, 'utf-8' )
-            const data = JSON.parse( content )
-
-            return { data }
-        } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CFG-003', 'location': 'readJson: json read/parse failed', err } )
-            return { 'data': null }
-        }
-    }
-
-
-    static async #readText( { filePath } ) {
-        try {
-            const data = await readFile( filePath, 'utf-8' )
-
-            return { data, 'error': null }
-        } catch {
-            return { 'data': null, 'error': `CLI-015 readText: Cannot read file: ${filePath}` }
-        }
-    }
 
 
     /**
@@ -4807,15 +4478,15 @@ class FlowMcpCli {
      */
     static async #resolveEnv( { cwd } ) {
         const localEnvPath = join( cwd, appConfig[ 'localConfigDirName' ], '.env' )
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         const configuredGlobalEnv = ( globalConfig && globalConfig[ 'envPath' ] )
             ? globalConfig[ 'envPath' ]
-            : join( FlowMcpCli.#globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
+            : join( ConfigStore.globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
 
         let globalEnv = {}
         let globalSourcePath = null
-        const { data: globalContent } = await FlowMcpCli.#readText( { filePath: configuredGlobalEnv } )
+        const { data: globalContent } = await FsUtils.readText( { filePath: configuredGlobalEnv } )
         if( globalContent !== null ) {
             globalEnv = FlowMcpCli.#parseEnvFile( { envContent: globalContent } ).envObject
             globalSourcePath = configuredGlobalEnv
@@ -4823,7 +4494,7 @@ class FlowMcpCli {
 
         let localEnv = {}
         let localSourcePath = null
-        const { data: localContent } = await FlowMcpCli.#readText( { filePath: localEnvPath } )
+        const { data: localContent } = await FsUtils.readText( { filePath: localEnvPath } )
         if( localContent !== null ) {
             localEnv = FlowMcpCli.#parseEnvFile( { envContent: localContent } ).envObject
             localSourcePath = localEnvPath
@@ -4894,7 +4565,7 @@ class FlowMcpCli {
     static async #collectAllRequiredServerParams( { cwd, schemaFilter = null } ) {
         const { index } = await FlowMcpCli.getNamespaceIndex( { cwd } )
         const tools = index[ 'tools' ] || {}
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const keyToSchemas = new Map()
         const loadedFiles = new Set()
 
@@ -5015,7 +4686,7 @@ class FlowMcpCli {
 
         if( printSignups ) {
             const guidePath = join( dirname( fileURLToPath( import.meta.url ) ), '..', 'data', 'acquisition-guide.json' )
-            const { data: guide } = await FlowMcpCli.#readJson( { filePath: guidePath } )
+            const { data: guide } = await FsUtils.readJson( { filePath: guidePath } )
             const guideKeys = ( guide && guide[ 'keys' ] ) || {}
 
             const lines = missing
@@ -5073,7 +4744,7 @@ class FlowMcpCli {
         const source = sources[ 'global' ] || sources[ 'local' ]
 
         if( !source ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'No env file found to back up.',
                 'fix': `Create one at ~/${appConfig[ 'globalConfigDirName' ]}/${appConfig[ 'defaultEnvFileName' ]} first.`
             } )
@@ -5081,9 +4752,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { data: content } = await FlowMcpCli.#readText( { filePath: source } )
+        const { data: content } = await FsUtils.readText( { filePath: source } )
         if( content === null ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Cannot read env file: ${source}`,
                 'fix': 'Check filesystem permissions.'
             } )
@@ -5091,12 +4762,12 @@ class FlowMcpCli {
             return { result }
         }
 
-        const backupDir = join( FlowMcpCli.#globalConfigDir(), '.env-backups' )
+        const backupDir = join( ConfigStore.globalConfigDir(), '.env-backups' )
         await mkdir( backupDir, { recursive: true } )
 
         const iso = new Date().toISOString().replace( /:/g, '-' )
         const backup = join( backupDir, `${iso}.env` )
-        await FlowMcpCli.#writeGuarded( { 'path': backup, 'content': content, 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': backup, 'content': content, 'onExists': 'overwrite' } )
 
         const result = { 'status': true, source, backup }
 
@@ -5110,7 +4781,7 @@ class FlowMcpCli {
      */
     static async devEnvRestore( { file, cwd: _cwd } ) {
         if( !file || typeof file !== 'string' ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing backup file path.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} dev env restore <file>`
             } )
@@ -5118,9 +4789,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { data: content } = await FlowMcpCli.#readText( { filePath: file } )
+        const { data: content } = await FsUtils.readText( { filePath: file } )
         if( content === null ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Backup file not found: ${file}`,
                 'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env backup to create a snapshot first.`
             } )
@@ -5128,7 +4799,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const targetPath = join( FlowMcpCli.#globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
+        const targetPath = join( ConfigStore.globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
 
         const { confirmed } = await inquirer.prompt( [
             {
@@ -5146,7 +4817,7 @@ class FlowMcpCli {
         }
 
         await mkdir( dirname( targetPath ), { recursive: true } )
-        await FlowMcpCli.#writeGuarded( { 'path': targetPath, 'content': content, 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': targetPath, 'content': content, 'onExists': 'overwrite' } )
 
         const result = { 'status': true, 'restored': targetPath }
 
@@ -5160,7 +4831,7 @@ class FlowMcpCli {
      */
     static async devEnvDiff( { file, cwd } ) {
         if( !file || typeof file !== 'string' ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Missing backup file path.',
                 'fix': `Provide: ${appConfig[ 'cliCommand' ]} dev env diff <file>`
             } )
@@ -5168,9 +4839,9 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { data: backupContent } = await FlowMcpCli.#readText( { filePath: file } )
+        const { data: backupContent } = await FsUtils.readText( { filePath: file } )
         if( backupContent === null ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `Backup file not found: ${file}`,
                 'fix': `Use: ${appConfig[ 'cliCommand' ]} dev env backup to create a snapshot first.`
             } )
@@ -5230,10 +4901,10 @@ class FlowMcpCli {
      */
     static async devEnvAcquire( { key = null, mode = null, printGuide = false, json = false, cwd } ) {
         const guidePath = join( dirname( fileURLToPath( import.meta.url ) ), '..', 'data', 'acquisition-guide.json' )
-        const { data: guide } = await FlowMcpCli.#readJson( { filePath: guidePath } )
+        const { data: guide } = await FsUtils.readJson( { filePath: guidePath } )
 
         if( !guide || !guide[ 'keys' ] ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Acquisition guide not found.',
                 'fix': 'Reinstall flowmcp-cli or check src/data/acquisition-guide.json'
             } )
@@ -5338,19 +5009,6 @@ class FlowMcpCli {
 
 
 
-
-    static #mergeConfig( { existing, updates } ) {
-        const merged = { ...existing }
-
-        Object.entries( updates )
-            .forEach( ( [ key, value ] ) => {
-                if( merged[ key ] === undefined ) {
-                    merged[ key ] = value
-                }
-            } )
-
-        return { 'config': merged }
-    }
 
 
     static #printHeadline() {
@@ -5629,12 +5287,12 @@ allowlist, migrate-config, etc.).
 
 
     static async #quickInstall( { cwd, version, commit, schemaSpec } ) {
-        const globalDir = FlowMcpCli.#globalConfigDir()
+        const globalDir = ConfigStore.globalConfigDir()
         await mkdir( globalDir, { recursive: true } )
 
         // .env path: use existing or create default
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: existingGlobalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: existingGlobalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         let envPath
 
         if( existingGlobalConfig && existingGlobalConfig[ 'envPath' ] ) {
@@ -5670,17 +5328,17 @@ allowlist, migrate-config, etc.).
             }
         }
 
-        const { config: mergedGlobalConfig } = FlowMcpCli.#mergeConfig( {
+        const { config: mergedGlobalConfig } = ConfigStore.mergeConfig( {
             'existing': existingGlobalConfig || {},
             'updates': globalConfigUpdates
         } )
 
         mergedGlobalConfig[ 'envPath' ] = envPath
-        await FlowMcpCli.#writeGlobalConfig( { 'config': mergedGlobalConfig } )
+        await ConfigStore.writeGlobalConfig( { 'config': mergedGlobalConfig } )
         console.log( `  ${chalk.green( '\u2713' )} Global config saved` )
 
         // Demo schema
-        const schemasDir = FlowMcpCli.#schemasDir()
+        const schemasDir = ConfigStore.schemasDir()
         let schemaSourceCount = 0
         try {
             const entries = await readdir( schemasDir )
@@ -5694,7 +5352,7 @@ allowlist, migrate-config, etc.).
                     return count
                 } ), Promise.resolve( 0 ) )
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-017', 'location': 'quickInstall: schemas dir scan failed', err } )
+            CliOutput.emitCoded( { 'code': 'CLI-017', 'location': 'quickInstall: schemas dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -5702,7 +5360,7 @@ allowlist, migrate-config, etc.).
             const demoDir = join( schemasDir, 'demo' )
             await mkdir( demoDir, { recursive: true } )
             const { content: demoContent } = FlowMcpCli.#createDemoSchema()
-            await FlowMcpCli.#writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
+            await FsUtils.writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
             console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
         }
 
@@ -5710,21 +5368,21 @@ allowlist, migrate-config, etc.).
         const localDir = join( cwd, appConfig[ 'localConfigDirName' ] )
         await mkdir( localDir, { recursive: true } )
         const localConfigPath = join( localDir, 'config.json' )
-        const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: existingLocalConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
-        const { config: mergedLocalConfig } = FlowMcpCli.#mergeConfig( {
+        const { config: mergedLocalConfig } = ConfigStore.mergeConfig( {
             'existing': existingLocalConfig || {},
             'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
         } )
 
-        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
         console.log( `  ${chalk.green( '\u2713' )} Local config saved` )
 
         // F19=B (Memo 152): init is schemaFolders[]-only. No network download,
         // no legacy group creation (Memo 099 replaced groups with selections).
         console.log( '' )
         console.log( `  ${chalk.cyan( 'Next:' )} register a v4 schema folder in ${chalk.bold( 'schemaFolders[]' )}` )
-        console.log( `  of ${chalk.gray( FlowMcpCli.#globalConfigPath() )}:` )
+        console.log( `  of ${chalk.gray( ConfigStore.globalConfigPath() )}:` )
         console.log( '      "schemaFolders": [ { "name": "<source>", "path": "<abs-path-to-schemas>" } ]' )
         console.log( `  then run ${chalk.bold( 'flowmcp list' )} to see the available tools.` )
         console.log( '' )
@@ -5732,8 +5390,8 @@ allowlist, migrate-config, etc.).
 
 
     static async #manualInstall( { cwd, version, commit, schemaSpec } ) {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: existingGlobalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: existingGlobalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
         let envPath
 
         if( existingGlobalConfig && existingGlobalConfig[ 'envPath' ] ) {
@@ -5744,7 +5402,7 @@ allowlist, migrate-config, etc.).
             envPath = promptedEnvPath
         }
 
-        const globalDir = FlowMcpCli.#globalConfigDir()
+        const globalDir = ConfigStore.globalConfigDir()
         await mkdir( globalDir, { recursive: true } )
 
         const now = new Date().toISOString()
@@ -5758,15 +5416,15 @@ allowlist, migrate-config, etc.).
             }
         }
 
-        const { config: mergedGlobalConfig } = FlowMcpCli.#mergeConfig( {
+        const { config: mergedGlobalConfig } = ConfigStore.mergeConfig( {
             'existing': existingGlobalConfig || {},
             'updates': globalConfigUpdates
         } )
 
         mergedGlobalConfig[ 'envPath' ] = envPath
-        await FlowMcpCli.#writeGlobalConfig( { 'config': mergedGlobalConfig } )
+        await ConfigStore.writeGlobalConfig( { 'config': mergedGlobalConfig } )
 
-        const schemasDir = FlowMcpCli.#schemasDir()
+        const schemasDir = ConfigStore.schemasDir()
         let schemaSourceCount = 0
         try {
             const entries = await readdir( schemasDir )
@@ -5780,7 +5438,7 @@ allowlist, migrate-config, etc.).
                     return count
                 } ), Promise.resolve( 0 ) )
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-018', 'location': 'manualInstall: schemas dir scan failed', err } )
+            CliOutput.emitCoded( { 'code': 'CLI-018', 'location': 'manualInstall: schemas dir scan failed', err } )
             schemaSourceCount = 0
         }
 
@@ -5790,31 +5448,31 @@ allowlist, migrate-config, etc.).
             const demoDir = join( schemasDir, 'demo' )
             await mkdir( demoDir, { recursive: true } )
             const { content: demoContent } = FlowMcpCli.#createDemoSchema()
-            await FlowMcpCli.#writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
+            await FsUtils.writeGuarded( { 'path': join( demoDir, 'ping.mjs' ), 'content': demoContent, 'onExists': 'overwrite' } )
             console.log( `  ${chalk.green( '\u2713' )} Demo schema created` )
         }
 
         const localDir = join( cwd, appConfig[ 'localConfigDirName' ] )
         await mkdir( localDir, { recursive: true } )
         const localConfigPath = join( localDir, 'config.json' )
-        const { data: existingLocalConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: existingLocalConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
-        const { config: mergedLocalConfig } = FlowMcpCli.#mergeConfig( {
+        const { config: mergedLocalConfig } = ConfigStore.mergeConfig( {
             'existing': existingLocalConfig || {},
             'updates': { 'root': `~/${appConfig[ 'globalConfigDirName' ]}` }
         } )
 
-        await FlowMcpCli.#writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': localConfigPath, 'content': JSON.stringify( mergedLocalConfig, null, 4 ), 'onExists': 'overwrite' } )
 
         console.log( '' )
-        console.log( `  ${chalk.green( '\u2713' )} Global config saved to ${chalk.gray( FlowMcpCli.#globalConfigPath() )}` )
+        console.log( `  ${chalk.green( '\u2713' )} Global config saved to ${chalk.gray( ConfigStore.globalConfigPath() )}` )
         console.log( `  ${chalk.green( '\u2713' )} Local config saved to ${chalk.gray( localConfigPath )}` )
         console.log( '' )
 
         // F19=B (Memo 152): init is schemaFolders[]-only. No network download,
         // no legacy group creation (Memo 099 replaced groups with selections).
         console.log( `  ${chalk.cyan( 'Next:' )} register a v4 schema folder in ${chalk.bold( 'schemaFolders[]' )}` )
-        console.log( `  of ${chalk.gray( FlowMcpCli.#globalConfigPath() )}:` )
+        console.log( `  of ${chalk.gray( ConfigStore.globalConfigPath() )}:` )
         console.log( '      "schemaFolders": [ { "name": "<source>", "path": "<abs-path-to-schemas>" } ]' )
         console.log( `  then run ${chalk.bold( 'flowmcp list' )} to see the available tools.` )
         console.log( '' )
@@ -5869,7 +5527,7 @@ allowlist, migrate-config, etc.).
 
             console.log( `  ${chalk.green( '✓' )} ${varCount} variable${varCount !== 1 ? 's' : ''} found` )
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'ENV-002', 'location': 'promptEnvPath: env file read failed', err } )
+            CliOutput.emitCoded( { 'code': 'ENV-002', 'location': 'promptEnvPath: env file read failed', err } )
             console.log( `  ${chalk.yellow( '!' )} File will be created on first use` )
         }
 
@@ -5898,7 +5556,7 @@ allowlist, migrate-config, etc.).
                                 version = pkg[ 'version' ] || 'unknown'
                             }
                         } catch( err ) {
-                            FlowMcpCli.#emitCoded( { 'code': 'CLI-019', 'location': 'detectCoreInfo: package.json parse failed', err } )
+                            CliOutput.emitCoded( { 'code': 'CLI-019', 'location': 'detectCoreInfo: package.json parse failed', err } )
                         }
                     }
 
@@ -5910,7 +5568,7 @@ allowlist, migrate-config, etc.).
 
             return { version, commit, schemaSpec }
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-020', 'location': 'detectCoreInfo: core resolution failed', err } )
+            CliOutput.emitCoded( { 'code': 'CLI-020', 'location': 'detectCoreInfo: core resolution failed', err } )
             return {
                 'version': 'unknown',
                 'commit': 'unknown',
@@ -6445,7 +6103,7 @@ allowlist, migrate-config, etc.).
     // internal: test access only — Memo 149 Strang B. The single source of truth for a
     // schema's on-disk file path.
     static async _testHook_resolveSchemaFilePath( { schemaRef } ) {
-        return await FlowMcpCli.#resolveSchemaFilePath( { schemaRef } )
+        return await SchemaSource.resolveSchemaFilePath( { schemaRef } )
     }
 
 
@@ -6603,7 +6261,7 @@ allowlist, migrate-config, etc.).
                 try {
                     resolvedPath = req.resolve( lib )
                 } catch( resolveErr ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'LIB-002', 'location': 'loadOneLibrary: require base could not resolve lib', 'err': resolveErr } )
+                    CliOutput.emitCoded( { 'code': 'LIB-002', 'location': 'loadOneLibrary: require base could not resolve lib', 'err': resolveErr } )
                     return acc
                 }
 
@@ -6645,12 +6303,12 @@ allowlist, migrate-config, etc.).
     // noop.cjs inside it (the file need not exist; only its directory is used to seed module resolution).
     // Folder presence IS the gate (F7=A): a lib only resolves here if it was deliberately installed.
     static async #resolveAllowedLibrariesBase() {
-        const defaultBase = join( FlowMcpCli.#globalConfigDir(), 'allowed-libraries' )
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': FlowMcpCli.#globalConfigPath() } )
+        const defaultBase = join( ConfigStore.globalConfigDir(), 'allowed-libraries' )
+        const { data: globalConfig } = await FsUtils.readJson( { 'filePath': ConfigStore.globalConfigPath() } )
         const rawValue = globalConfig ? globalConfig[ 'allowedLibrariesPath' ] : null
         const configured = typeof rawValue === 'string' && rawValue.length > 0 ? rawValue : null
         const allowedLibrariesPathRaw = configured || defaultBase
-        const { resolvedPath } = FlowMcpCli.#resolvePath( { 'path': allowedLibrariesPathRaw } )
+        const { resolvedPath } = ConfigStore.resolvePath( { 'path': allowedLibrariesPathRaw } )
 
         return { 'allowedLibrariesBase': resolvedPath, allowedLibrariesPathRaw, 'configured': configured !== null }
     }
@@ -6670,7 +6328,7 @@ allowlist, migrate-config, etc.).
         try {
             topEntries = readdirSync( nodeModulesDir, { 'withFileTypes': true } )
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'LIB-003', 'location': 'listInstalledLibraries: node_modules unreadable', err } )
+            CliOutput.emitCoded( { 'code': 'LIB-003', 'location': 'listInstalledLibraries: node_modules unreadable', err } )
 
             return { 'installed': [] }
         }
@@ -6748,7 +6406,7 @@ allowlist, migrate-config, etc.).
                     sharedLists = resolved[ 'sharedLists' ] || {}
                 }
             } catch( err ) {
-                FlowMcpCli.#emitCoded( { 'code': 'LST-003', 'location': 'resolveSharedListsForSchema: shared list resolution failed', err } )
+                CliOutput.emitCoded( { 'code': 'LST-003', 'location': 'resolveSharedListsForSchema: shared list resolution failed', err } )
                 sharedLists = {}
             }
         }
@@ -6890,7 +6548,7 @@ allowlist, migrate-config, etc.).
 
     static async #resolveActiveToolRefs( { cwd } ) {
         const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FlowMcpCli.#readJson( { filePath: localConfigPath } )
+        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
 
         if( !localConfig ) {
             return { 'toolRefs': [], 'source': null }
@@ -6953,7 +6611,7 @@ allowlist, migrate-config, etc.).
                     .reduce( ( schemaPromise, schemaEntry ) => schemaPromise.then( async () => {
                         const { file, requiredServerParams } = schemaEntry
                         const schemaRef = `${sourceName}/${file}`
-                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+                        const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
                         const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
 
                         if( main ) {
@@ -6974,55 +6632,7 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #error( { error, fix, code = null, severity = null } ) {
-        const result = { 'status': false, error }
-        // Memo 149 Strang C — carry a machine-readable code (and optional severity) when
-        // provided. If the caller passed no explicit code but the message already begins
-        // with a PREFIX-NNN, surface that so coded messages self-describe.
-        const derivedCode = code || FlowMcpCli.#extractErrorCode( { 'message': error } )
-        if( derivedCode ) {
-            result[ 'code' ] = derivedCode
-        }
-        if( severity ) {
-            result[ 'severity' ] = severity
-        }
-        if( fix ) {
-            result[ 'fix' ] = fix
-        }
 
-        return result
-    }
-
-
-    // Memo 149 Strang C — extract a PREFIX-NNN code from a message (node-error-codes
-    // regex). Returns null when the message carries no code.
-    static #extractErrorCode( { message } ) {
-        if( typeof message !== 'string' ) {
-            return null
-        }
-
-        const match = message.match( ERROR_CODE_PATTERN )
-
-        return match ? match[ 1 ] : null
-    }
-
-
-    // Memo 149 Strang C — coded stderr note for a non-fatal caught failure on a
-    // best-effort/degrading path. A benign absence (ENOENT/ENOTDIR — a cache, seal or
-    // optional dir/file that simply does not exist yet) is the normal empty state and
-    // stays quiet; any other cause is surfaced (coded) to stderr so the census + doctor
-    // stay aware while stdout JSON remains clean. The `code` string literal at the call
-    // site is what the census reads.
-    static #emitCoded( { code, location, err } ) {
-        const errCode = err && err.code
-        const benignAbsence = errCode === 'ENOENT' || errCode === 'ENOTDIR'
-        if( benignAbsence ) {
-            return
-        }
-
-        const detail = err && err.message ? err.message : String( err )
-        process.stderr.write( `${code} ${location}: ${detail}\n` )
-    }
 
 
     // Memo 149 Strang D — the CLI's own version, read from its package.json (same
@@ -7037,7 +6647,7 @@ allowlist, migrate-config, etc.).
 
             return { 'name': pkg[ 'name' ] || appConfig[ 'appName' ], 'version': pkg[ 'version' ] || 'unknown' }
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-028', 'location': 'cliVersion: package.json unreadable', err } )
+            CliOutput.emitCoded( { 'code': 'CLI-028', 'location': 'cliVersion: package.json unreadable', err } )
 
             return { 'name': appConfig[ 'appName' ], 'version': 'unknown' }
         }
@@ -7061,9 +6671,9 @@ allowlist, migrate-config, etc.).
     // error code, offline by default (no per-schema live probe). Builds on the same pieces
     // as #healthCheck but generalized to the single-source config model (Memo 099).
     static async doctor( { cwd } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix, 'code': 'CFG-001' } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix, 'code': 'CFG-001' } )
 
             return { result }
         }
@@ -7072,7 +6682,7 @@ allowlist, migrate-config, etc.).
         const checks = []
 
         // Check 1 — config single-source: every schemaFolders[] path must exist on disk.
-        const { schemaFolders, error: foldersError } = await FlowMcpCli.#readSchemaFolders()
+        const { schemaFolders, error: foldersError } = await ConfigStore.readSchemaFolders()
         if( foldersError !== undefined && foldersError !== null ) {
             checks.push( { 'check': 'config-single-source', 'severity': 'ERROR', 'ok': false, 'code': 'CFG-002', 'detail': foldersError } )
         } else if( schemaFolders.length === 0 ) {
@@ -7130,7 +6740,7 @@ allowlist, migrate-config, etc.).
                     .forEach( ( key ) => envKeysNeeded.add( key ) )
 
                 if( sharedListRefs.length > 0 ) {
-                    const { filePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: file } )
+                    const { filePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: file } )
                     const { listsDir } = FlowMcpCli.#findListsDir( { filePath } )
 
                     if( !listsDir ) {
@@ -7198,9 +6808,9 @@ allowlist, migrate-config, etc.).
 
         // Check 6 — key-coverage (INFO: missing keys disable individual tools, they are
         // not a structural failure of the install).
-        const { config } = await FlowMcpCli.#readConfig( { cwd } )
+        const { config } = await ConfigStore.readConfig( { cwd } )
         const { envPath } = config
-        const { data: envContent } = await FlowMcpCli.#readText( { filePath: envPath } )
+        const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
             ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
             : {}
@@ -7295,15 +6905,6 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // PRD-4.1 — progress sink. Grading runs are slow (per-schema live pretests), so
-    // by default we tick to STDERR while running (Befund B: no progress). The machine
-    // JSON stays on STDOUT untouched. --quiet (quiet === true) silences the ticks.
-    // Stderr is chosen so a piped `... | jq` on stdout is never polluted.
-    static #emitProgress( { quiet, message } ) {
-        if( quiet === true ) { return }
-        process.stderr.write( `[grading] ${message}\n` )
-    }
-
 
     // PRD-4.2 — concise human summary for a deterministic result, to STDERR.
     // JSON-shape audit conclusion: NO machine key is dropped/renamed (rollup +
@@ -7344,21 +6945,6 @@ allowlist, migrate-config, etc.).
         process.stderr.write( lines.join( '\n' ) + '\n' )
     }
 
-
-    static async #requireInit() {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
-
-        if( !globalConfig || !globalConfig[ 'initialized' ] ) {
-            return {
-                'initialized': false,
-                'error': `Not initialized. Run: ${appConfig[ 'cliCommand' ]} init`,
-                'fix': `Ask the user to run: ${appConfig[ 'cliCommand' ]} init`
-            }
-        }
-
-        return { 'initialized': true, 'error': null, 'fix': null }
-    }
 
 
     static #collectRequiredModules( { registrySchemas } ) {
@@ -7448,7 +7034,7 @@ allowlist, migrate-config, etc.).
                 await source[ 'schemas' ]
                     .reduce( ( innerPromise, schemaInfo ) => innerPromise.then( async () => {
                         const { file } = schemaInfo
-                        const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef: `${source[ 'name' ]}/${file}` } )
+                        const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef: `${source[ 'name' ]}/${file}` } )
                         const { main, handlersFn, error } = await FlowMcpCli.#loadSchema( { filePath } )
 
                         if( main ) {
@@ -7596,12 +7182,10 @@ allowlist, migrate-config, etc.).
 
     // Memo 152 / PRD-012 (B-07) — v4 is a hard dependency of the CLI: the v4 core
     // surface is statically imported (no dynamic import, no CLI-022 degradation).
-    // This returns the v4 module shape the validate path consumes; the #v4Override
-    // test seam stays for now (removed in D-11/Phase 4).
+    // Delegates to ModuleRegistry (PRD-017/D-02), which owns the v4/grading
+    // injection seam; the __testInject* hooks route through ModuleRegistry.inject.
     static #v4Module() {
-        if( FlowMcpCli.#v4Override ) { return FlowMcpCli.#v4Override }
-
-        return { MainValidator, MetaGenerator, SkillValidator, SelectionValidator }
+        return ModuleRegistry.getV4()
     }
 
 
@@ -7610,12 +7194,10 @@ allowlist, migrate-config, etc.).
     //   "flowmcp-grading": "github:FlowMCP/flowmcp-grading#e911958e91b75799b6efd78c99ebdbe5da103288"
     // (For local cross-repo development, swap to "file:../flowmcp-grading".)
     static async #loadGradingModule() {
-        if( FlowMcpCli.#gradingOverride ) { return FlowMcpCli.#gradingOverride }
         try {
-            const grading = await import( 'flowmcp-grading' )
-            return grading
+            return await ModuleRegistry.getGrading()
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'GRD-001', 'location': 'loadGradingModule: flowmcp-grading import failed', err } )
+            CliOutput.emitCoded( { 'code': 'GRD-001', 'location': 'loadGradingModule: flowmcp-grading import failed', err } )
             return null
         }
     }
@@ -7723,35 +7305,8 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async #loadGlobalConfig() {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { filePath: globalConfigPath } )
-
-        return { globalConfig: globalConfig || {} }
-    }
 
 
-
-    static async #readJsonFile( { filePath } ) {
-        const { data } = await FlowMcpCli.#readJson( { filePath } )
-
-        return data
-    }
-
-
-    static #getCatalogDir( { globalConfig } ) {
-        const sources = globalConfig[ 'sources' ] || {}
-        const sourceNames = Object.keys( sources )
-
-        if( sourceNames.length === 0 ) {
-            return FlowMcpCli.#schemasDir()
-        }
-
-        const firstSource = sourceNames[ 0 ]
-        const catalogDir = join( FlowMcpCli.#schemasDir(), firstSource )
-
-        return catalogDir
-    }
 
 
     // Retained for importAgent (G-11 stranded command) until its removal in
@@ -7765,29 +7320,29 @@ allowlist, migrate-config, etc.).
         }
 
         const firstSource = sourceNames[ 0 ]
-        const registryPath = join( FlowMcpCli.#schemasDir(), firstSource, '_registry.json' )
+        const registryPath = join( ConfigStore.schemasDir(), firstSource, '_registry.json' )
 
         return registryPath
     }
 
 
     static async importAgent( { agentName, cwd } ) {
-        const { initialized, error, fix } = await FlowMcpCli.#requireInit()
+        const { initialized, error, fix } = await ConfigStore.requireInit()
 
         if( !initialized ) {
-            return { result: FlowMcpCli.#error( { error, fix } ) }
+            return { result: CliOutput.error( { error, fix } ) }
         }
 
         if( !agentName ) {
-            return { result: FlowMcpCli.#error( { error: 'Missing agent name', fix: 'flowmcp import-agent <agent-name>' } ) }
+            return { result: CliOutput.error( { error: 'Missing agent name', fix: 'flowmcp import-agent <agent-name>' } ) }
         }
 
-        const { globalConfig } = await FlowMcpCli.#loadGlobalConfig()
+        const { globalConfig } = await ConfigStore.loadGlobalConfig()
         const registryPath = FlowMcpCli.#getRegistryPath( { globalConfig } )
-        const registryData = await FlowMcpCli.#readJsonFile( { filePath: registryPath } )
+        const registryData = await FsUtils.readJsonFile( { filePath: registryPath } )
 
         if( !registryData ) {
-            return { result: FlowMcpCli.#error( { error: 'No registry found', fix: 'Run "flowmcp import-registry <url>" first' } ) }
+            return { result: CliOutput.error( { error: 'No registry found', fix: 'Run "flowmcp import-registry <url>" first' } ) }
         }
 
         const agents = registryData[ 'agents' ] || []
@@ -7807,23 +7362,23 @@ allowlist, migrate-config, etc.).
                 } )
                 .join( ', ' )
 
-            return { result: FlowMcpCli.#error( { error: `Agent "${agentName}" not found in registry`, fix: `Available agents: ${availableNames || 'none'}` } ) }
+            return { result: CliOutput.error( { error: `Agent "${agentName}" not found in registry`, fix: `Available agents: ${availableNames || 'none'}` } ) }
         }
 
         const manifestPath = agentEntry[ 'manifest' ]
-        const catalogDir = FlowMcpCli.#getCatalogDir( { globalConfig } )
+        const catalogDir = ConfigStore.getCatalogDir( { globalConfig } )
         const fullManifestPath = `${catalogDir}/${manifestPath}`
 
         let manifest = null
 
         try {
-            manifest = await FlowMcpCli.#readJsonFile( { filePath: fullManifestPath } )
+            manifest = await FsUtils.readJsonFile( { filePath: fullManifestPath } )
         } catch( err ) {
-            return { result: FlowMcpCli.#error( { error: `IMP-003 importAgent: Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
+            return { result: CliOutput.error( { error: `IMP-003 importAgent: Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
         }
 
         if( !manifest ) {
-            return { result: FlowMcpCli.#error( { error: `Manifest not found at ${fullManifestPath}`, fix: 'Re-run "flowmcp import-registry <url>" to download' } ) }
+            return { result: CliOutput.error( { error: `Manifest not found at ${fullManifestPath}`, fix: 'Re-run "flowmcp import-registry <url>" to download' } ) }
         }
 
         const tools = manifest[ 'tools' ] || []
@@ -7858,7 +7413,7 @@ allowlist, migrate-config, etc.).
 
     static async validateCatalog( { catalogDir, cwd } ) {
         if( !catalogDir ) {
-            return { result: FlowMcpCli.#error( { error: 'Missing catalog directory', fix: 'flowmcp validate-catalog <catalog-directory>' } ) }
+            return { result: CliOutput.error( { error: 'Missing catalog directory', fix: 'flowmcp validate-catalog <catalog-directory>' } ) }
         }
 
         const registryPath = join( catalogDir, 'registry.json' )
@@ -7964,7 +7519,7 @@ allowlist, migrate-config, etc.).
             const fileUrl = pathToFileURL( resolvedPath ).href
             schemaModule = await import( fileUrl )
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `SQL-015 resourceCreate: Failed to load schema: ${err.message}`,
                 'fix': 'Ensure the schema file exports a valid "main" object.'
             } )
@@ -7974,7 +7529,7 @@ allowlist, migrate-config, etc.).
 
         const main = schemaModule[ 'main' ]
         if( !main ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': 'Schema does not export "main".',
                 'fix': 'The schema file must export const main = { ... }'
             } )
@@ -8065,7 +7620,7 @@ allowlist, migrate-config, etc.).
                         'tables': tableStatements.length
                     } )
                 } catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'SQL-016', 'location': 'resourceCreate: db creation failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SQL-016', 'location': 'resourceCreate: db creation failed', err } )
                     failed += 1
                     results.push( { resourceName, dbPath, 'action': 'failed', 'reason': err.message } )
                 }
@@ -8103,21 +7658,21 @@ allowlist, migrate-config, etc.).
 
 
     static async resourceMigrate( { cwd, basis = 'flowmcp', dryRun = false, autoConfirm = false } ) {
-        const { initialized, error: initError, fix: initFix } = await FlowMcpCli.#requireInit()
+        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
-            const result = FlowMcpCli.#error( { 'error': initError, 'fix': initFix } )
+            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
 
             return { result }
         }
 
-        const schemasDir = FlowMcpCli.#schemasDir()
+        const schemasDir = ConfigStore.schemasDir()
         let schemaFiles = []
 
         try {
             const { files } = await FlowMcpCli.#findSchemaFiles( { 'dirPath': schemasDir } )
             schemaFiles = files
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'SQL-017', 'location': 'resourceMigrate: schema files scan failed', err } )
+            CliOutput.emitCoded( { 'code': 'SQL-017', 'location': 'resourceMigrate: schema files scan failed', err } )
             schemaFiles = []
         }
 
@@ -8162,7 +7717,7 @@ allowlist, migrate-config, etc.).
                         } )
                 } catch( err ) {
                     // Skip schemas that fail to load
-                    FlowMcpCli.#emitCoded( { 'code': 'SQL-018', 'location': 'resourceMigrate: schema module load failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SQL-018', 'location': 'resourceMigrate: schema module load failed', err } )
                 }
             } ), Promise.resolve() )
 
@@ -8282,7 +7837,7 @@ allowlist, migrate-config, etc.).
                         'action': 'migrated'
                     } )
                 } catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'SQL-019', 'location': 'resourceMigrate: rename failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SQL-019', 'location': 'resourceMigrate: rename failed', err } )
                     migrateFailed += 1
                     results.push( {
                         schemaFile,
@@ -8442,7 +7997,7 @@ allowlist, migrate-config, etc.).
 
         try {
             // Memo 149 Strang B — single-source helper (was: join( #schemasDir(), matchedFile )).
-            const { filePath: schemaFilePath } = await FlowMcpCli.#resolveSchemaFilePath( { schemaRef: matchedFile } )
+            const { filePath: schemaFilePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: matchedFile } )
             const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( {
                 'main': matchedMain,
                 'handlersFn': matchedHandlersFn,
@@ -8474,7 +8029,7 @@ allowlist, migrate-config, etc.).
 
             return { result }
         } catch( err ) {
-            const result = FlowMcpCli.#error( {
+            const result = CliOutput.error( {
                 'error': `SQL-020 callResourceQuery: Resource query failed: ${err.message}`,
                 'fix': 'Check that the database file exists and is accessible.'
             } )
@@ -8763,7 +8318,7 @@ allowlist, migrate-config, etc.).
         try {
             const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
             // Namespace-index cache refresh is a deliberate, named overwrite (Memo 068 R2).
-            await FlowMcpCli.#writeGuarded( { 'path': cachePath, 'content': JSON.stringify( index, null, 4 ), 'onExists': 'overwrite' } )
+            await FsUtils.writeGuarded( { 'path': cachePath, 'content': JSON.stringify( index, null, 4 ), 'onExists': 'overwrite' } )
 
             return { 'success': true, 'path': cachePath }
         } catch( err ) {
@@ -8780,7 +8335,7 @@ allowlist, migrate-config, etc.).
             try {
                 content = await readFile( cachePath, 'utf-8' )
             } catch( err ) {
-                FlowMcpCli.#emitCoded( { 'code': 'CCH-009', 'location': 'readNamespaceIndexCache: cache read failed', err } )
+                CliOutput.emitCoded( { 'code': 'CCH-009', 'location': 'readNamespaceIndexCache: cache read failed', err } )
                 return { 'exists': false, 'index': null }
             }
 
@@ -8882,7 +8437,7 @@ allowlist, migrate-config, etc.).
 
     static async #tryLoadSingleSchema( { schemaRef } ) {
         try {
-            const { filePath } = await FlowMcpCli.#resolveSchemaPath( { schemaRef } )
+            const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
             const { main, handlersFn } = await FlowMcpCli.#loadSchema( { filePath } )
 
             return { main, handlersFn }
@@ -8901,7 +8456,7 @@ allowlist, migrate-config, etc.).
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error.
         if( resolveError !== null && resolveError !== undefined ) {
-            const errorResult = FlowMcpCli.#error( { 'error': resolveError, 'fix': resolveFix } )
+            const errorResult = CliOutput.error( { 'error': resolveError, 'fix': resolveFix } )
 
             return { 'resolvedSchemas': [], errorResult }
         }
@@ -8913,7 +8468,7 @@ allowlist, migrate-config, etc.).
             : allSchemas.filter( ( entry ) => entry[ 'source' ] === sourceFilter )
 
         if( ( sourceFilter !== null && sourceFilter !== undefined ) && resolvedSchemas.length === 0 ) {
-            const errorResult = FlowMcpCli.#error( {
+            const errorResult = CliOutput.error( {
                 'error': `No schemaFolders[] source named "${sourceFilter}" provides the requested tool.`,
                 'fix': `Check the source name (run "${appConfig[ 'cliCommand' ]} call list-tools" to see each tool's "source"), or drop the "<source>:" prefix.`
             } )
@@ -9156,7 +8711,7 @@ allowlist, migrate-config, etc.).
             return { result }
         }
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const changes = []
         let entriesMigrated = 0
         let entriesSkipped = 0
@@ -9309,10 +8864,10 @@ allowlist, migrate-config, etc.).
 
         if( !dryRun && !nothingChanged ) {
             const backupPath = `${configPath}.bak`
-            await FlowMcpCli.#writeGuarded( { 'path': backupPath, 'content': rawContent, 'onExists': 'overwrite' } )
+            await FsUtils.writeGuarded( { 'path': backupPath, 'content': rawContent, 'onExists': 'overwrite' } )
             backup = backupPath
 
-            await FlowMcpCli.#writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
+            await FsUtils.writeGuarded( { 'path': configPath, 'content': JSON.stringify( config, null, 4 ), 'onExists': 'overwrite' } )
         }
 
         const result = {
@@ -9422,7 +8977,7 @@ allowlist, migrate-config, etc.).
         // const { status, messages } = Validation.selectionList( { cwd } )
         // if( !status ) { Validation.error( { messages } ) }
 
-        const schemasBaseDir = FlowMcpCli.#schemasDir()
+        const schemasBaseDir = ConfigStore.schemasDir()
         const { sources } = await FlowMcpCli.#listSources()
 
         const sourceDirs = sources
@@ -9437,7 +8992,7 @@ allowlist, migrate-config, etc.).
                 try {
                     entries = await readdir( sourceDir, { recursive: true } )
                 } catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'SEL-001', 'location': 'selectionList: source dir read failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SEL-001', 'location': 'selectionList: source dir read failed', err } )
                     return
                 }
 
@@ -9481,7 +9036,7 @@ allowlist, migrate-config, etc.).
                             selections.push( entry )
                         } catch( err ) {
                             // skip unreadable files
-                            FlowMcpCli.#emitCoded( { 'code': 'SEL-002', 'location': 'selectionList: selection file load failed', err } )
+                            CliOutput.emitCoded( { 'code': 'SEL-002', 'location': 'selectionList: selection file load failed', err } )
                         }
                     } ), Promise.resolve() )
             } ), Promise.resolve() )
@@ -9609,19 +9164,13 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #v4Override = null
-
-
     static __testInjectV4( { v4 } ) {
-        FlowMcpCli.#v4Override = v4
+        ModuleRegistry.inject( { v4 } )
     }
 
 
-    static #gradingOverride = null
-
-
     static __testInjectGrading( { grading } ) {
-        FlowMcpCli.#gradingOverride = grading
+        ModuleRegistry.inject( { grading } )
     }
 
 
@@ -9651,7 +9200,7 @@ allowlist, migrate-config, etc.).
         }
         const home = homedir()
         const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        const { data: globalConfig } = await FsUtils.readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
         if( globalConfig !== null && typeof globalConfig[ 'gradingDataDir' ] === 'string' && globalConfig[ 'gradingDataDir' ].length > 0 ) {
             return resolve( globalConfigDir, globalConfig[ 'gradingDataDir' ] )
         }
@@ -9680,7 +9229,7 @@ allowlist, migrate-config, etc.).
         }
         const home = homedir()
         const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        const { data: globalConfig } = await FsUtils.readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
         if( globalConfig !== null && typeof globalConfig[ 'grading' ] === 'object' && globalConfig[ 'grading' ] !== null && globalConfig[ 'grading' ][ 'useKeys' ] === true ) {
             return { useKeys: true }
         }
@@ -9709,19 +9258,19 @@ allowlist, migrate-config, etc.).
     // config (init must run first) and never blind-writes — it reads the existing
     // config, sets only the requested key(s), and writes back via the guarded writer.
     static async gradingConfig( { cwd, setDataDir, setExportDir, json } ) {
-        const globalConfigPath = FlowMcpCli.#globalConfigPath()
-        const { data: existingConfig } = await FlowMcpCli.#readJson( { 'filePath': globalConfigPath } )
+        const globalConfigPath = ConfigStore.globalConfigPath()
+        const { data: existingConfig } = await FsUtils.readJson( { 'filePath': globalConfigPath } )
         if( existingConfig === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Global config not found at ${globalConfigPath}.`, 'fix': `Run "${appConfig[ 'cliCommand' ]} init" first to create it.` } ) }
+            return { 'result': CliOutput.error( { 'error': `Global config not found at ${globalConfigPath}.`, 'fix': `Run "${appConfig[ 'cliCommand' ]} init" first to create it.` } ) }
         }
 
         const wantsSet = setDataDir !== null || setExportDir !== null
 
         if( setDataDir !== null && ( typeof setDataDir !== 'string' || setDataDir.length === 0 ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': '--set-data-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-data-dir <path>` } ) }
+            return { 'result': CliOutput.error( { 'error': '--set-data-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-data-dir <path>` } ) }
         }
         if( setExportDir !== null && ( typeof setExportDir !== 'string' || setExportDir.length === 0 ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': '--set-export-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-export-dir <path>` } ) }
+            return { 'result': CliOutput.error( { 'error': '--set-export-dir requires a non-empty path.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading config --set-export-dir <path>` } ) }
         }
 
         if( wantsSet === true ) {
@@ -9734,10 +9283,10 @@ allowlist, migrate-config, etc.).
             if( setDataDir !== null ) { nextConfig[ 'gradingDataDir' ] = setDataDir }
             if( setExportDir !== null ) { nextConfig[ 'gradingExportDir' ] = setExportDir }
 
-            await FlowMcpCli.#writeGlobalConfig( { 'config': nextConfig } )
+            await ConfigStore.writeGlobalConfig( { 'config': nextConfig } )
         }
 
-        const { data: currentConfig } = await FlowMcpCli.#readJson( { 'filePath': globalConfigPath } )
+        const { data: currentConfig } = await FsUtils.readJson( { 'filePath': globalConfigPath } )
         const storedDataDir = typeof currentConfig[ 'gradingDataDir' ] === 'string' && currentConfig[ 'gradingDataDir' ].length > 0 ? currentConfig[ 'gradingDataDir' ] : null
         const storedExportDir = typeof currentConfig[ 'gradingExportDir' ] === 'string' && currentConfig[ 'gradingExportDir' ].length > 0 ? currentConfig[ 'gradingExportDir' ] : null
         const resolvedDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, 'gradingDataDir': null } )
@@ -9776,7 +9325,7 @@ allowlist, migrate-config, etc.).
         }
         const home = homedir()
         const globalConfigDir = join( home, appConfig[ 'globalConfigDirName' ] )
-        const { data: globalConfig } = await FlowMcpCli.#readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
+        const { data: globalConfig } = await FsUtils.readJson( { 'filePath': join( globalConfigDir, 'config.json' ) } )
         if( globalConfig !== null && typeof globalConfig[ 'gradingExportDir' ] === 'string' && globalConfig[ 'gradingExportDir' ].length > 0 ) {
             return resolve( globalConfigDir, globalConfig[ 'gradingExportDir' ] )
         }
@@ -10061,7 +9610,7 @@ allowlist, migrate-config, etc.).
         // (b) quality < stable — report only. Read the rollup status; if it is
         // below `stable` we surface it but do NOT block emit-prompts (the run is
         // exactly how a target moves toward stable). The report is in the chain.
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': indexPath } )
         const rollup = index && index[ 'status' ] ? index[ 'status' ] : 'pending'
         if( rollup !== 'stable' ) {
             chain.push( { 'step': 'quality-report', 'rollupStatus': rollup, 'note': 'below stable — report only, no downgrade' } )
@@ -10085,7 +9634,7 @@ allowlist, migrate-config, etc.).
     // dropped — so a caller can grade against an out-of-config source on purpose.
     static async #resolveMissingSelectionMembers( { cwd, grading, gradingDataRoot, targetDir, target, memberSource, chain } ) {
         const indexPath = join( targetDir, 'index.json' )
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': indexPath } )
         if( index === null || index[ 'members' ] === undefined ) { return { 'status': true } }
 
         const missing = Object.entries( index[ 'members' ] )
@@ -10164,17 +9713,17 @@ allowlist, migrate-config, etc.).
     static async gradingExport( { cwd, target, onConflict, gradingDataDir, gradingExportDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'GradingExport' ] === undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing export target.', 'fix': 'Usage: flowmcp grading export <namespace|selection>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing export target.', 'fix': 'Usage: flowmcp grading export <namespace|selection>' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         const exportRoot = await FlowMcpCli.#gradingExportRoot( { cwd, gradingExportDir, gradingDataRoot } )
@@ -10226,14 +9775,14 @@ allowlist, migrate-config, etc.).
     static async gradingRun( { cwd, target, phase, runId = null, emitPrompts, consumeScores, onConflict, memberSource, gradingDataDir, gradingExportDir, maxIterations, maxTurns = null, withKeys, dryRun = false, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         // NO SILENT DEFAULT: maxIterations is opt-in. Absent → 1 (single pass, the
         // documented default). A supplied value must parse to a positive integer.
         const { maxIterations: maxIterationsResolved, error: maxIterationsError } = FlowMcpCli.#resolveMaxIterations( { maxIterations } )
         if( maxIterationsError !== null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': maxIterationsError, 'fix': 'Pass --max-iterations as a positive integer (default 1).' } ) }
+            return { 'result': CliOutput.error( { 'error': maxIterationsError, 'fix': 'Pass --max-iterations as a positive integer (default 1).' } ) }
         }
 
         // PRD-3.5 — the Goal-Block turn bound is configurable (was hardcoded 25). NO
@@ -10241,33 +9790,33 @@ allowlist, migrate-config, etc.).
         // parse to a positive integer.
         const { maxTurns: maxTurnsResolved, error: maxTurnsError } = FlowMcpCli.#resolveMaxTurns( { maxTurns } )
         if( maxTurnsError !== null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': maxTurnsError, 'fix': 'Pass --max-turns as a positive integer (default 25).' } ) }
+            return { 'result': CliOutput.error( { 'error': maxTurnsError, 'fix': 'Pass --max-turns as a positive integer (default 25).' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading non-deterministic <namespace|selection> --emit-prompts | --consume-scores <path>` } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing grading target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading non-deterministic <namespace|selection> --emit-prompts | --consume-scores <path>` } ) }
         }
 
         // NO SILENT DEFAULT for the mode — exactly one of emit/consume.
         if( emitPrompts !== true && ( consumeScores === null || consumeScores === undefined ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Mode required: --emit-prompts or --consume-scores <path>.', 'fix': 'Pick exactly one mode (2-phase grading, no default mode).' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Mode required: --emit-prompts or --consume-scores <path>.', 'fix': 'Pick exactly one mode (2-phase grading, no default mode).' } ) }
         }
         if( emitPrompts === true && consumeScores !== null && consumeScores !== undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Modes are mutually exclusive: pass either --emit-prompts or --consume-scores, not both.', 'fix': `Run --emit-prompts first, then --consume-scores in a separate call.` } ) }
+            return { 'result': CliOutput.error( { 'error': 'Modes are mutually exclusive: pass either --emit-prompts or --consume-scores, not both.', 'fix': `Run --emit-prompts first, then --consume-scores in a separate call.` } ) }
         }
 
         // NO SILENT DEFAULT for the conflict policy — explicit allowlist.
         const conflict = onConflict === null || onConflict === undefined ? 'skip' : onConflict
         const validConflicts = [ 'abort', 'skip', 'overwrite' ]
         if( validConflicts.includes( conflict ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Invalid --on-conflict value: ${conflict}`, 'fix': `Use one of: ${validConflicts.join( ', ' )}.` } ) }
+            return { 'result': CliOutput.error( { 'error': `Invalid --on-conflict value: ${conflict}`, 'fix': `Use one of: ${validConflicts.join( ', ' )}.` } ) }
         }
 
         // PRD-004 — resolve the --phase flag into a multi-area selector (3 modes,
         // no silent default). A bad token aborts before any emit (no partial emit).
         const areaSelector = FlowMcpCli.#resolveAreaSelector( { phase, grading } )
         if( areaSelector.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': areaSelector.error, 'fix': 'Pass --phase as a comma-separated set of known areas, or omit it for all applicable areas.' } ) }
+            return { 'result': CliOutput.error( { 'error': areaSelector.error, 'fix': 'Pass --phase as a comma-separated set of known areas, or omit it for all applicable areas.' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
@@ -10275,7 +9824,7 @@ allowlist, migrate-config, etc.).
         // F29 flow detection.
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         // F16 dependency resolver (auto-chain / report / abort). The chain is
@@ -10347,18 +9896,18 @@ allowlist, migrate-config, etc.).
     static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false, throttleMs = 0 } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading deterministic <namespace> | <namespace>/<schema> | <namespace>/tool/<name>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing grading target.', 'fix': 'Usage: flowmcp grading deterministic <namespace> | <namespace>/<schema> | <namespace>/tool/<name>' } ) }
         }
 
         // PRD-002 — validate the --only filter once (shared with `dev test`'s old
         // path). An unknown value is a HARD error (no silent skip).
         const { filter: onlyFilter, error: onlyError } = FlowMcpCli.#validateOnlyFilter( { only } )
         if( onlyError !== null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': onlyError } ) }
+            return { 'result': CliOutput.error( { 'error': onlyError } ) }
         }
 
         // Parse the Spec-ID. PRD-001 only accepts a schema-ID (1 slash) or a
@@ -10366,7 +9915,7 @@ allowlist, migrate-config, etc.).
         // Spec-IDs are out of scope here (no silent acceptance).
         const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
         if( parsed.valid !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': parsed.error, 'fix': 'Use a namespace "<namespace>", a schema-ID "<namespace>/<schema>", or a tool-ID "<namespace>/tool/<name>".' } ) }
+            return { 'result': CliOutput.error( { 'error': parsed.error, 'fix': 'Use a namespace "<namespace>", a schema-ID "<namespace>/<schema>", or a tool-ID "<namespace>/tool/<name>".' } ) }
         }
         // Memo 107 PRD-004 — bare namespace runs the deterministic grade over every
         // schema of the namespace ("one command per namespace") and produces ONE
@@ -10376,7 +9925,7 @@ allowlist, migrate-config, etc.).
             return FlowMcpCli.#gradingDeterministicNamespace( { cwd, 'namespace': parsed.namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, quiet, json, throttleMs } )
         }
         if( parsed.type !== 'schema' && parsed.type !== 'tool' && parsed.type !== 'test' ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
+            return { 'result': CliOutput.error( { 'error': `Spec-ID type "${parsed.type}" is not supported by grading deterministic (only namespace, schema-ID, tool-ID or per-test).`, 'fix': 'Use "<namespace>", "<namespace>/<schema>", "<namespace>/tool/<name>" or "<namespace>/tool/<name>/tests/<N>".' } ) }
         }
 
         const namespace = parsed.namespace
@@ -10395,7 +9944,7 @@ allowlist, migrate-config, etc.).
         // schemaFolders[] source is a coded hard error (SRC-001) — never silent.
         const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolvedSchemas.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+            return { 'result': CliOutput.error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
         }
         const liveSchemas = resolvedSchemas.schemas
 
@@ -10404,7 +9953,7 @@ allowlist, migrate-config, etc.).
         // tool match is surfaced with a visible note.
         const resolved = FlowMcpCli.#resolveDeterministicSchemaLive( { liveSchemas, parsed, namespace } )
         if( resolved.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
+            return { 'result': CliOutput.error( { 'error': resolved.error, 'fix': resolved.fix } ) }
         }
         const schemaName = resolved.schemaName
         const sourcePath = resolved.sourcePath
@@ -10433,7 +9982,7 @@ allowlist, migrate-config, etc.).
         // to the island (no summary.json / test-N.json). The deterministic path has
         // no Stage-3 writes, so dryRun here only gates the DataPretest persist.
         // PRD-4.1 — tick the slow part (live/cached pretest) to stderr.
-        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: structural validate + data pretest${force === true ? ' (--force re-fetch)' : ''}...` } )
+        CliOutput.emitProgress( { quiet, 'message': `${target}: structural validate + data pretest${force === true ? ' (--force re-fetch)' : ''}...` } )
 
         // PRD-2.2 — force threads the cache bypass into the pretest. Without it the
         // pretest reuses the persisted test-N.json (read-cache, PRD-2.1); with it the
@@ -10467,7 +10016,7 @@ allowlist, migrate-config, etc.).
             const toolResults = ( Array.isArray( pretest.results ) ? pretest.results : [] )
                 .filter( ( entry ) => entry[ 'name' ] === toolFilter )
             if( testIndex > toolResults.length ) {
-                return { 'result': FlowMcpCli.#error( { 'error': `Test index ${testIndex} is out of range for tool "${toolFilter}" (${toolResults.length} recorded test(s)).`, 'fix': `Address a test between 1 and ${toolResults.length}, or run the whole tool "${namespace}/tool/${toolFilter}".` } ) }
+                return { 'result': CliOutput.error( { 'error': `Test index ${testIndex} is out of range for tool "${toolFilter}" (${toolResults.length} recorded test(s)).`, 'fix': `Address a test between 1 and ${toolResults.length}, or run the whole tool "${namespace}/tool/${toolFilter}".` } ) }
             }
             const addressed = toolResults[ testIndex - 1 ]
             testScope = {
@@ -10500,7 +10049,7 @@ allowlist, migrate-config, etc.).
 
         // PRD-4.1 — done-tick with the data stamp (cache reuse vs re-fetch).
         const stamp = pretest.fromCache === true ? `cached, data ${pretest.dataAt}` : `fresh, data ${pretest.dataAt}`
-        FlowMcpCli.#emitProgress( { quiet, 'message': `${target}: ${status === true ? 'PASS' : 'FAIL'} (${stamp})` } )
+        CliOutput.emitProgress( { quiet, 'message': `${target}: ${status === true ? 'PASS' : 'FAIL'} (${stamp})` } )
 
         const result = {
             status,
@@ -10654,16 +10203,16 @@ allowlist, migrate-config, etc.).
     static async #gradingDeterministicNamespace( { cwd, namespace, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force = false, quiet = false, json, throttleMs = 0 } ) {
         const resolved = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolved.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': resolved.error, 'fix': resolved.fix } ) }
+            return { 'result': CliOutput.error( { 'error': resolved.error, 'fix': resolved.fix } ) }
         }
 
         const total = resolved.schemas.length
-        FlowMcpCli.#emitProgress( { quiet, 'message': `namespace ${namespace}: ${total} schema(s) to grade deterministically` } )
+        CliOutput.emitProgress( { quiet, 'message': `namespace ${namespace}: ${total} schema(s) to grade deterministically` } )
 
         const perSchema = []
         await resolved.schemas
             .reduce( ( promise, schema, index ) => promise.then( async () => {
-                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${total}] ${schema.schemaName}` } )
+                CliOutput.emitProgress( { quiet, 'message': `[${index + 1}/${total}] ${schema.schemaName}` } )
                 const sub = await FlowMcpCli.gradingDeterministic( {
                     cwd, 'target': `${namespace}/${schema.schemaName}`, gradingDataDir, gradingExportDir, withKeys, only, dryRun, force, 'quiet': true, json, 'skipRollup': true, throttleMs
                 } )
@@ -10712,29 +10261,29 @@ allowlist, migrate-config, etc.).
     static async gradingReload( { cwd, target, gradingDataDir, withKeys, quiet = false, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing reload target.', 'fix': 'Usage: flowmcp grading reload <namespace> | <namespace>/<schema>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing reload target.', 'fix': 'Usage: flowmcp grading reload <namespace> | <namespace>/<schema>' } ) }
         }
 
         const parsed = FlowMcpCli.#parseSpecId( { 'specId': target } )
         if( parsed.valid !== true || ( parsed.type !== 'namespace' && parsed.type !== 'schema' ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `grading reload accepts a namespace or a schema-ID, got "${target}".`, 'fix': 'Use "<namespace>" or "<namespace>/<schema>".' } ) }
+            return { 'result': CliOutput.error( { 'error': `grading reload accepts a namespace or a schema-ID, got "${target}".`, 'fix': 'Use "<namespace>" or "<namespace>/<schema>".' } ) }
         }
 
         const namespace = parsed.namespace
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
         if( resolvedSchemas.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+            return { 'result': CliOutput.error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
         }
 
         const targetSchemas = parsed.type === 'schema'
             ? resolvedSchemas.schemas.filter( ( s ) => s.schemaName === parsed.name )
             : resolvedSchemas.schemas
         if( targetSchemas.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Schema "${target}" not found in schemaFolders[].`, 'fix': 'Address an existing schema or namespace.' } ) }
+            return { 'result': CliOutput.error( { 'error': `Schema "${target}" not found in schemaFolders[].`, 'fix': 'Address an existing schema or namespace.' } ) }
         }
 
         const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
@@ -10742,10 +10291,10 @@ allowlist, migrate-config, etc.).
 
         const perSchema = []
         const reloadTotal = targetSchemas.length
-        FlowMcpCli.#emitProgress( { quiet, 'message': `reload ${target}: re-fetch ${reloadTotal} schema(s)...` } )
+        CliOutput.emitProgress( { quiet, 'message': `reload ${target}: re-fetch ${reloadTotal} schema(s)...` } )
         await targetSchemas
             .reduce( ( promise, schema, index ) => promise.then( async () => {
-                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${reloadTotal}] reload ${schema.schemaName}` } )
+                CliOutput.emitProgress( { quiet, 'message': `[${index + 1}/${reloadTotal}] reload ${schema.schemaName}` } )
                 const requiredServerParams = Array.isArray( schema.main[ 'requiredServerParams' ] ) ? schema.main[ 'requiredServerParams' ] : []
                 const serverParams = useKeys === true
                     ? FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } ).serverParams
@@ -11632,13 +11181,13 @@ allowlist, migrate-config, etc.).
         // collision), so when dryRun is set we never consult it: there is no write
         // that could collide. The conflict-gate below runs only for real writes.
         if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'abort' ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
+            return { 'result': CliOutput.error( { 'error': `NO-OVERWRITE conflict: ${promptsPath} already exists`, 'fix': 'Pass --on-conflict=skip to keep the existing handoff, or remove it deliberately.' } ) }
         }
         if( dryRun !== true && existsSync( promptsPath ) === true && conflict === 'skip' ) {
             // Skip the (slow) re-emit but still hand back the ALREADY-emitted skill, so
             // a second `--emit-prompts` keeps printing the skill text (no re-fetch). The
             // existing prompts.json is the source — read its emitSkill if present.
-            const { data: existing } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+            const { data: existing } = await FsUtils.readJson( { 'filePath': promptsPath } )
             const existingSkill = existing !== null && typeof existing[ 'emitSkill' ] === 'string' ? existing[ 'emitSkill' ] : undefined
             return { 'result': { 'status': true, 'stage': 1, 'mode': 'emit-prompts', 'skipped': true, promptsPath, statePath, 'emitSkill': existingSkill, dependencyChain } }
         }
@@ -11657,7 +11206,7 @@ allowlist, migrate-config, etc.).
         if( flow === 'provider' ) {
             const resolvedSchemas = await FlowMcpCli.#resolveSchemasForTarget( { namespace } )
             if( resolvedSchemas.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
+                return { 'result': CliOutput.error( { 'error': resolvedSchemas.error, 'fix': resolvedSchemas.fix } ) }
             }
             liveSchemas = resolvedSchemas.schemas
         } else {
@@ -11666,7 +11215,7 @@ allowlist, migrate-config, etc.).
             // <namespace>.<schemaName> member IDs — never from the island snapshot.
             const resolvedMembers = await FlowMcpCli.#resolveSelectionSchemasLive( { targetDir } )
             if( resolvedMembers.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': resolvedMembers.error, 'fix': resolvedMembers.fix } ) }
+                return { 'result': CliOutput.error( { 'error': resolvedMembers.error, 'fix': resolvedMembers.fix } ) }
             }
             liveSchemas = resolvedMembers.schemas
         }
@@ -11678,7 +11227,7 @@ allowlist, migrate-config, etc.).
             const match = liveSchemas.filter( ( s ) => s.schemaName === scopeName )
             if( match.length === 0 ) {
                 const available = liveSchemas.map( ( s ) => s.schemaName ).join( ', ' )
-                return { 'result': FlowMcpCli.#error( { 'error': `Unknown schema "${scopeName}" in namespace "${namespace}".`, 'fix': `Use one of: ${available} — or grade the whole namespace with "${namespace}".` } ) }
+                return { 'result': CliOutput.error( { 'error': `Unknown schema "${scopeName}" in namespace "${namespace}".`, 'fix': `Use one of: ${available} — or grade the whole namespace with "${namespace}".` } ) }
             }
             liveSchemas = match
             // Schema validated — now safe to create the isolated scoped write dir.
@@ -11694,11 +11243,11 @@ allowlist, migrate-config, etc.).
         // emitted AREA prompts later, not the pretest pass.
         const pretestUnits = liveSchemas
 
-        FlowMcpCli.#emitProgress( { quiet, 'message': `emit ${target}: data pretest over ${pretestUnits.length} schema(s)...` } )
+        CliOutput.emitProgress( { quiet, 'message': `emit ${target}: data pretest over ${pretestUnits.length} schema(s)...` } )
         await pretestUnits
             .reduce( ( promise, unit, index ) => promise.then( async () => {
                 const { schemaName, main, handlersFn, sourcePath } = unit
-                FlowMcpCli.#emitProgress( { quiet, 'message': `[${index + 1}/${pretestUnits.length}] pretest ${schemaName}` } )
+                CliOutput.emitProgress( { quiet, 'message': `[${index + 1}/${pretestUnits.length}] pretest ${schemaName}` } )
                 if( main === null || main === undefined ) {
                     pretests.push( { schemaName, 'ok': false, 'errors': [ `cannot load schema source for ${schemaName}` ] } )
                     return
@@ -11794,7 +11343,7 @@ allowlist, migrate-config, etc.).
             grading, areas, targetDir, schemaDirs, pretests, areaSelector, sourceDirs
         } )
         if( resolvedAreas.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': resolvedAreas.error, 'fix': resolvedAreas.fix } ) }
+            return { 'result': CliOutput.error( { 'error': resolvedAreas.error, 'fix': resolvedAreas.fix } ) }
         }
         // Memo 112 (REV-05, F10) — a schema-scoped pass IS the per-schema sub-skill:
         // keep the per-tool area (single-test) AND the per-schema area
@@ -11814,7 +11363,7 @@ allowlist, migrate-config, etc.).
         const taskIdSlug = scoped === true ? `${namespace}/${scopeName}` : namespace
         const taskResult = FlowMcpCli.#computeGradingTaskId( { grading, 'namespace': taskIdSlug, emittedAreaSet } )
         if( taskResult.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': taskResult.error, 'fix': taskResult.fix } ) }
+            return { 'result': CliOutput.error( { 'error': taskResult.error, 'fix': taskResult.fix } ) }
         }
         const taskId = taskResult.taskId
         const payloadSkeleton = { taskId, 'areas': emittedAreas.map( ( a ) => ( { 'area': a.area, 'results': [] } ) ) }
@@ -11948,8 +11497,8 @@ allowlist, migrate-config, etc.).
         // refreshes BOTH (else a changed area-set leaves a stale state Task-ID that
         // consume-scores would then reject). The early skip/abort gates above already
         // handle the "keep existing" case before any write.
-        const promptsWrite = await FlowMcpCli.#writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), 'onConflict': conflict } )
-        await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': conflict } )
+        const promptsWrite = await FsUtils.writeAtomic( { 'path': promptsPath, 'content': JSON.stringify( promptsDoc, null, 4 ), 'onConflict': conflict } )
+        await FsUtils.writeAtomic( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onConflict': conflict } )
 
         return {
             'result': {
@@ -12323,7 +11872,7 @@ allowlist, migrate-config, etc.).
                                 ? join( namespaceDir, schemaName, 'tools', toolName, '_gradings' )
                                 : join( namespaceDir, schemaName, '_gradings' )
                             await mkdir( dir, { 'recursive': true } )
-                            await FlowMcpCli.#writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                            await FsUtils.writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
                             return count + 1
                         } ), Promise.resolve( 0 ) )
                     return areaCount + writtenForArea
@@ -12397,7 +11946,7 @@ allowlist, migrate-config, etc.).
 
                     const { filename } = Grading.formatGradingFilename( { area, timestamp } )
                     await mkdir( gradingsDir, { 'recursive': true } )
-                    await FlowMcpCli.#writeAtomic( { 'path': join( gradingsDir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                    await FsUtils.writeAtomic( { 'path': join( gradingsDir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
                     return areaCount + 1
                 } ), Promise.resolve( 0 ) )
 
@@ -12481,7 +12030,7 @@ allowlist, migrate-config, etc.).
                         ? join( namespaceDir, schemaDir, 'resources', 'about', '_gradings' )
                         : join( namespaceDir, schemaDir, 'skills', FlowMcpCli.#resolveIslandSkillName( { 'schemaDirPath': join( namespaceDir, schemaDir ) } ), '_gradings' )
                     await mkdir( dir, { 'recursive': true } )
-                    await FlowMcpCli.#writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
+                    await FsUtils.writeAtomic( { 'path': join( dir, filename ), 'content': JSON.stringify( stamped, null, 4 ), 'onConflict': 'overwrite' } )
                     return areaCount + 1
                 } ), Promise.resolve( 0 ) )
 
@@ -12514,25 +12063,25 @@ allowlist, migrate-config, etc.).
         const stateDir = scoped ? join( targetDir, '_schema', scopeName ) : targetDir
         const scoresPath = resolve( cwd, consumeScores )
         if( existsSync( scoresPath ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
+            return { 'result': CliOutput.error( { 'error': `Scores file not found: ${scoresPath}`, 'fix': 'Pass the path written by the harness Stage 2.' } ) }
         }
 
-        const { data: scoresDoc } = await FlowMcpCli.#readJson( { 'filePath': scoresPath } )
+        const { data: scoresDoc } = await FsUtils.readJson( { 'filePath': scoresPath } )
         if( scoresDoc === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Invalid JSON in scores file: ${scoresPath}`, 'fix': 'Fix the JSON syntax (a parser could not read it) and run the command again.' } ) }
+            return { 'result': CliOutput.error( { 'error': `Invalid JSON in scores file: ${scoresPath}`, 'fix': 'Fix the JSON syntax (a parser could not read it) and run the command again.' } ) }
         }
         if( Array.isArray( scoresDoc[ 'scores' ] ) === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'Keep the "scores": [] field from the template and run the command again.' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Invalid scores format: "scores" must be an array.', 'fix': 'Keep the "scores": [] field from the template and run the command again.' } ) }
         }
 
         const statePath = join( stateDir, 'state.json' )
-        const { data: prevState } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
+        const { data: prevState } = await FsUtils.readJson( { 'filePath': statePath } )
 
         // PRD-007 — verify the multi-area Task-ID payload (additive; legacy scores
         // without a taskId skip this and proceed). A mismatch is a hard Reject.
         const verify = FlowMcpCli.#verifyConsumePayload( { grading, scoresDoc, 'state': prevState } )
         if( verify.status === false ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area result counts, then run the command again.' } ) }
+            return { 'result': CliOutput.error( { 'error': `Consume rejected: ${verify.error}`, 'fix': 'Return the exact emitted Task-ID and area-set with matching per-area result counts, then run the command again.' } ) }
         }
 
         // Memo 112 — schema-scoped consume: validate this schema's scores against its
@@ -12551,19 +12100,19 @@ allowlist, migrate-config, etc.).
             // ProviderProof) runs ONCE at namespace level, never here.
             const gradingsWrite = await FlowMcpCli.#writeSchemaGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'schemaName': scopeName } )
             if( gradingsWrite.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': `Could not write gradings for ${scopeName}: ${gradingsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or n/a per question) and run the command again.' } ) }
+                return { 'result': CliOutput.error( { 'error': `Could not write gradings for ${scopeName}: ${gradingsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or n/a per question) and run the command again.' } ) }
             }
 
             const now = new Date().toISOString()
             const savedPath = join( stateDir, 'scores.json' )
-            await FlowMcpCli.#writeAtomic( { 'path': savedPath, 'content': JSON.stringify( scoresDoc, null, 4 ), 'onConflict': 'overwrite' } )
+            await FsUtils.writeAtomic( { 'path': savedPath, 'content': JSON.stringify( scoresDoc, null, 4 ), 'onConflict': 'overwrite' } )
             const scopedState = prevState === null ? { target, scopeName } : prevState
             scopedState[ 'status' ] = 'scored'
             scopedState[ 'lastUpdatedAt' ] = now
             scopedState[ 'consumedAreas' ] = verify.acceptedAreas
             scopedState[ 'taskComplete' ] = verify.complete
             scopedState[ 'gradingsWritten' ] = gradingsWrite.written
-            await FlowMcpCli.#writeAtomic( { 'path': statePath, 'content': JSON.stringify( scopedState, null, 4 ), 'onConflict': 'overwrite' } )
+            await FsUtils.writeAtomic( { 'path': statePath, 'content': JSON.stringify( scopedState, null, 4 ), 'onConflict': 'overwrite' } )
             return { 'result': { 'status': true, 'stage': 3, 'mode': 'consume-scores', 'saved': true, scoped, flow, target, 'scoresPath': FlowMcpCli.#toRepoRelativePath( { cwd, 'path': savedPath } ), 'gradingsWritten': gradingsWrite.written, 'acceptedAreas': verify.acceptedAreas, 'taskComplete': verify.complete, 'scoreCount': scoresDoc[ 'scores' ].length, dependencyChain } }
         }
 
@@ -12605,7 +12154,7 @@ allowlist, migrate-config, etc.).
         if( flow === 'provider' ) {
             const nsWrite = await FlowMcpCli.#writeNamespaceGradingsFromScores( { grading, scoresDoc, 'namespaceDir': targetDir, 'namespace': basename( targetDir ) } )
             if( nsWrite.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': `Could not write namespace gradings for ${target}: ${nsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or "n/a" per question) and run the command again.' } ) }
+                return { 'result': CliOutput.error( { 'error': `Could not write namespace gradings for ${target}: ${nsWrite.error}`, 'fix': 'Fix the scores file (scores must be 1–5 or "n/a" per question) and run the command again.' } ) }
             }
             // Memo 141 — persist the persona-required namespace areas (about-namespace,
             // namespace-skills) into their schema-scoped _gradings, where RebuildIndex
@@ -12613,7 +12162,7 @@ allowlist, migrate-config, etc.).
             // stays about:pending). about-namespace is the About-Persona-Scoring payoff.
             const personaWrite = await FlowMcpCli.#writePersonaNamespaceGradings( { grading, scoresDoc, 'namespaceDir': targetDir } )
             if( personaWrite.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': `Could not write persona-area gradings for ${target}: ${personaWrite.error}`, 'fix': 'Ensure the namespace has an island schema dir and the scores carry 1–5 (or "n/a") per question, then run the command again.' } ) }
+                return { 'result': CliOutput.error( { 'error': `Could not write persona-area gradings for ${target}: ${personaWrite.error}`, 'fix': 'Ensure the namespace has an island schema dir and the scores carry 1–5 (or "n/a") per question, then run the command again.' } ) }
             }
         }
 
@@ -12648,7 +12197,7 @@ allowlist, migrate-config, etc.).
                 cwd, grading, gradingDataRoot, gradingExportDir, target, 'namespaceIndex': rebuilt.index
             } )
             if( proof.status === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': proof.error, 'fix': proof.fix } ) }
+                return { 'result': CliOutput.error( { 'error': proof.error, 'fix': proof.fix } ) }
             }
             proofPathRel = FlowMcpCli.#toRepoRelativePath( { cwd, 'path': proof.proofPath } )
         }
@@ -12674,7 +12223,7 @@ allowlist, migrate-config, etc.).
             stateDoc[ 'taskComplete' ] = verify.complete
         }
 
-        await FlowMcpCli.#writeGuarded( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onExists': 'overwrite' } )
+        await FsUtils.writeGuarded( { 'path': statePath, 'content': JSON.stringify( stateDoc, null, 4 ), 'onExists': 'overwrite' } )
 
         return {
             'result': {
@@ -12733,7 +12282,7 @@ allowlist, migrate-config, etc.).
         try {
             entries = await readdir( targetDir, { 'withFileTypes': true } )
         } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'SCH-007', 'location': 'listGradingSchemaDirs: target dir read failed', err } )
+            CliOutput.emitCoded( { 'code': 'SCH-007', 'location': 'listGradingSchemaDirs: target dir read failed', err } )
             return []
         }
 
@@ -12783,7 +12332,7 @@ allowlist, migrate-config, etc.).
         const candidates = await pairs
             .reduce( ( promise, pair ) => promise.then( async ( acc ) => {
                 const { source, schemaInfo } = pair
-                const { filePath } = await FlowMcpCli.#resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${schemaInfo[ 'file' ]}` } )
+                const { filePath } = await SchemaSource.resolveSchemaPath( { 'schemaRef': `${source[ 'name' ]}/${schemaInfo[ 'file' ]}` } )
                 let isCandidate = true
                 try {
                     const text = await readFile( filePath, 'utf-8' )
@@ -12791,7 +12340,7 @@ allowlist, migrate-config, etc.).
                         .map( ( match ) => match[ 1 ] )
                     isCandidate = found.length === 0 || found.includes( namespace )
                 } catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'SCH-008', 'location': 'resolveSchemasForTarget: namespace probe read failed', err } )
+                    CliOutput.emitCoded( { 'code': 'SCH-008', 'location': 'resolveSchemasForTarget: namespace probe read failed', err } )
                     isCandidate = true
                 }
                 if( isCandidate ) { acc.push( { source, schemaInfo, filePath } ) }
@@ -12843,7 +12392,7 @@ allowlist, migrate-config, etc.).
     // SRC-002 error — never a silent skip.
     static async #resolveSelectionSchemasLive( { targetDir } ) {
         const indexPath = join( targetDir, 'index.json' )
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': indexPath } )
         if( index === null || index[ 'members' ] === undefined || index[ 'members' ] === null ) {
             return { 'status': true, 'schemas': [], 'error': null }
         }
@@ -12900,24 +12449,24 @@ allowlist, migrate-config, etc.).
     static async gradingFinalize( { cwd, target, gradingDataDir, gradingExportDir = null, targetGrade = null, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing finalize target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading finalize <namespace> [--target <grade>]` } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing finalize target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading finalize <namespace> [--target <grade>]` } ) }
         }
         if( target.includes( '/' ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `finalize operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading finalize ${target.split( '/' )[ 0 ]}` } ) }
+            return { 'result': CliOutput.error( { 'error': `finalize operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading finalize ${target.split( '/' )[ 0 ]}` } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const rollup = await FlowMcpCli.#deterministicRollup( { cwd, grading, gradingDataRoot, gradingExportDir, 'namespace': target } )
         if( rollup.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': rollup.error, 'fix': rollup.fix } ) }
+            return { 'result': CliOutput.error( { 'error': rollup.error, 'fix': rollup.fix } ) }
         }
 
         const recommendation = await FlowMcpCli.#computeGradingWorklist( { cwd, grading, gradingDataRoot, 'namespace': target, targetGrade } )
         if( recommendation.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': recommendation.error, 'fix': recommendation.fix } ) }
+            return { 'result': CliOutput.error( { 'error': recommendation.error, 'fix': recommendation.fix } ) }
         }
 
         return {
@@ -12943,19 +12492,19 @@ allowlist, migrate-config, etc.).
     static async gradingPlan( { cwd, target, gradingDataDir, targetGrade = null, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing plan target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading plan <namespace> [--target <grade>]` } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing plan target.', 'fix': `Usage: ${appConfig[ 'cliCommand' ]} grading plan <namespace> [--target <grade>]` } ) }
         }
         if( target.includes( '/' ) ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `plan operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading plan ${target.split( '/' )[ 0 ]}` } ) }
+            return { 'result': CliOutput.error( { 'error': `plan operates on a bare namespace, not "${target}".`, 'fix': `Use the namespace only, e.g. ${appConfig[ 'cliCommand' ]} grading plan ${target.split( '/' )[ 0 ]}` } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const worklist = await FlowMcpCli.#computeGradingWorklist( { cwd, grading, gradingDataRoot, 'namespace': target, targetGrade } )
         if( worklist.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': worklist.error, 'fix': worklist.fix } ) }
+            return { 'result': CliOutput.error( { 'error': worklist.error, 'fix': worklist.fix } ) }
         }
 
         return {
@@ -12999,7 +12548,7 @@ allowlist, migrate-config, etc.).
         }
 
         const namespaceDir = join( gradingDataRoot, 'providers', namespace )
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': join( namespaceDir, 'index.json' ) } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': join( namespaceDir, 'index.json' ) } )
         const indexSchemas = index !== null && index[ 'schemas' ] !== undefined ? index[ 'schemas' ] : {}
         const targetRank = targetGrade === null ? null : FlowMcpCli.#gradeRank( { 'grade': targetGrade } )
 
@@ -13050,7 +12599,7 @@ allowlist, migrate-config, etc.).
             ? node[ 'toolsAggregate' ][ 'ref' ]
             : null
         if( ref === null ) { return null }
-        const { data: entry } = await FlowMcpCli.#readJson( { 'filePath': join( namespaceDir, ref ) } )
+        const { data: entry } = await FsUtils.readJson( { 'filePath': join( namespaceDir, ref ) } )
         if( entry === null ) { return null }
         return typeof entry[ 'schemaHash' ] === 'string' && entry[ 'schemaHash' ].length > 0 ? entry[ 'schemaHash' ] : null
     }
@@ -13075,23 +12624,23 @@ allowlist, migrate-config, etc.).
     static async gradingState( { cwd, target, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing state target.', 'fix': 'Usage: flowmcp grading state <namespace|selection>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing state target.', 'fix': 'Usage: flowmcp grading state <namespace|selection>' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         const indexPath = join( detected.targetDir, 'index.json' )
         const statePath = join( detected.targetDir, 'state.json' )
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
-        const { data: state } = await FlowMcpCli.#readJson( { 'filePath': statePath } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': indexPath } )
+        const { data: state } = await FsUtils.readJson( { 'filePath': statePath } )
 
         // PRD-010 — the graph-driven nextAction block, identical on state + doctor.
         const nextAction = await FlowMcpCli.#computeNextAction( { grading, detected, target } )
@@ -13140,7 +12689,7 @@ allowlist, migrate-config, etc.).
             .sort()
         const schemas = await dirs
             .reduce( ( promise, name ) => promise.then( async ( acc ) => {
-                const { data: st } = await FlowMcpCli.#readJson( { 'filePath': join( schemaRoot, name, 'state.json' ) } )
+                const { data: st } = await FsUtils.readJson( { 'filePath': join( schemaRoot, name, 'state.json' ) } )
                 acc.push( {
                     'schema': name,
                     'status': st === null ? 'pending' : ( st[ 'status' ] || 'pending' ),
@@ -13167,27 +12716,27 @@ allowlist, migrate-config, etc.).
     static async gradingSkill( { cwd, target, gradingDataDir } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing skill target.', 'fix': 'Usage: flowmcp grading skill <namespace|selection>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing skill target.', 'fix': 'Usage: flowmcp grading skill <namespace|selection>' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         const promptsPath = join( detected.targetDir, 'prompts.json' )
-        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        const { data: prompts } = await FsUtils.readJson( { 'filePath': promptsPath } )
         if( prompts === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `No emitted skill found for "${target}" (no prompts.json in the island).`, 'fix': `Emit it first: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts` } ) }
+            return { 'result': CliOutput.error( { 'error': `No emitted skill found for "${target}" (no prompts.json in the island).`, 'fix': `Emit it first: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts` } ) }
         }
 
         const skill = prompts[ 'emitSkill' ]
         if( typeof skill !== 'string' || skill.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': `The emitted prompts.json for "${target}" carries no emit-skill (stale artifact from before the self-contained Emit-Skill).`, 'fix': `Re-emit to refresh it: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --on-conflict=overwrite` } ) }
+            return { 'result': CliOutput.error( { 'error': `The emitted prompts.json for "${target}" carries no emit-skill (stale artifact from before the self-contained Emit-Skill).`, 'fix': `Re-emit to refresh it: ${appConfig[ 'cliCommand' ]} grading non-deterministic ${target} --emit-prompts --on-conflict=overwrite` } ) }
         }
 
         return {
@@ -13211,13 +12760,13 @@ allowlist, migrate-config, etc.).
     // command returns a clear coded error instead of pretending an empty worklist.
     static async gradingWorklist( { cwd, target, gradingDataDir, json } ) {
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing worklist target.', 'fix': 'Usage: flowmcp grading worklist <namespace> --json' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing worklist target.', 'fix': 'Usage: flowmcp grading worklist <namespace> --json' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         // PRD-009 — `worklist` is subsumed into `doctor`: the deterministic
@@ -13226,7 +12775,7 @@ allowlist, migrate-config, etc.).
         // array shape as before, OR the WL-001/WL-002 coded error unchanged.
         const collected = await FlowMcpCli.#collectDeterministicDefects( { detected, target } )
         if( collected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': collected.error, 'fix': collected.fix } ) }
         }
 
         return { 'result': collected.defects }
@@ -13253,7 +12802,7 @@ allowlist, migrate-config, etc.).
             }
         }
 
-        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        const { data: prompts } = await FsUtils.readJson( { 'filePath': promptsPath } )
         if( prompts === null ) {
             return {
                 'status': false,
@@ -13272,19 +12821,19 @@ allowlist, migrate-config, etc.).
             const errors = Array.isArray( pretest[ 'errors' ] ) ? pretest[ 'errors' ] : []
             errors.forEach( ( raw ) => {
                 if( typeof raw !== 'string' || raw.length === 0 ) { return }
-                const { code, message } = FlowMcpCli.#splitErrorCode( { raw } )
+                const { code, message } = CliOutput.splitErrorCode( { raw } )
                 items.push( { 'namespace': target, 'schema': schemaName, code, message } )
             } )
         } )
 
         // 2. Import / rebuild blockers (per-node), if present.
-        const { data: index } = await FlowMcpCli.#readJson( { 'filePath': indexPath } )
+        const { data: index } = await FsUtils.readJson( { 'filePath': indexPath } )
         const blockers = index !== null && Array.isArray( index[ 'blockers' ] ) ? index[ 'blockers' ] : []
         blockers.forEach( ( blocker ) => {
             const node = typeof blocker[ 'node' ] === 'string' ? blocker[ 'node' ] : null
             const reason = typeof blocker[ 'reason' ] === 'string' ? blocker[ 'reason' ] : null
             if( reason === null ) { return }
-            const { code, message } = FlowMcpCli.#splitErrorCode( { 'raw': reason } )
+            const { code, message } = CliOutput.splitErrorCode( { 'raw': reason } )
             items.push( { 'namespace': target, 'schema': node, 'code': code === null ? 'IMPORT' : code, message } )
         } )
 
@@ -13311,17 +12860,17 @@ allowlist, migrate-config, etc.).
     static async gradingDoctor( { cwd, target, gradingDataDir, json } ) {
         const grading = await FlowMcpCli.#loadGradingModule()
         if( grading === null ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
+            return { 'result': CliOutput.error( { 'error': 'grading module unavailable', 'fix': 'npm install / update the flowmcp-grading dependency' } ) }
         }
 
         if( typeof target !== 'string' || target.length === 0 ) {
-            return { 'result': FlowMcpCli.#error( { 'error': 'Missing doctor target.', 'fix': 'Usage: flowmcp grading doctor <namespace>' } ) }
+            return { 'result': CliOutput.error( { 'error': 'Missing doctor target.', 'fix': 'Usage: flowmcp grading doctor <namespace>' } ) }
         }
 
         const gradingDataRoot = await FlowMcpCli.#gradingDataRoot( { cwd, gradingDataDir } )
         const detected = await FlowMcpCli.#resolveGradingTarget( { cwd, gradingDataRoot, target } )
         if( detected.status !== true ) {
-            return { 'result': FlowMcpCli.#error( { 'error': detected.error, 'fix': detected.fix } ) }
+            return { 'result': CliOutput.error( { 'error': detected.error, 'fix': detected.fix } ) }
         }
 
         // Deterministic defects (keeps WL-001/WL-002 — no empty-list fabrication).
@@ -13335,7 +12884,7 @@ allowlist, migrate-config, etc.).
         if( collected.status !== true ) {
             const noPrompts = typeof collected.error === 'string' && collected.error.includes( 'WL-001' ) === true
             if( noPrompts === false ) {
-                return { 'result': FlowMcpCli.#error( { 'error': collected.error, 'fix': collected.fix } ) }
+                return { 'result': CliOutput.error( { 'error': collected.error, 'fix': collected.fix } ) }
             }
             defectsNote = 'No prompts.json — deterministic-only island (no LLM emit round yet). Deterministic defects not collected; conformance + state are still reported.'
         } else {
@@ -13433,7 +12982,7 @@ allowlist, migrate-config, etc.).
                 let raw = null
                 try { raw = await readFile( resolved.path, 'utf-8' ) }
                 catch( err ) {
-                    FlowMcpCli.#emitCoded( { 'code': 'CLI-027', 'location': 'collectLastTips: grading entry read failed', err } )
+                    CliOutput.emitCoded( { 'code': 'CLI-027', 'location': 'collectLastTips: grading entry read failed', err } )
                     return
                 }
 
@@ -13462,7 +13011,7 @@ allowlist, migrate-config, etc.).
         let entries = []
         try { entries = readdirSync( gradingsDir ) }
         catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'GRD-004', 'location': 'gradingsLogicalName: gradings dir read failed', err } )
+            CliOutput.emitCoded( { 'code': 'GRD-004', 'location': 'gradingsLogicalName: gradings dir read failed', err } )
             return ''
         }
         const first = entries
@@ -13494,7 +13043,7 @@ allowlist, migrate-config, etc.).
         let entries = []
         try { entries = await readdir( root, { 'withFileTypes': true } ) }
         catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'GRD-005', 'location': 'findGradingsDirs: dir read failed', err } )
+            CliOutput.emitCoded( { 'code': 'GRD-005', 'location': 'findGradingsDirs: dir read failed', err } )
             return []
         }
 
@@ -13578,7 +13127,7 @@ allowlist, migrate-config, etc.).
                 'note': 'No prompts.json yet — emit prompts first to derive the next applicable areas.'
             }
         }
-        const { data: prompts } = await FlowMcpCli.#readJson( { 'filePath': promptsPath } )
+        const { data: prompts } = await FsUtils.readJson( { 'filePath': promptsPath } )
         const pretests = prompts !== null && Array.isArray( prompts[ 'pretests' ] ) ? prompts[ 'pretests' ] : []
 
         const schemaDirs = await FlowMcpCli.#listGradingSchemaDirs( { 'targetDir': detected.targetDir } )
@@ -13681,80 +13230,14 @@ allowlist, migrate-config, etc.).
     }
 
 
-    // Split a "CODE: message" string into { code, message }. When the string has
-    // no recognizable leading code, code is null and the whole string is the
-    // message (explicit — no invented code).
-    static #splitErrorCode( { raw } ) {
-        const match = raw.match( /^([A-Z]{2,}-\d{2,})(?::\s*)?(.*)$/ )
-        if( match === null ) {
-            return { 'code': null, 'message': raw.trim() }
-        }
-
-        return { 'code': match[ 1 ], 'message': match[ 2 ].trim() }
-    }
-
 
     static async __testWriteGuarded( { path, content, onExists } ) {
-        return FlowMcpCli.#writeGuarded( { path, content, onExists } )
+        return FsUtils.writeGuarded( { path, content, onExists } )
     }
 
 
 
-    static async #writeAtomic( { path, content, onConflict } ) {
-        const absolutePath = resolve( path )
-        // NO SILENT DEFAULT: the conflict policy must be one of the three known
-        // values. An unknown value is a hard error, never a silent fall-through.
-        const validConflicts = [ 'abort', 'skip', 'overwrite' ]
-        if( validConflicts.includes( onConflict ) === false ) {
-            throw new Error( `#writeAtomic: invalid onConflict '${onConflict}' (expected one of ${validConflicts.join( ', ' )})` )
-        }
-        if( existsSync( absolutePath ) ) {
-            if( onConflict === 'abort' ) {
-                throw new Error( `NO-OVERWRITE conflict: ${absolutePath} already exists` )
-            }
-            // 'skip' keeps the existing file; 'overwrite' falls through to the atomic
-            // write below (the tmp+rename replaces the existing file). The previous
-            // code returned skipped for BOTH, so --on-conflict=overwrite never
-            // overwrote — a stale prompts.json was kept indefinitely.
-            if( onConflict === 'skip' ) {
-                return { 'skipped': true, absolutePath }
-            }
-        }
-        const tmp = `${absolutePath}.tmp`
-        await writeFile( tmp, content, 'utf-8' )
-        await rename( tmp, absolutePath )
-        return { 'skipped': false, absolutePath }
-    }
 
-
-    // Memo 068 R2 — the single guarded writer for persistent artifacts.
-    // There is NO silent overwrite path: every overwrite must be a deliberate,
-    // named choice by the caller via onExists. The safe default (onExists
-    // omitted or undefined) refuses to overwrite and reports an error object.
-    //   onExists: 'error'     -> existing file => { written:false, error }
-    //   onExists: 'skip'      -> existing file => { written:false, skipped:true }
-    //   onExists: 'overwrite' -> deliberate, named overwrite (atomic)
-    // Object-return, no throw, no silent default.
-    static async #writeGuarded( { path, content, onExists } ) {
-        const absolutePath = resolve( path )
-        const effective = onExists === undefined ? 'error' : onExists
-        const exists = existsSync( absolutePath )
-
-        if( exists === true && effective === 'error' ) {
-            return { 'written': false, 'skipped': false, 'error': `NO-OVERWRITE: refusing to overwrite existing file: ${absolutePath}` }
-        }
-
-        if( exists === true && effective === 'skip' ) {
-            return { 'written': false, 'skipped': true, 'error': null }
-        }
-
-        await mkdir( dirname( absolutePath ), { recursive: true } )
-        const tmp = `${absolutePath}.tmp`
-        await writeFile( tmp, content, 'utf-8' )
-        await rename( tmp, absolutePath )
-
-        return { 'written': true, 'skipped': false, 'error': null }
-    }
 }
 
 
