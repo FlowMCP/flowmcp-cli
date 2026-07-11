@@ -175,7 +175,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
 
         const result = {
             'status': true,
@@ -1901,7 +1901,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
 
         if( sources.length === 0 ) {
             const result = CliOutput.error( {
@@ -2045,7 +2045,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const schemasBaseDir = ConfigStore.schemasDir()
 
         let listFilePath = null
@@ -2196,7 +2196,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const schemasBaseDir = ConfigStore.schemasDir()
         const matchingSchemas = []
 
@@ -3669,7 +3669,7 @@ class FlowMcpCli {
 
 
     static async #listAvailableTools() {
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const tools = []
 
         await sources
@@ -3760,7 +3760,7 @@ class FlowMcpCli {
 
 
     static async #loadSharedAliases() {
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const schemasBaseDir = ConfigStore.schemasDir()
         const aliasIndex = []
 
@@ -4129,7 +4129,7 @@ class FlowMcpCli {
 
         await ConfigStore.writeGlobalConfig( { config: globalConfig } )
 
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const linked = sources
             .find( ( source ) => source[ 'name' ] === name )
 
@@ -4207,152 +4207,9 @@ class FlowMcpCli {
     }
 
 
-    static async #listSources() {
-        const schemasBaseDir = ConfigStore.schemasDir()
-        const globalConfigPath = ConfigStore.globalConfigPath()
-        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
-        const configSources = ( globalConfig && globalConfig[ 'sources' ] ) || {}
-
-        // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
-        // Legacy ~/.flowmcp/schemas scan + localSources are the fallback until migration (Memo 099 Kap 9).
-        const { schemaFolders, duplicateError } = await ConfigStore.readSchemaFolders()
-
-        // PRD-008 — a duplicate folder name is a hard config error (the "<source>:"
-        // coordinate would be ambiguous). Surface it instead of resolving sources.
-        if( duplicateError !== null && duplicateError !== undefined ) {
-            return { 'sources': [], 'error': duplicateError.error, 'fix': duplicateError.fix }
-        }
-
-        let allSourceNames = []
-
-        if( schemaFolders.length > 0 ) {
-            allSourceNames = schemaFolders
-                .map( ( entry ) => entry[ 'name' ] )
-        } else {
-            const { localSources } = await ConfigStore.readLocalSources()
-
-            let sourceDirs = []
-            try {
-                const entries = await readdir( schemasBaseDir )
-                const dirChecks = await entries
-                    .reduce( ( promise, entry ) => promise.then( async ( acc ) => {
-                        const entryPath = join( schemasBaseDir, entry )
-                        const entryStat = await stat( entryPath )
-                        if( entryStat.isDirectory() ) {
-                            acc.push( entry )
-                        }
-
-                        return acc
-                    } ), Promise.resolve( [] ) )
-
-                sourceDirs = dirChecks
-            } catch( err ) {
-                CliOutput.emitCoded( { 'code': 'CFG-002', 'location': 'listSources: schemas dir scan failed', err } )
-                sourceDirs = []
-            }
-
-            const localSourceNames = Object.keys( localSources )
-                .filter( ( name ) => sourceDirs.includes( name ) === false )
-            allSourceNames = [ ...sourceDirs, ...localSourceNames ]
-        }
-
-        const sources = []
-
-        await allSourceNames
-            .reduce( ( promise, sourceDir ) => promise.then( async () => {
-                const { sourceDir: sourcePath, isLocal } = await ConfigStore.resolveSourceDir( { sourceName: sourceDir } )
-                const sourceConfig = configSources[ sourceDir ] || {}
-                const { type, repository } = sourceConfig
-
-                const registryPath = join( sourcePath, '_registry.json' )
-                const { data: registry } = await FsUtils.readJson( { filePath: registryPath } )
-
-                let schemas = []
-
-                if( registry && Array.isArray( registry[ 'schemas' ] ) ) {
-                    schemas = registry[ 'schemas' ]
-                        .map( ( entry ) => {
-                            const { file, namespace, name, requiredServerParams } = entry
-                            const ref = `${sourceDir}/${file}`
-                            const schemaInfo = { ref, file, namespace, name, requiredServerParams }
-
-                            return schemaInfo
-                        } )
-                } else {
-                    const files = await FlowMcpCli.#listSchemaFiles( { dirPath: sourcePath } )
-                    const schemaCandidates = files
-                        .filter( ( file ) => {
-                            const isSkillDoc = file.includes( '/skills/' ) || file.startsWith( 'skills/' )
-
-                            return isSkillDoc === false
-                        } )
-
-                    schemas = schemaCandidates
-                        .map( ( file ) => {
-                            const ref = `${sourceDir}/${file}`
-                            const schemaInfo = {
-                                ref,
-                                file,
-                                'namespace': sourceDir,
-                                'name': file,
-                                'requiredServerParams': []
-                            }
-
-                            return schemaInfo
-                        } )
-                }
-
-                const resolvedType = isLocal === true ? 'local' : ( type || 'builtin' )
-
-                const sourceEntry = {
-                    'name': sourceDir,
-                    'type': resolvedType,
-                    'repository': repository || null,
-                    'schemaCount': schemas.length,
-                    schemas
-                }
-
-                sources.push( sourceEntry )
-            } ), Promise.resolve() )
-
-        return { sources, 'error': null, 'fix': null }
-    }
-
-
-    static async #listSchemaFiles( { dirPath, prefix = '' } ) {
-        const entries = await readdir( dirPath )
-        const files = []
-
-        await entries
-            .reduce( ( promise, entry ) => promise.then( async () => {
-                if( entry.startsWith( '_' ) ) {
-                    return
-                }
-
-                const entryPath = join( dirPath, entry )
-                const entryStat = await stat( entryPath )
-
-                if( entryStat.isDirectory() ) {
-                    const subFiles = await FlowMcpCli.#listSchemaFiles( {
-                        'dirPath': entryPath,
-                        'prefix': prefix ? `${prefix}/${entry}` : entry
-                    } )
-
-                    subFiles
-                        .forEach( ( subFile ) => {
-                            files.push( subFile )
-                        } )
-                } else {
-                    const ext = extname( entry )
-                    if( ext === '.mjs' || ext === '.js' ) {
-                        const relativePath = prefix ? `${prefix}/${entry}` : entry
-                        files.push( relativePath )
-                    }
-                }
-            } ), Promise.resolve() )
-
-        return files
-    }
+    // Memo 152 / PRD-019 (D-08) — #listSources (schemaFolders[] enumeration) and its
+    // pure FS-scan helper #listSchemaFiles moved to src/lib/SchemaSource.mjs
+    // (SchemaSource.listSources). Call sites here delegate to it.
 
 
     static async #resolveDefaultGroupSchemas( { cwd } ) {
@@ -6461,7 +6318,7 @@ allowlist, migrate-config, etc.).
     // Memo 099 Kap 5 — load ALL schemas from the configured schemaFolders[].
     // No activation: every tool in every folder is immediately resolvable.
     static async #resolveAllSchemas() {
-        const { sources, error: sourcesError, fix: sourcesFix } = await FlowMcpCli.#listSources()
+        const { sources, error: sourcesError, fix: sourcesFix } = await SchemaSource.listSources()
 
         // PRD-008 — a duplicate schemaFolders[] name is a hard config error; surface
         // it instead of silently resolving an empty / ambiguous schema list.
@@ -6888,7 +6745,7 @@ allowlist, migrate-config, etc.).
 
 
     static async #loadAllSchemas() {
-        const { sources, error: sourcesError, fix: sourcesFix } = await FlowMcpCli.#listSources()
+        const { sources, error: sourcesError, fix: sourcesFix } = await SchemaSource.listSources()
 
         // PRD-008 — duplicate schemaFolders[] name is a hard config error.
         if( sourcesError !== null && sourcesError !== undefined ) {
@@ -8399,7 +8256,7 @@ allowlist, migrate-config, etc.).
         // if( !status ) { Validation.error( { messages } ) }
 
         const schemasBaseDir = ConfigStore.schemasDir()
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
 
         const sourceDirs = sources
             .map( ( source ) => join( schemasBaseDir, source[ 'name' ] ) )
@@ -11729,7 +11586,7 @@ allowlist, migrate-config, etc.).
     // is a coded hard error (SRC-001) — never an empty list that reads as
     // "0 schemas = ok".
     static async #resolveSchemasForTarget( { namespace } ) {
-        const { sources } = await FlowMcpCli.#listSources()
+        const { sources } = await SchemaSource.listSources()
         const matched = []
         const loadErrors = []
 
