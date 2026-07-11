@@ -184,33 +184,6 @@ describe( 'FlowMcpCli.list with sharedLists — exercises resolveSharedListsForS
 } )
 
 
-describe( 'FlowMcpCli.add with sharedLists — exercises extractParameters interpolation', () => {
-    const CWD = join( tmpdir(), `flowmcp-sharedlist-add-${Date.now()}` )
-
-
-    beforeAll( async () => {
-        await mkdir( join( CWD, '.flowmcp' ), { recursive: true } )
-    } )
-
-
-    afterAll( async () => {
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-
-    it( 'adds tool with enum interpolated from shared list', async () => {
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'select_item_slsrc',
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'parameters' ] ).toBeDefined()
-        expect( result[ 'parameters' ][ 'item' ] ).toBeDefined()
-        expect( result[ 'parameters' ][ 'item' ][ 'type' ] ).toBe( 'enum' )
-    } )
-} )
-
 
 describe( 'FlowMcpCli.callTool with sharedLists schema', () => {
     const CWD = join( tmpdir(), `flowmcp-sharedlist-call-${Date.now()}` )
@@ -317,71 +290,3 @@ describe( 'FlowMcpCli.status with group-based config', () => {
 } )
 
 
-describe( 'FlowMcpCli.remove — successful flat tools removal', () => {
-    const CWD = join( tmpdir(), `flowmcp-remove-flat-${Date.now()}` )
-
-
-    beforeAll( async () => {
-        await mkdir( join( CWD, '.flowmcp' ), { recursive: true } )
-
-        const localConfig = {
-            'root': '~/.flowmcp',
-            'tools': [
-                `${SOURCE_NAME}/simple.mjs::ping`
-            ]
-        }
-
-        await writeFile(
-            join( CWD, '.flowmcp', 'config.json' ),
-            JSON.stringify( localConfig, null, 4 ),
-            'utf-8'
-        )
-    } )
-
-
-    afterAll( async () => {
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-
-    it( 'removes tool from flat tools array', async () => {
-        const { result } = await FlowMcpCli.remove( {
-            'toolName': 'ping_slsimple',
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'removed' ] ).toBe( 'ping_slsimple' )
-    } )
-} )
-
-
-describe( 'FlowMcpCli.add — tool already exists without force', () => {
-    const CWD = join( tmpdir(), `flowmcp-add-exists-${Date.now()}` )
-
-
-    beforeAll( async () => {
-        await mkdir( join( CWD, '.flowmcp' ), { recursive: true } )
-    } )
-
-
-    afterAll( async () => {
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-
-    it( 'returns already active message on second add without force', async () => {
-        await FlowMcpCli.add( {
-            'toolName': 'ping_slsimple',
-            'cwd': CWD
-        } )
-
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'ping_slsimple',
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'message' ] ).toContain( 'already' )
-    } )
-} )

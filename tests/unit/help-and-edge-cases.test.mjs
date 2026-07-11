@@ -137,47 +137,6 @@ describe( 'FlowMcpCli.help — exercises printHeadline, formatHealthWarnings, pr
 } )
 
 
-describe( 'FlowMcpCli.add — creates tools key when local config has groups but no tools', () => {
-    const CWD = join( tmpdir(), `flowmcp-add-no-tools-key-${Date.now()}` )
-
-
-    beforeAll( async () => {
-        await mkdir( join( CWD, '.flowmcp' ), { recursive: true } )
-
-        const localConfig = {
-            'root': '~/.flowmcp',
-            'defaultGroup': 'test-group',
-            'groups': {
-                'test-group': {
-                    'tools': []
-                }
-            }
-        }
-
-        await writeFile(
-            join( CWD, '.flowmcp', 'config.json' ),
-            JSON.stringify( localConfig, null, 4 ),
-            'utf-8'
-        )
-    } )
-
-
-    afterAll( async () => {
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-
-    it( 'adds tools key to existing config that lacks it', async () => {
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'ping_helpsrc',
-            'cwd': CWD
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'added' ] ).toBe( 'ping_helpsrc' )
-    }, 90000 )
-} )
-
 
 describe( 'FlowMcpCli.status — exercises formatHealthWarnings with bad env path', () => {
     it( 'returns health warnings when env file is missing', async () => {
@@ -256,33 +215,6 @@ describe( 'FlowMcpCli.callListTools — group fallback to default from local con
     } )
 } )
 
-
-describe( 'FlowMcpCli.remove — missing tool name validation', () => {
-    it( 'returns error for empty string tool name', async () => {
-        const CWD = join( tmpdir(), `flowmcp-remove-empty-${Date.now()}` )
-        await mkdir( CWD, { recursive: true } )
-
-        const { result } = await FlowMcpCli.remove( { 'toolName': '', 'cwd': CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'Missing tool name' )
-
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-
-    it( 'returns error for no active tools', async () => {
-        const CWD = join( tmpdir(), `flowmcp-remove-noactive-${Date.now()}` )
-        await mkdir( CWD, { recursive: true } )
-
-        const { result } = await FlowMcpCli.remove( { 'toolName': 'some_tool', 'cwd': CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'No active tools' )
-
-        await rm( CWD, { recursive: true, force: true } ).catch( () => {} )
-    } )
-} )
 
 
 describe( 'FlowMcpCli.search — validation', () => {

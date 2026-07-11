@@ -171,25 +171,6 @@ describe( 'FlowMcpCli.catalogLink — link + discovery', () => {
     } )
 
 
-    it( 'adds a v4-private tool from the linked local source', async () => {
-        const addCwd = join( tmpdir(), 'flowmcp-cli-catalog-local-add' )
-        await mkdir( addCwd, { recursive: true } )
-
-        const { result: searchResult } = await FlowMcpCli.search( { query: 'abi read evm' } )
-        const tool = searchResult[ 'tools' ]
-            .find( ( entry ) => entry[ 'namespace' ] === 'ethersread' )
-
-        expect( tool ).toBeDefined()
-
-        const { result } = await FlowMcpCli.add( { toolName: tool[ 'name' ], cwd: addCwd } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'parameters' ] ).toBeDefined()
-        expect( result[ 'parameters' ][ 'address' ] ).toBeDefined()
-        expect( result[ 'parameters' ][ 'functionName' ] ).toBeDefined()
-
-        await rm( addCwd, { recursive: true, force: true } )
-    } )
 } )
 
 

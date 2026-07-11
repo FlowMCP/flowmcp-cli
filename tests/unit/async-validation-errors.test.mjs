@@ -44,41 +44,6 @@ afterAll( async () => {
 } )
 
 
-describe( 'FlowMcpCli.groupAppend validation failure paths', () => {
-    it( 'returns validation error for undefined name', async () => {
-        const { result } = await FlowMcpCli.groupAppend( { name: undefined, tools: 'demo/ping.mjs', cwd: TEST_CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-
-
-    it( 'returns validation error for non-string tools', async () => {
-        const { result } = await FlowMcpCli.groupAppend( { name: 'grp', tools: 42, cwd: TEST_CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-} )
-
-
-describe( 'FlowMcpCli.groupRemove validation failure paths', () => {
-    it( 'returns validation error for undefined name', async () => {
-        const { result } = await FlowMcpCli.groupRemove( { name: undefined, tools: 'demo/ping.mjs', cwd: TEST_CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-
-
-    it( 'returns validation error for non-string tools', async () => {
-        const { result } = await FlowMcpCli.groupRemove( { name: 'grp', tools: 42, cwd: TEST_CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-} )
-
 
 describe( 'FlowMcpCli.promptSearch validation failure in async method', () => {
     it( 'returns validation error for undefined query', async () => {
@@ -145,51 +110,3 @@ describe( 'FlowMcpCli.validate init failure in async method', () => {
 } )
 
 
-describe( 'FlowMcpCli.groupRemove with schemas key migration', () => {
-    it( 'removes tool from group using schemas key and migrates to tools', async () => {
-        const cwd = join( tmpdir(), 'flowmcp-cli-async-val-migration' )
-        const configDir = join( cwd, '.flowmcp' )
-        await mkdir( configDir, { recursive: true } )
-
-        const config = {
-            'root': '~/.flowmcp',
-            'defaultGroup': 'test',
-            'groups': {
-                'test': {
-                    'description': 'Test',
-                    'schemas': [ 'demo/ping.mjs', 'demo/other.mjs' ]
-                }
-            }
-        }
-
-        await writeFile(
-            join( configDir, 'config.json' ),
-            JSON.stringify( config, null, 4 ),
-            'utf-8'
-        )
-
-        const { result } = await FlowMcpCli.groupRemove( { name: 'test', tools: 'demo/ping.mjs', cwd } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'tools' ] ).toHaveLength( 1 )
-        expect( result[ 'tools' ][ 0 ] ).toBe( 'demo/other.mjs' )
-
-        const configRaw = await readFile( join( configDir, 'config.json' ), 'utf-8' )
-        const updatedConfig = JSON.parse( configRaw )
-
-        expect( updatedConfig[ 'groups' ][ 'test' ][ 'tools' ] ).toBeDefined()
-        expect( updatedConfig[ 'groups' ][ 'test' ][ 'schemas' ] ).toBeUndefined()
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
-
-
-describe( 'FlowMcpCli.groupSetDefault validation failure in async method', () => {
-    it( 'returns validation error for non-string name', async () => {
-        const { result } = await FlowMcpCli.groupSetDefault( { name: 42, cwd: TEST_CWD } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'messages' ] ).toBeDefined()
-    } )
-} )

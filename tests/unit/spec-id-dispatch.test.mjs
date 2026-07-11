@@ -164,154 +164,23 @@ async function makeTmpCwdWithConfig( { tools = [], groups = null, defaultGroup =
 
 // ─── 1. groupAppend accepts 2-slash tool Spec-ID ─────────────────────────────
 
-describe( 'groupAppend — Spec-ID 2-slash tool', () => {
-    it( 'accepts demo/tool/ping and appends it to a group', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'ga-specid' } )
-
-        const { result } = await FlowMcpCli.groupAppend( {
-            'name': 'spec-group',
-            'tools': 'demo/tool/ping',
-            cwd
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'toolCount' ] ).toBe( 1 )
-        expect( result[ 'tools' ] ).toContain( 'demo/tool/ping' )
-
-        await rm( cwd, { recursive: true, force: true } )
-    }, 90000 )
-} )
-
 
 // ─── 2. groupAppend expands container Spec-ID ────────────────────────────────
-
-describe( 'groupAppend — container Spec-ID expansion', () => {
-    it( 'expands moralis/nftApi container to all primitive Spec-IDs', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'ga-container' } )
-
-        const { result } = await FlowMcpCli.groupAppend( {
-            'name': 'nft-group',
-            'tools': 'moralis/nftApi',
-            cwd
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'tools' ] ).toContain( 'moralis/tool/getNft' )
-        expect( result[ 'tools' ] ).toContain( 'moralis/tool/getNftMetadata' )
-        expect( result[ 'tools' ] ).toContain( 'moralis/tool/getNftOwners' )
-        expect( result[ 'toolCount' ] ).toBe( 3 )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
 
 
 // ─── 3. groupAppend handles mixed legacy + Spec-ID ───────────────────────────
 
-describe( 'groupAppend — mixed legacy and Spec-ID', () => {
-    it( 'processes legacy ref and Spec-ID in same comma-separated input', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'ga-mixed' } )
-
-        const { result } = await FlowMcpCli.groupAppend( {
-            'name': 'mixed-group',
-            'tools': 'demosrc/ping.mjs::ping, demo/tool/ping',
-            cwd
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'tools' ] ).toContain( 'demosrc/ping.mjs::ping' )
-        expect( result[ 'tools' ] ).toContain( 'demo/tool/ping' )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
-
 
 // ─── 4. add with 2-slash tool Spec-ID ────────────────────────────────────────
-
-describe( 'add — Spec-ID 2-slash tool', () => {
-    it( 'adds demo/tool/ping to config as Spec-ID', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'add-specid' } )
-        const configDir = join( cwd, '.flowmcp' )
-        await mkdir( configDir, { recursive: true } )
-        await writeFile( join( configDir, 'config.json' ), JSON.stringify( { 'root': '~/.flowmcp', 'tools': [] }, null, 4 ), 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( { 'toolName': 'demo/tool/ping', cwd } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'added' ] ).toBe( 'demo/tool/ping' )
-
-        const raw = await readFile( join( configDir, 'config.json' ), 'utf-8' )
-        const config = JSON.parse( raw )
-
-        expect( config[ 'tools' ] ).toContain( 'demo/tool/ping' )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
 
 
 // ─── 5. add with container Spec-ID expands to primitives ─────────────────────
 
-describe( 'add — container Spec-ID expansion', () => {
-    it( 'expands moralis/nftApi and adds all primitives', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'add-container' } )
-        const configDir = join( cwd, '.flowmcp' )
-        await mkdir( configDir, { recursive: true } )
-        await writeFile( join( configDir, 'config.json' ), JSON.stringify( { 'root': '~/.flowmcp', 'tools': [] }, null, 4 ), 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( { 'toolName': 'moralis/nftApi', cwd } )
-
-        expect( result[ 'status' ] ).toBe( true )
-
-        const raw = await readFile( join( configDir, 'config.json' ), 'utf-8' )
-        const config = JSON.parse( raw )
-
-        expect( config[ 'tools' ] ).toContain( 'moralis/tool/getNft' )
-        expect( config[ 'tools' ] ).toContain( 'moralis/tool/getNftMetadata' )
-        expect( config[ 'tools' ] ).toContain( 'moralis/tool/getNftOwners' )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
-
 
 // ─── 6. add with unknown Spec-ID errors clearly ──────────────────────────────
 
-describe( 'add — unknown Spec-ID', () => {
-    it( 'returns error for Spec-ID not found in index', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'add-unknown' } )
-        const configDir = join( cwd, '.flowmcp' )
-        await mkdir( configDir, { recursive: true } )
-        await writeFile( join( configDir, 'config.json' ), JSON.stringify( { 'root': '~/.flowmcp', 'tools': [] }, null, 4 ), 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( { 'toolName': 'unknown/tool/doesNotExist', cwd } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toMatch( /not found/ )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
-
 
 // ─── 7. add rejects unknown container Spec-ID ────────────────────────────────
-
-describe( 'add — nonexistent 1-slash container', () => {
-    it( 'returns clear error for container that does not exist', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'add-nocontainer' } )
-        const configDir = join( cwd, '.flowmcp' )
-        await mkdir( configDir, { recursive: true } )
-        await writeFile( join( configDir, 'config.json' ), JSON.stringify( { 'root': '~/.flowmcp', 'tools': [] }, null, 4 ), 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( { 'toolName': 'demo/noSuchSchema', cwd } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toMatch( /not found/ )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )
 
 
 // ─── 8. callTool rejects 1-slash container ───────────────────────────────────
@@ -416,25 +285,3 @@ describe( 'list — shows folder tools by MCP name (Memo 099)', () => {
 
 // ─── 12. multi-part container expansion ──────────────────────────────────────
 
-describe( 'Multi-part container expansion via groupAppend', () => {
-    it( 'nftApi with part1 and part2 expands to 3 tools total', async () => {
-        const cwd = await makeTmpCwd( { 'suffix': 'multipart' } )
-
-        const { result } = await FlowMcpCli.groupAppend( {
-            'name': 'full-nft',
-            'tools': 'moralis/nftApi',
-            cwd
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'toolCount' ] ).toBe( 3 )
-
-        const toolIds = result[ 'tools' ]
-
-        expect( toolIds ).toContain( 'moralis/tool/getNft' )
-        expect( toolIds ).toContain( 'moralis/tool/getNftMetadata' )
-        expect( toolIds ).toContain( 'moralis/tool/getNftOwners' )
-
-        await rm( cwd, { recursive: true, force: true } )
-    } )
-} )

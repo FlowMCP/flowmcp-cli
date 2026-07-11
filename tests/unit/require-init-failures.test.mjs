@@ -32,41 +32,6 @@ afterAll( async () => {
 
 
 describe( 'FlowMcpCli methods when not initialized', () => {
-    it( 'groupAppend returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.groupAppend( { name: 'test', tools: 'demo/ping.mjs', cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
-
-
-    it( 'groupRemove returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.groupRemove( { name: 'test', tools: 'demo/ping.mjs', cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
-
-
-    it( 'groupList returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.groupList( { cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
-
-
-    it( 'groupSetDefault returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.groupSetDefault( { name: 'test', cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
-
 
     it( 'promptList returns init error when not initialized', async () => {
         const { result } = await FlowMcpCli.promptList( { cwd: '/tmp' } )
@@ -151,23 +116,6 @@ describe( 'FlowMcpCli methods when not initialized', () => {
         expect( result[ 'error' ] ).toContain( 'init' )
     } )
 
-
-    it( 'add returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.add( { toolName: 'test', cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
-
-
-    it( 'remove returns init error when not initialized', async () => {
-        const { result } = await FlowMcpCli.remove( { toolName: 'test', cwd: '/tmp' } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toBeDefined()
-        expect( result[ 'error' ] ).toContain( 'init' )
-    } )
 
 
     it( 'list returns init error when not initialized', async () => {

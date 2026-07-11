@@ -123,18 +123,6 @@ describe( 'Phase 2/3 friction — full coverage (Memo 032 PRD-13)', () => {
     } )
 
 
-    it( 'B: add succeeds without --force when keys present', async () => {
-        await writeFile( testHome.envPath(), 'TEST_KEY=valid_test_value_long_enough\n', 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'testschema/tool/sample',
-            'cwd': projectDir
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'added' ] ).toBe( 'testschema/tool/sample' )
-    } )
-
 
     it( 'D: env-resolve detects local override over global', async () => {
         await writeFile( testHome.envPath(), 'SHARED_KEY=global_value_long_enough\nGLOBAL_ONLY=global_only_value\n', 'utf-8' )

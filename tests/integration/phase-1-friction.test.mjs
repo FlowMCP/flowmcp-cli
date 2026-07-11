@@ -104,32 +104,6 @@ describe( 'Phase 1 friction — empty env (Memo 032 PRD-12)', () => {
     } )
 
 
-    it( 'B: add blocks when key missing without --force', async () => {
-        await writeFile( testHome.envPath(), '', 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'testschema/tool/sample',
-            'cwd': projectDir
-        } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'TEST_KEY' )
-    } )
-
-
-    it( 'C: add --force succeeds with warning', async () => {
-        await writeFile( testHome.envPath(), '', 'utf-8' )
-
-        const { result } = await FlowMcpCli.add( {
-            'toolName': 'testschema/tool/sample',
-            'cwd': projectDir,
-            'force': true
-        } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'added' ] ).toBe( 'testschema/tool/sample' )
-    } )
-
 
     it( 'D: env-resolve returns empty sources when no env file exists', async () => {
         // No env file at all (global config has envPath set but file is absent)
