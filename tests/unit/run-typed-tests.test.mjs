@@ -4,7 +4,7 @@ import { jest, describe, it, expect, beforeAll } from '@jest/globals'
 // Mock the flowmcp facade so #executeTest tool + resource paths are deterministic.
 // SkillValidator / SelectionValidator / MainValidator / MetaGenerator pass through
 // to the real v4 modules (via the ./v4 alias) so validate paths are unaffected.
-const { SkillValidator, SelectionValidator, MainValidator, MetaGenerator, CatalogIndex, IdResolver } = await import( 'flowmcp/v4' )
+const { SkillValidator, SelectionValidator, MainValidator, MetaGenerator, CatalogIndex, IdResolver, LibraryLoader } = await import( 'flowmcp/v4' )
 
 jest.unstable_mockModule( 'flowmcp', () => {
     return {
@@ -14,6 +14,9 @@ jest.unstable_mockModule( 'flowmcp', () => {
         MetaGenerator,
         CatalogIndex,
         IdResolver,
+        // D-06: FlowMcpCli now imports LibraryLoader from 'flowmcp' (external-lib gate delegation);
+        // pass the real v4 module through so the mocked facade still satisfies the import.
+        LibraryLoader,
         'FlowMCP': {
             'fetch': async ( { routeName, userParams } ) => {
                 // Simulate failure for a special marker route

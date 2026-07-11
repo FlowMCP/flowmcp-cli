@@ -21,7 +21,7 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -6157,58 +6157,27 @@ allowlist, migrate-config, etc.).
 
             const requiredLibraries = main[ 'requiredLibraries' ] || []
             if( requiredLibraries.length > 0 ) {
-                // Befund C / flowmcp-cli#44: resolve required libraries from a DETERMINISTIC
-                // base (the CLI install dir, whose node_modules ships the allowed libs such
-                // as ethers) instead of the schema file location. The schema may live under
-                // ~/.flowmcp/schemas/<source>/ whose node_modules does NOT carry ethers — that
-                // was the root cause of the "ethers nicht auffindbar" workaround. We try the
-                // deterministic base first, then fall back to the schema-anchored require for
-                // local dev where a schema ships its own deps. A genuinely unresolvable lib is
-                // surfaced explicitly (No Silent Defaults) rather than swallowed.
-                // Memo 150 — resolution chain: allowed-libraries FIRST (the user-owned folder,
-                // config allowedLibrariesPath — this is where the 49 external libs live and where
-                // `npm install --prefix` puts them), then the CLI base (ships ethers/better-sqlite3),
-                // then the schema dir (local dev). First hit wins. Non-breaking: the two legacy bases
-                // stay as fallbacks so the CLI's own runtime deps keep loading.
+                // Memo 152 / PRD-018 (D-06, F17=A): the external-library resolution + classification
+                // (LIB-001 not-installed / LIB-BINDING installed-but-unloadable / LIB-002 per-base miss)
+                // is delegated to core LibraryLoader.resolveExternal — the CLI no longer re-orchestrates
+                // library loading. The CLI keeps ownership of the allowlist gate (folder presence,
+                // Memo 150 F7) by COMPUTING the ordered resolution bases and passing them to core:
+                //   allowed-libraries FIRST (user-owned, config allowedLibrariesPath — where the 49
+                //   external libs live and where `npm install --prefix` puts them), then the CLI base
+                //   (ships ethers/better-sqlite3), then the schema dir (local dev). First hit wins.
+                // core stays env-free (it reads no config; it receives the paths). LIB-001 stays coded
+                // (re-thrown by the catch below); LIB-BINDING stays uncoded (logs+degrades — a broken
+                // binding needs a rebuild, not an install). The LIB-002 emit is wired to CliOutput.
                 const { allowedLibrariesBase } = await FlowMcpCli.#resolveAllowedLibrariesBase()
                 const { resolveBase } = FlowMcpCli.#resolveLibraryBase()
-                const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
-                const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
-                const schemaRequire = createRequire( resolve( filePath ) )
-                const notInstalled = []
-                const loadFailed = []
-
-                await requiredLibraries
-                    .reduce( ( promise, lib ) => promise.then( async () => {
-                        const loaded = await FlowMcpCli.#loadOneLibrary( { lib, 'requires': [ allowedRequire, baseRequire, schemaRequire ] } )
-
-                        if( loaded[ 'status' ] === true ) {
-                            libraries[ lib ] = loaded[ 'module' ]
-                        } else if( loaded[ 'loadError' ] !== null && loaded[ 'loadError' ] !== undefined ) {
-                            // Installed but unloadable — a broken/ABI-mismatched native binding.
-                            loadFailed.push( { lib, 'reason': loaded[ 'loadError' ] } )
-                        } else {
-                            notInstalled.push( lib )
-                        }
-                    } ), Promise.resolve() )
-
-                if( loadFailed.length > 0 ) {
-                    // Memo 119 — an installed-but-unloadable native binding (ABI mismatch / missing
-                    // .node) needs a REBUILD, not an install. Deliberately left UNCODED so
-                    // #resolveHandlers logs+degrades (see lib-binding-error test) rather than taking
-                    // the LIB-001 fail-loud path used for a genuinely unresolvable library.
-                    const detail = loadFailed
-                        .map( ( entry ) => `${entry.lib} (${entry.reason})` )
-                        .join( '; ' )
-                    throw new Error( `LIB-BINDING: required librar${loadFailed.length === 1 ? 'y is' : 'ies are'} installed but failed to load — a native binding is missing or built for a different Node.js ABI: ${detail}. Rebuild the native module (e.g. "npm rebuild ${loadFailed[ 0 ].lib}" in the CLI, or reinstall it). This is NOT a missing dependency.` )
-                }
-
-                if( notInstalled.length > 0 ) {
-                    // Memo 150 D1 — CODE the throw (LIB-001) so it matches the isCoded regex below and
-                    // re-throws (fail-loud) instead of silently degrading to empty handlers. The message
-                    // carries the exact, copy-pasteable install command (F3=B: we SHOW it, never install).
-                    throw new Error( `LIB-001 required librar${notInstalled.length === 1 ? 'y' : 'ies'} not resolvable from allowed-libraries (${allowedLibrariesBase}), CLI base, nor schema dir: ${notInstalled.join( ', ' )}. Install into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${notInstalled.join( ' ' )}` )
-                }
+                const schemaBase = dirname( resolve( filePath ) )
+                const resolved = await LibraryLoader.resolveExternal( {
+                    'requiredLibraries': requiredLibraries,
+                    'resolveBases': [ allowedLibrariesBase, resolveBase, schemaBase ],
+                    'installHintBase': allowedLibrariesBase,
+                    'emit': ( { code, location, err } ) => CliOutput.emitCoded( { code, location, err } )
+                } )
+                libraries = resolved[ 'libraries' ]
             }
 
             const tempHandlers = handlersFn( { sharedLists, libraries } )
@@ -6239,51 +6208,8 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static async #loadOneLibrary( { lib, requires } ) {
-        // Memo 150 — `requires` is the ordered resolution chain (allowed-libraries, CLI base,
-        // schema dir), supplied by the caller. First require that resolves + imports the lib
-        // wins; the rest are skipped.
-        // Memo 119 — a library can fail in two distinct ways: NOT INSTALLED (resolve throws) or
-        // INSTALLED-BUT-UNLOADABLE (resolve succeeds, load throws — e.g. a native module such as
-        // better-sqlite3 whose .node binding is missing or built for a different ABI). They need
-        // different fixes, so the load error is captured separately and never collapsed into a
-        // misleading "not installed" message.
-        let loadError = null
-
-        const attempt = await requires
-            .reduce( async ( accPromise, req ) => {
-                const acc = await accPromise
-
-                if( acc[ 'status' ] === true ) {
-                    return acc
-                }
-
-                let resolvedPath = null
-                try {
-                    resolvedPath = req.resolve( lib )
-                } catch( resolveErr ) {
-                    CliOutput.emitCoded( { 'code': 'LIB-002', 'location': 'loadOneLibrary: require base could not resolve lib', 'err': resolveErr } )
-                    return acc
-                }
-
-                // Present from this base — any failure now is a LOAD error (native
-                // binding / ABI), not a missing dependency.
-                try {
-                    const mod = await import( pathToFileURL( resolvedPath ).href )
-                    return { 'status': true, 'module': mod.default || mod }
-                } catch( importErr ) {
-                    try {
-                        const mod = req( lib )
-                        return { 'status': true, 'module': mod.default || mod }
-                    } catch( requireErr ) {
-                        loadError = requireErr.message || importErr.message
-                        return acc
-                    }
-                }
-            }, Promise.resolve( { 'status': false, 'module': null } ) )
-
-        return { ...attempt, loadError }
-    }
+    // Memo 152 / PRD-018 (D-06) — #loadOneLibrary moved to core LibraryLoader.#loadOneFromBases;
+    // the requiredLibraries block of #resolveHandlers now delegates to LibraryLoader.resolveExternal.
 
 
     static #resolveLibraryBase() {
