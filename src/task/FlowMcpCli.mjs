@@ -34,8 +34,10 @@ import { FsUtils } from '../lib/FsUtils.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { NamespaceIndexCache } from '../lib/NamespaceIndexCache.mjs'
+import { HttpCache } from '../lib/HttpCache.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
 import { SelectionCommand } from '../commands/SelectionCommand.mjs'
+import { CacheCommand } from '../commands/CacheCommand.mjs'
 
 
 // TODO(next major): remove this delegation facade — the command/lib modules live
@@ -1469,13 +1471,13 @@ class FlowMcpCli {
         const namespace = matchedMain[ 'namespace' ] || 'unknown'
 
         if( isCacheable && !refresh ) {
-            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+            const { cacheKey } = HttpCache.buildCacheKey( {
                 namespace,
                 'routeName': matchedRouteName,
                 userParams
             } )
 
-            const { data: cachedData, meta, isExpired } = await FlowMcpCli.#readCache( { cacheKey } )
+            const { data: cachedData, meta, isExpired } = await HttpCache.readCache( { cacheKey } )
 
             if( cachedData && !isExpired ) {
                 const result = {
@@ -1551,12 +1553,12 @@ class FlowMcpCli {
                 : fetchResult
 
             if( isCacheable ) {
-                const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+                const { cacheKey } = HttpCache.buildCacheKey( {
                     namespace,
                     'routeName': matchedRouteName,
                     userParams
                 } )
-                const { meta: cacheMeta } = await FlowMcpCli.#writeCache( {
+                const { meta: cacheMeta } = await HttpCache.writeCache( {
                     cacheKey,
                     'data': contentData,
                     'ttl': preload[ 'ttl' ]
@@ -3065,241 +3067,17 @@ class FlowMcpCli {
 
 
 
-    static #cacheDir() {
-        const dir = join( ConfigStore.globalConfigDir(), appConfig[ 'cacheDirName' ] )
-
-        return dir
-    }
-
-
-    static #buildCacheKey( { namespace, routeName, userParams } ) {
-        const hasParams = Object.keys( userParams ).length > 0
-        if( !hasParams ) {
-            const cacheKey = `${namespace}/${routeName}.json`
-
-            return { cacheKey }
-        }
-
-        const sortedJson = JSON.stringify(
-            Object.keys( userParams )
-                .sort()
-                .reduce( ( acc, key ) => {
-                    acc[ key ] = userParams[ key ]
-
-                    return acc
-                }, {} )
-        )
-
-        const paramHash = createHash( 'sha256' )
-            .update( sortedJson )
-            .digest( 'hex' )
-            .slice( 0, 12 )
-        const cacheKey = `${namespace}/${routeName}/${paramHash}.json`
-
-        return { cacheKey }
-    }
-
-
-    static async #readCache( { cacheKey } ) {
-        const cachePath = join( FlowMcpCli.#cacheDir(), cacheKey )
-
-        try {
-            const raw = await readFile( cachePath, 'utf-8' )
-            const cached = JSON.parse( raw )
-            const { meta, data } = cached
-
-            const now = new Date()
-            const expiresAt = new Date( meta[ 'expiresAt' ] )
-            const isExpired = now >= expiresAt
-
-            return { data, meta, isExpired, cachePath }
-        } catch( err ) {
-            CliOutput.emitCoded( { 'code': 'CCH-001', 'location': 'readCache: cache read failed', err } )
-
-            return { data: null, meta: null, isExpired: true, cachePath }
-        }
-    }
-
-
-    static async #writeCache( { cacheKey, data, ttl } ) {
-        const cachePath = join( FlowMcpCli.#cacheDir(), cacheKey )
-        const cacheDirectory = dirname( cachePath )
-        await mkdir( cacheDirectory, { recursive: true } )
-
-        const now = new Date()
-        const expiresAt = new Date( now.getTime() + ttl * 1000 )
-        const dataString = JSON.stringify( data )
-
-        const cacheEntry = {
-            'meta': {
-                'fetchedAt': now.toISOString(),
-                'expiresAt': expiresAt.toISOString(),
-                ttl,
-                'size': dataString.length
-            },
-            data
-        }
-
-        // Cache refresh is a deliberate, named overwrite (Memo 068 R2 verschärft) — never silent.
-        await FsUtils.writeGuarded( { 'path': cachePath, 'content': JSON.stringify( cacheEntry, null, 2 ), 'onExists': 'overwrite' } )
-
-        return { cachePath, meta: cacheEntry[ 'meta' ] }
-    }
-
-
+    // Memo 152 / PRD-019 (D-08) — the HTTP response-cache primitives (cacheDir/
+    // buildCacheKey/readCache/writeCache) moved to src/lib/HttpCache.mjs; the
+    // `flowmcp cache` command (status/clear + FS helpers) to src/commands/CacheCommand.mjs.
+    // These stay as delegation facades (F12=A).
     static async cacheClear( { namespace } ) {
-        const cacheBase = FlowMcpCli.#cacheDir()
-
-        try {
-            if( namespace ) {
-                const namespacePath = join( cacheBase, namespace )
-                await FlowMcpCli.#removeDirRecursive( { dirPath: namespacePath } )
-
-                const result = {
-                    'status': true,
-                    'message': `Cache cleared for namespace "${namespace}".`
-                }
-
-                return { result }
-            }
-
-            await FlowMcpCli.#removeDirRecursive( { dirPath: cacheBase } )
-
-            const result = {
-                'status': true,
-                'message': 'All cache cleared.'
-            }
-
-            return { result }
-        } catch( err ) {
-            const result = CliOutput.error( {
-                'error': `CCH-002 cacheClear: Failed to clear cache: ${err.message}`,
-                'fix': `Check permissions on ${cacheBase}`
-            } )
-
-            return { result }
-        }
-    }
-
-
-    static async #removeDirRecursive( { dirPath } ) {
-        try {
-            const entries = await readdir( dirPath, { withFileTypes: true } )
-
-            await entries
-                .reduce( ( promise, entry ) => promise.then( async () => {
-                    const entryPath = join( dirPath, entry.name )
-
-                    if( entry.isDirectory() ) {
-                        await FlowMcpCli.#removeDirRecursive( { dirPath: entryPath } )
-                    } else {
-                        await unlink( entryPath )
-                    }
-                } ), Promise.resolve() )
-
-            const { rmdir } = await import( 'node:fs/promises' )
-            await rmdir( dirPath )
-        } catch( err ) {
-            // directory doesn't exist, nothing to clear
-            CliOutput.emitCoded( { 'code': 'CLI-013', 'location': 'removeDir: recursive dir removal failed', err } )
-        }
+        return await CacheCommand.cacheClear( { namespace } )
     }
 
 
     static async cacheStatus() {
-        const cacheBase = FlowMcpCli.#cacheDir()
-        const entries = []
-
-        try {
-            const namespaces = await readdir( cacheBase, { withFileTypes: true } )
-
-            await namespaces
-                .filter( ( entry ) => {
-                    const isDir = entry.isDirectory()
-
-                    return isDir
-                } )
-                .reduce( ( promise, nsEntry ) => promise.then( async () => {
-                    const nsPath = join( cacheBase, nsEntry.name )
-                    const files = await FlowMcpCli.#collectCacheFiles( { dirPath: nsPath, prefix: nsEntry.name } )
-                    files
-                        .forEach( ( file ) => {
-                            entries.push( file )
-                        } )
-                } ), Promise.resolve() )
-        } catch( err ) {
-            // cache directory doesn't exist yet
-            CliOutput.emitCoded( { 'code': 'HLT-003', 'location': 'cacheStatus: cache dir scan failed', err } )
-        }
-
-        const totalSize = entries
-            .reduce( ( sum, entry ) => {
-                const size = sum + ( entry[ 'size' ] || 0 )
-
-                return size
-            }, 0 )
-
-        const result = {
-            'status': true,
-            'cacheDir': cacheBase,
-            'totalEntries': entries.length,
-            'totalSize': totalSize,
-            entries
-        }
-
-        return { result }
-    }
-
-
-    static async #collectCacheFiles( { dirPath, prefix } ) {
-        const collected = []
-
-        try {
-            const items = await readdir( dirPath, { withFileTypes: true } )
-
-            await items
-                .reduce( ( promise, item ) => promise.then( async () => {
-                    const itemPath = join( dirPath, item.name )
-
-                    if( item.isDirectory() ) {
-                        const subFiles = await FlowMcpCli.#collectCacheFiles( {
-                            dirPath: itemPath,
-                            prefix: `${prefix}/${item.name}`
-                        } )
-                        subFiles
-                            .forEach( ( file ) => {
-                                collected.push( file )
-                            } )
-                    } else if( item.name.endsWith( '.json' ) ) {
-                        try {
-                            const raw = await readFile( itemPath, 'utf-8' )
-                            const parsed = JSON.parse( raw )
-                            const { meta } = parsed
-
-                            const now = new Date()
-                            const expiresAt = new Date( meta[ 'expiresAt' ] )
-                            const isExpired = now >= expiresAt
-
-                            collected.push( {
-                                'key': `${prefix}/${item.name}`,
-                                'fetchedAt': meta[ 'fetchedAt' ],
-                                'expiresAt': meta[ 'expiresAt' ],
-                                'ttl': meta[ 'ttl' ],
-                                'size': meta[ 'size' ],
-                                'expired': isExpired
-                            } )
-                        } catch( err ) {
-                            // corrupt cache file, skip
-                            process.stderr.write( `CCH-003 collectCacheFiles: corrupt cache file skipped: ${err.message}\n` )
-                        }
-                    }
-                } ), Promise.resolve() )
-        } catch( err ) {
-            // directory doesn't exist
-            CliOutput.emitCoded( { 'code': 'CCH-004', 'location': 'collectCacheFiles: cache dir read failed', err } )
-        }
-
-        return collected
+        return await CacheCommand.cacheStatus()
     }
 
 
@@ -3312,7 +3090,7 @@ class FlowMcpCli {
     // ---------------------------------------------------------------------
 
     static #sqliteGtfsCacheDir( { sourceKey } ) {
-        const dir = join( FlowMcpCli.#cacheDir(), sourceKey )
+        const dir = join( HttpCache.cacheDir(), sourceKey )
 
         return dir
     }
@@ -3440,12 +3218,12 @@ class FlowMcpCli {
         // Cache layer (PRD-20 — reuse standard cache helpers)
         const isCacheable = !noCache
         if( isCacheable && !refresh ) {
-            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+            const { cacheKey } = HttpCache.buildCacheKey( {
                 'namespace': entry[ 'namespace' ],
                 'routeName': tool[ 'localName' ],
                 userParams
             } )
-            const { data: cachedData, meta: cacheMeta, isExpired } = await FlowMcpCli.#readCache( { cacheKey } )
+            const { data: cachedData, meta: cacheMeta, isExpired } = await HttpCache.readCache( { cacheKey } )
             if( cachedData && !isExpired ) {
                 const result = {
                     'status': true,
@@ -3569,13 +3347,13 @@ class FlowMcpCli {
         }
 
         if( isCacheable ) {
-            const { cacheKey } = FlowMcpCli.#buildCacheKey( {
+            const { cacheKey } = HttpCache.buildCacheKey( {
                 'namespace': entry[ 'namespace' ],
                 'routeName': tool[ 'localName' ],
                 userParams
             } )
             const ttlSeconds = 60
-            const { meta: writeMeta } = await FlowMcpCli.#writeCache( {
+            const { meta: writeMeta } = await HttpCache.writeCache( {
                 cacheKey,
                 'data': handlerResult,
                 'ttl': ttlSeconds
