@@ -35,6 +35,7 @@ import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { NamespaceIndexCache } from '../lib/NamespaceIndexCache.mjs'
 import { HttpCache } from '../lib/HttpCache.mjs'
+import { EnvResolver } from '../lib/EnvResolver.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
 import { SelectionCommand } from '../commands/SelectionCommand.mjs'
 import { CacheCommand } from '../commands/CacheCommand.mjs'
@@ -642,7 +643,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+        const { envObject } = EnvResolver.parseEnvFile( { envContent } )
 
         const missing = []
         resolvedSchemas
@@ -718,7 +719,7 @@ class FlowMcpCli {
         await resolvedSchemas
             .reduce( ( promise, { main, handlersFn, file, source } ) => promise.then( async () => {
                 const requiredServerParams = main[ 'requiredServerParams' ] || []
-                const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+                const { serverParams } = EnvResolver.buildServerParams( { envObject, requiredServerParams } )
                 // Memo 149 Strang B — resolve via the single-source helper (was:
                 // join( #schemasDir(), file ) against the dead staging dir).
                 const { filePath: schemaFilePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: file } )
@@ -1000,7 +1001,7 @@ class FlowMcpCli {
         const { envPath } = config
         const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
-            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            ? EnvResolver.parseEnvFile( { envContent } ).envObject
             : {}
 
         let userParams = {}
@@ -1134,7 +1135,7 @@ class FlowMcpCli {
 
         try {
             const requiredServerParams = matchedMain[ 'requiredServerParams' ] || []
-            const { serverParams } = FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } )
+            const { serverParams } = EnvResolver.buildServerParams( { envObject, requiredServerParams } )
             // Memo 149 Strang B — reuse the already-resolved matchedSchemaFilePath (the
             // param path computed it via #resolveSchemaFilePath above). No second, dead
             // join( #schemasDir(), matchedFile ).
@@ -1260,7 +1261,7 @@ class FlowMcpCli {
             ? await FsUtils.readText( { filePath: searchEnvPath } )
             : { data: null }
         const searchEnvObject = searchEnvContent
-            ? FlowMcpCli.#parseEnvFile( { envContent: searchEnvContent } ).envObject
+            ? EnvResolver.parseEnvFile( { envContent: searchEnvContent } ).envObject
             : {}
 
         const { aliasIndex } = await FlowMcpCli.#loadSharedAliases()
@@ -1427,7 +1428,7 @@ class FlowMcpCli {
         const { envPath } = config
         const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
-            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            ? EnvResolver.parseEnvFile( { envContent } ).envObject
             : {}
 
         const { schemas, error: resolveError, fix: resolveFix } = await FlowMcpCli.#resolveAllSchemas()
@@ -1972,7 +1973,7 @@ class FlowMcpCli {
         // Level 3b: Env Params
         if( envOk && schemaSourceCount > 0 ) {
             const envContent = await readFile( envPath, 'utf-8' )
-            const { envObject } = FlowMcpCli.#parseEnvFile( { envContent } )
+            const { envObject } = EnvResolver.parseEnvFile( { envContent } )
 
             const allRequiredParams = new Set()
             const paramsByNamespace = {}
@@ -3173,98 +3174,13 @@ class FlowMcpCli {
 
 
 
-    /**
-     * Resolve env keys with local override + global fallback (Memo 032 PRD-07).
-     *
-     * Search order:
-     *   1. Local: <cwd>/.flowmcp/.env (project-specific override, optional)
-     *   2. Global: configured envPath in ~/.flowmcp/config.json, or fallback ~/.flowmcp/.env
-     *
-     * Local keys override global keys when both present (merge, not replace).
-     *
-     * @param {Object} params
-     * @param {string} params.cwd - Current working directory
-     * @returns {Promise<{envObject: Object, sources: {local: string|null, global: string|null}}>}
-     */
-    static async #resolveEnv( { cwd } ) {
-        const localEnvPath = join( cwd, appConfig[ 'localConfigDirName' ], '.env' )
-        const globalConfigPath = ConfigStore.globalConfigPath()
-        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
-        const configuredGlobalEnv = ( globalConfig && globalConfig[ 'envPath' ] )
-            ? globalConfig[ 'envPath' ]
-            : join( ConfigStore.globalConfigDir(), appConfig[ 'defaultEnvFileName' ] )
+    // Memo 152 / PRD-019 (D-08) — the shared env helpers resolveEnv/parseEnvFile/
+    // buildServerParams/isKeyFilled moved to src/lib/EnvResolver.mjs. Call sites
+    // across the handler/call/search/serve/env-tools paths call EnvResolver directly.
 
-        let globalEnv = {}
-        let globalSourcePath = null
-        const { data: globalContent } = await FsUtils.readText( { filePath: configuredGlobalEnv } )
-        if( globalContent !== null ) {
-            globalEnv = FlowMcpCli.#parseEnvFile( { envContent: globalContent } ).envObject
-            globalSourcePath = configuredGlobalEnv
-        }
-
-        let localEnv = {}
-        let localSourcePath = null
-        const { data: localContent } = await FsUtils.readText( { filePath: localEnvPath } )
-        if( localContent !== null ) {
-            localEnv = FlowMcpCli.#parseEnvFile( { envContent: localContent } ).envObject
-            localSourcePath = localEnvPath
-        }
-
-        const envObject = { ...globalEnv, ...localEnv }
-
-        return {
-            envObject,
-            'sources': {
-                'local': localSourcePath,
-                'global': globalSourcePath
-            }
-        }
-    }
-
-
-    // Test-only accessor for #resolveEnv (Memo 032 PRD-07). Do not use in production code.
+    // Test-only accessor for EnvResolver.resolveEnv (Memo 032 PRD-07). Do not use in production code.
     static async _testResolveEnv( { cwd } ) {
-        return FlowMcpCli.#resolveEnv( { cwd } )
-    }
-
-
-
-    /**
-     * Check whether an env value is "filled" (non-placeholder, sufficiently long, real).
-     * Used by env doctor to bucket keys into filled vs missing.
-     */
-    static #isKeyFilled( { value } ) {
-        if( value === undefined || value === null ) {
-            return false
-        }
-
-        if( typeof value !== 'string' ) {
-            return false
-        }
-
-        const trimmed = value.trim()
-        if( trimmed.length === 0 ) {
-            return false
-        }
-
-        // No minimum-length heuristic: many valid credentials are short — usernames
-        // (GEONAMES_USERNAME, REGIONALSTATISTIK_USERNAME) and short API keys (OMDb
-        // keys are 8 chars). A length gate produced false "missing" reports. Empty
-        // and placeholder checks are the real signal.
-        const placeholders = [ 'your_key_here', '<your-key', '# Example', 'YOUR_KEY', 'TODO' ]
-        const lowered = trimmed.toLowerCase()
-        const isPlaceholder = placeholders
-            .find( ( pattern ) => {
-                const match = lowered.includes( pattern.toLowerCase() )
-
-                return match
-            } )
-
-        if( isPlaceholder ) {
-            return false
-        }
-
-        return true
+        return EnvResolver.resolveEnv( { cwd } )
     }
 
 
@@ -3337,7 +3253,7 @@ class FlowMcpCli {
      * Supports JSON output, --fix-template, --print-signups, --strict and --schema filter.
      */
     static async devEnvDoctor( { schema = null, strict = false, fixTemplate = false, json = false, printSignups = false, cwd } ) {
-        const { envObject, sources } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd } )
         const { keys: required } = await FlowMcpCli.#collectAllRequiredServerParams( { cwd, 'schemaFilter': schema } )
 
         const filled = []
@@ -3346,7 +3262,7 @@ class FlowMcpCli {
         required
             .forEach( ( key ) => {
                 const value = envObject[ key ]
-                const isFilled = FlowMcpCli.#isKeyFilled( { value } )
+                const isFilled = EnvResolver.isKeyFilled( { value } )
 
                 if( isFilled ) {
                     filled.push( key )
@@ -3450,7 +3366,7 @@ class FlowMcpCli {
      * Snapshots the resolved env to ~/.flowmcp/.env-backups/{ISO}.env.
      */
     static async devEnvBackup( { cwd } ) {
-        const { sources } = await FlowMcpCli.#resolveEnv( { cwd } )
+        const { sources } = await EnvResolver.resolveEnv( { cwd } )
         const source = sources[ 'global' ] || sources[ 'local' ]
 
         if( !source ) {
@@ -3559,8 +3475,8 @@ class FlowMcpCli {
             return { result }
         }
 
-        const { envObject: current } = await FlowMcpCli.#resolveEnv( { cwd } )
-        const { envObject: backup } = FlowMcpCli.#parseEnvFile( { 'envContent': backupContent } )
+        const { envObject: current } = await EnvResolver.resolveEnv( { cwd } )
+        const { envObject: backup } = EnvResolver.parseEnvFile( { 'envContent': backupContent } )
 
         const currentKeys = new Set( Object.keys( current ) )
         const backupKeys = new Set( Object.keys( backup ) )
@@ -5031,45 +4947,8 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #parseEnvFile( { envContent } ) {
-        const envObject = envContent
-            .split( '\n' )
-            .filter( ( line ) => {
-                const isValid = line.includes( '=' ) && !line.startsWith( '#' )
-
-                return isValid
-            } )
-            .reduce( ( acc, line ) => {
-                const separatorIndex = line.indexOf( '=' )
-                const key = line.slice( 0, separatorIndex ).trim()
-                const value = line.slice( separatorIndex + 1 ).trim()
-                acc[ key ] = value
-
-                return acc
-            }, {} )
-
-        return { envObject }
-    }
-
-
-    static #buildServerParams( { envObject, requiredServerParams } ) {
-        const serverParams = requiredServerParams
-            .reduce( ( acc, paramName ) => {
-                const value = envObject[ paramName ]
-                // Memo 119 Kap 5a — an empty/whitespace env value is treated as MISSING,
-                // not injected as an empty credential. Injecting '' fired a live request
-                // with an empty key (401) that was recorded as a false FAIL; omitting it
-                // routes the schema to the key-gated "not evaluable" path (DPT-007),
-                // consistent with how `search`/`list` flag a tool as disabled.
-                if( FlowMcpCli.#isKeyFilled( { value } ) ) {
-                    acc[ paramName ] = value
-                }
-
-                return acc
-            }, {} )
-
-        return { serverParams }
-    }
+    // Memo 152 / PRD-019 (D-08) — parseEnvFile / buildServerParams moved to
+    // src/lib/EnvResolver.mjs (public statics). See the delegation note above.
 
 
     static async #resolveActiveToolRefs( { cwd } ) {
@@ -5338,7 +5217,7 @@ allowlist, migrate-config, etc.).
         const { envPath } = config
         const { data: envContent } = await FsUtils.readText( { filePath: envPath } )
         const envObject = envContent
-            ? FlowMcpCli.#parseEnvFile( { envContent } ).envObject
+            ? EnvResolver.parseEnvFile( { envContent } ).envObject
             : {}
         const missingKeys = Array.from( envKeysNeeded )
             .filter( ( key ) => {
@@ -7879,7 +7758,7 @@ allowlist, migrate-config, etc.).
         // but WITHOUT the prompt/goal emit afterwards.
         const requiredServerParams = Array.isArray( main[ 'requiredServerParams' ] ) ? main[ 'requiredServerParams' ] : []
         const serverParams = useKeys === true
-            ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
+            ? EnvResolver.buildServerParams( { 'envObject': ( await EnvResolver.resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
             : {}
         const { sharedLists } = await ListsCommand.resolveSharedListsForSchema( { main, 'filePath': sourcePath } )
 
@@ -8192,7 +8071,7 @@ allowlist, migrate-config, etc.).
         }
 
         const { useKeys } = await FlowMcpCli.#gradingUseKeys( { withKeys } )
-        const envObject = useKeys === true ? ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject : {}
+        const envObject = useKeys === true ? ( await EnvResolver.resolveEnv( { cwd } ) ).envObject : {}
 
         const perSchema = []
         const reloadTotal = targetSchemas.length
@@ -8202,7 +8081,7 @@ allowlist, migrate-config, etc.).
                 CliOutput.emitProgress( { quiet, 'message': `[${index + 1}/${reloadTotal}] reload ${schema.schemaName}` } )
                 const requiredServerParams = Array.isArray( schema.main[ 'requiredServerParams' ] ) ? schema.main[ 'requiredServerParams' ] : []
                 const serverParams = useKeys === true
-                    ? FlowMcpCli.#buildServerParams( { envObject, requiredServerParams } ).serverParams
+                    ? EnvResolver.buildServerParams( { envObject, requiredServerParams } ).serverParams
                     : {}
                 const { sharedLists } = await ListsCommand.resolveSharedListsForSchema( { 'main': schema.main, 'filePath': schema.sourcePath } )
                 const pretest = await grading[ 'DataPretest' ].run( {
@@ -9165,7 +9044,7 @@ allowlist, migrate-config, etc.).
                 // still resolved when ON; when OFF we skip the read entirely.
                 const requiredServerParams = Array.isArray( main[ 'requiredServerParams' ] ) ? main[ 'requiredServerParams' ] : []
                 const serverParams = useKeys === true
-                    ? FlowMcpCli.#buildServerParams( { 'envObject': ( await FlowMcpCli.#resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
+                    ? EnvResolver.buildServerParams( { 'envObject': ( await EnvResolver.resolveEnv( { cwd } ) ).envObject, requiredServerParams } ).serverParams
                     : {}
                 const { sharedLists } = await ListsCommand.resolveSharedListsForSchema( { main, 'filePath': sourcePath } )
 
