@@ -41,6 +41,7 @@ import { CliBase } from '../lib/CliBase.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
 import { DoctorCommand } from '../commands/DoctorCommand.mjs'
 import { EnvCommand } from '../commands/EnvCommand.mjs'
+import { CatalogCommand } from '../commands/CatalogCommand.mjs'
 import { SelectionCommand } from '../commands/SelectionCommand.mjs'
 import { CacheCommand } from '../commands/CacheCommand.mjs'
 import { PromptCommand } from '../commands/PromptCommand.mjs'
@@ -3045,23 +3046,12 @@ class FlowMcpCli {
     }
 
 
+    // Memo 152 / PRD-019 (D-08 cluster "catalog-skill") — catalogSources + validateCatalog
+    // moved to src/commands/CatalogCommand.mjs. These stay as public delegations (index.mjs +
+    // the catalog test call them). generateSkill/generateCatalog/importAgent/catalogLink/Unlink
+    // stay here untouched (importAgent + link/unlink deletion is PRD-020 G-11/G-12).
     static async catalogSources() {
-        const { localSources } = await ConfigStore.readLocalSources()
-
-        const linked = Object.entries( localSources )
-            .map( ( [ name, entry ] ) => {
-                const sourceInfo = { name, 'path': entry[ 'path' ] }
-
-                return sourceInfo
-            } )
-
-        const result = {
-            'status': true,
-            'count': linked.length,
-            'sources': linked
-        }
-
-        return { result }
+        return CatalogCommand.catalogSources()
     }
 
 
@@ -4834,95 +4824,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
 
     static async validateCatalog( { catalogDir, cwd } ) {
-        if( !catalogDir ) {
-            return { result: CliOutput.error( { error: 'Missing catalog directory', fix: 'flowmcp validate-catalog <catalog-directory>' } ) }
-        }
-
-        const registryPath = join( catalogDir, 'registry.json' )
-        let registryData = null
-
-        try {
-            const content = await readFile( registryPath, 'utf-8' )
-            registryData = JSON.parse( content )
-        } catch( err ) {
-            return { result: { status: false, errors: [ `CAT001: registry.json must exist in catalog root — ${err.message}` ], warnings: [] } }
-        }
-
-        const errors = []
-        const warnings = []
-
-        const dirName = catalogDir.split( '/' ).pop()
-
-        if( registryData[ 'name' ] !== dirName ) {
-            errors.push( `CAT002: name "${registryData[ 'name' ]}" must match directory name "${dirName}"` )
-        }
-
-        const shared = registryData[ 'shared' ] || []
-
-        await Promise.allSettled(
-            shared
-                .map( async ( entry ) => {
-                    const filePath = join( catalogDir, entry[ 'file' ] )
-
-                    try {
-                        await stat( filePath )
-                    } catch( err ) {
-                        errors.push( `CAT003: shared file not found — ${entry[ 'file' ]}` )
-                    }
-                } )
-        )
-
-        const schemas = registryData[ 'schemas' ] || []
-
-        await Promise.allSettled(
-            schemas
-                .map( async ( entry ) => {
-                    const filePath = join( catalogDir, entry[ 'file' ] )
-
-                    try {
-                        await stat( filePath )
-                    } catch( err ) {
-                        errors.push( `CAT004: schema file not found — ${entry[ 'file' ]}` )
-                    }
-                } )
-        )
-
-        const agents = registryData[ 'agents' ] || []
-
-        await Promise.allSettled(
-            agents
-                .map( async ( entry ) => {
-                    const filePath = join( catalogDir, entry[ 'manifest' ] )
-
-                    try {
-                        await stat( filePath )
-                    } catch( err ) {
-                        errors.push( `CAT005: agent manifest not found — ${entry[ 'manifest' ]}` )
-                    }
-                } )
-        )
-
-        const specVersion = registryData[ 'schemaSpec' ] || ''
-        const validVersions = [ '2.0.0', '3.0.0' ]
-
-        if( !validVersions.includes( specVersion ) ) {
-            errors.push( `CAT007: schemaSpec "${specVersion}" is not a valid FlowMCP specification version` )
-        }
-
-        const result = {
-            status: errors.length === 0,
-            catalog: registryData[ 'name' ] || dirName,
-            schemaSpec: specVersion,
-            counts: {
-                shared: shared.length,
-                schemas: schemas.length,
-                agents: agents.length
-            },
-            errors,
-            warnings
-        }
-
-        return { result }
+        return CatalogCommand.validateCatalog( { catalogDir, cwd } )
     }
 
 
