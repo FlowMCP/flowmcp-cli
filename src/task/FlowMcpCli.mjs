@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto'
 import chalk from 'chalk'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -35,6 +35,7 @@ import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { HttpCache } from '../lib/HttpCache.mjs'
 import { EnvResolver } from '../lib/EnvResolver.mjs'
 import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
+import { HandlerResolver } from '../lib/HandlerResolver.mjs'
 import { NamespaceIndex } from '../lib/NamespaceIndex.mjs'
 import { CliBase } from '../lib/CliBase.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
@@ -729,7 +730,7 @@ class FlowMcpCli {
                 // Memo 149 Strang B — resolve via the single-source helper (was:
                 // join( #schemasDir(), file ) against the dead staging dir).
                 const { filePath: schemaFilePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: file } )
-                const { handlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+                const { handlerMap } = await HandlerResolver.resolve( { main, handlersFn, 'filePath': schemaFilePath } )
                 const namespaceForTools = main[ 'namespace' ] || 'unknown'
 
                 Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} )
@@ -758,7 +759,7 @@ class FlowMcpCli {
 
                 if( main[ 'resources' ] ) {
                     const schemaRef = main[ 'namespace' ] || 'unknown'
-                    const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaFilePath } )
+                    const { resourceHandlerMap } = await HandlerResolver.resolve( { main, handlersFn, 'filePath': schemaFilePath } )
 
                     await FlowMCP.initializeResourceDbs( { 'resources': main[ 'resources' ], schemaRef } )
 
@@ -1145,7 +1146,7 @@ class FlowMcpCli {
             // Memo 149 Strang B — reuse the already-resolved matchedSchemaFilePath (the
             // param path computed it via #resolveSchemaFilePath above). No second, dead
             // join( #schemasDir(), matchedFile ).
-            const { handlerMap } = await FlowMcpCli.#resolveHandlers( { 'main': matchedMain, 'handlersFn': matchedHandlersFn, 'filePath': matchedSchemaFilePath } )
+            const { handlerMap } = await HandlerResolver.resolve( { 'main': matchedMain, 'handlersFn': matchedHandlersFn, 'filePath': matchedSchemaFilePath } )
 
             const fetchResult = await FlowMCP.fetch( {
                 'main': matchedMain,
@@ -3853,7 +3854,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // fail-loud shared-list contract (LST-001 / HND-001) and the single-source path
     // helper can be exercised deterministically without a live schemaFolders round-trip.
     static async _testHook_resolveHandlers( { main, handlersFn, filePath } ) {
-        return await FlowMcpCli.#resolveHandlers( { main, handlersFn, filePath } )
+        return await HandlerResolver.resolve( { main, handlersFn, filePath } )
     }
 
 
@@ -3877,91 +3878,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         } )
     }
 
-
-    static async #resolveHandlers( { main, handlersFn, filePath } ) {
-        let handlerMap = {}
-        let resourceHandlerMap = {}
-
-        if( !handlersFn ) {
-            return { handlerMap, resourceHandlerMap }
-        }
-
-        try {
-            const sharedListRefs = main[ 'sharedLists' ] || []
-            let sharedLists = {}
-            let libraries = {}
-
-            if( sharedListRefs.length > 0 ) {
-                const { listsDir } = ListsCommand.findListsDir( { filePath } )
-                // Memo 149 Strang B/C — No Silent Defaults: a schema that DECLARES
-                // sharedLists but whose _lists/ dir cannot be located, or whose refs
-                // resolve to nothing, must fail loud with a code — never fall through to
-                // an empty {} that surfaces downstream as a confusing content:[] (the
-                // evmChains class of bug). The 30-lines-below requiredLibraries branch
-                // already fails loud; the shared-list branch now matches that standard.
-                if( !listsDir ) {
-                    throw new Error( `LST-001 sharedLists: _lists directory not found for a schema declaring ${sharedListRefs.length} shared list(s) (filePath: ${filePath}). Ensure the schema resolves to its real repo path (schemaFolders[]).` )
-                }
-
-                const resolved = await FlowMCP.resolveSharedLists( { sharedListRefs, listsDir } )
-                sharedLists = resolved[ 'sharedLists' ] || {}
-
-                if( Object.keys( sharedLists ).length === 0 ) {
-                    throw new Error( `HND-001 sharedLists: declared ${sharedListRefs.length} shared list(s) but none resolved from ${listsDir}. Check the ref name(s) and list version(s).` )
-                }
-            }
-
-            const requiredLibraries = main[ 'requiredLibraries' ] || []
-            if( requiredLibraries.length > 0 ) {
-                // Memo 152 / PRD-018 (D-06, F17=A): the external-library resolution + classification
-                // (LIB-001 not-installed / LIB-BINDING installed-but-unloadable / LIB-002 per-base miss)
-                // is delegated to core LibraryLoader.resolveExternal — the CLI no longer re-orchestrates
-                // library loading. The CLI keeps ownership of the allowlist gate (folder presence,
-                // Memo 150 F7) by COMPUTING the ordered resolution bases and passing them to core:
-                //   allowed-libraries FIRST (user-owned, config allowedLibrariesPath — where the 49
-                //   external libs live and where `npm install --prefix` puts them), then the CLI base
-                //   (ships ethers/better-sqlite3), then the schema dir (local dev). First hit wins.
-                // core stays env-free (it reads no config; it receives the paths). LIB-001 stays coded
-                // (re-thrown by the catch below); LIB-BINDING stays uncoded (logs+degrades — a broken
-                // binding needs a rebuild, not an install). The LIB-002 emit is wired to CliOutput.
-                const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
-                const { resolveBase } = CliBase.resolveBase()
-                const schemaBase = dirname( resolve( filePath ) )
-                const resolved = await LibraryLoader.resolveExternal( {
-                    'requiredLibraries': requiredLibraries,
-                    'resolveBases': [ allowedLibrariesBase, resolveBase, schemaBase ],
-                    'installHintBase': allowedLibrariesBase,
-                    'emit': ( { code, location, err } ) => CliOutput.emitCoded( { code, location, err } )
-                } )
-                libraries = resolved[ 'libraries' ]
-            }
-
-            const tempHandlers = handlersFn( { sharedLists, libraries } )
-            const allRouteNames = Object.keys( tempHandlers || {} )
-            const resources = main[ 'resources' ] || {}
-            const created = FlowMCP.createHandlers( { handlersFn, sharedLists, libraries, 'routeNames': allRouteNames, resources } )
-            handlerMap = created[ 'handlerMap' ] || {}
-            resourceHandlerMap = created[ 'resourceHandlerMap' ] || {}
-        } catch( resolveErr ) {
-            // No Silent Defaults: a handler-resolution failure (e.g. an unresolvable required
-            // library or shared-list ref) must be visible, not swallowed into empty handlers
-            // that later surface as a confusing "No response received from server".
-            // Memo 149 Strang B/C — a CODED failure (PREFIX-NNN, e.g. LST-001/HND-001) is a
-            // declared-but-unresolvable contract violation and MUST surface (re-throw) rather
-            // than degrade to empty handlers -> content:[]. Uncoded, unexpected errors still
-            // degrade gracefully (empty maps returned) but are always logged.
-            const isCoded = typeof resolveErr?.message === 'string' && /^[A-Z]{3,4}-\d{3}/.test( resolveErr.message )
-            if( isCoded ) {
-                throw resolveErr
-            }
-
-            console.error( `HND-001 [resolveHandlers] handler resolution failed: ${resolveErr.message}` )
-            handlerMap = {}
-            resourceHandlerMap = {}
-        }
-
-        return { handlerMap, resourceHandlerMap }
-    }
 
 
     // Memo 152 / PRD-018 (D-06) — #loadOneLibrary moved to core LibraryLoader.#loadOneFromBases;
@@ -4594,7 +4510,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         try {
             // Memo 149 Strang B — single-source helper (was: join( #schemasDir(), matchedFile )).
             const { filePath: schemaFilePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: matchedFile } )
-            const { resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( {
+            const { resourceHandlerMap } = await HandlerResolver.resolve( {
                 'main': matchedMain,
                 'handlersFn': matchedHandlersFn,
                 'filePath': schemaFilePath
@@ -6394,7 +6310,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // selection-member from the structural #runTypedTests path. Aggregated per
     // primitive via #aggregateByPrimitive (the exact shape `dev test` produced).
     static async #deterministicPrimitiveView( { main, handlersFn, schemaSource, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
-        const { handlerMap, resourceHandlerMap } = await FlowMcpCli.#resolveHandlers( { main, handlersFn, 'filePath': schemaSource } )
+        const { handlerMap, resourceHandlerMap } = await HandlerResolver.resolve( { main, handlersFn, 'filePath': schemaSource } )
 
         let typedResults = []
         try {
