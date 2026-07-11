@@ -656,42 +656,12 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    // internal: test access only
-    static _testHook_getAllTestsTyped( { main } ) {
-        return GradingDeterministic.getAllTestsTyped( { main } )
-    }
-
-
-    // internal: test access only — PRD-006
+    // internal: test access only — PRD-006. validateOnlyFilter stays CLI-side (a pure
+    // --only flag validator); Memo 152 / PRD-019 (F20) moved the test-runner
+    // (getAllTestsTyped / executeTest / runTypedTests / computeDeclared /
+    // aggregateByPrimitive) to flowmcp-grading DataPretest — those hooks are gone with it.
     static _testHook_validateOnlyFilter( { only } ) {
         return GradingDeterministic.validateOnlyFilter( { only } )
-    }
-
-
-    // internal: test access only — PRD-006
-    static _testHook_computeDeclared( { main } ) {
-        return GradingDeterministic.computeDeclared( { main } )
-    }
-
-
-    // internal: test access only — PRD-006
-    static _testHook_aggregateByPrimitive( { results, declared, filter } ) {
-        return GradingDeterministic.aggregateByPrimitive( { results, declared, filter } )
-    }
-
-
-
-    // internal: test access only — PRD-005
-    static async _testHook_executeTest( { typedTest, schemaMain, handlerMap, resourceHandlerMap, serverParams, sharedLists, fullOutput = false } ) {
-        return await GradingDeterministic.executeTest( {
-            typedTest,
-            schemaMain,
-            'handlerMap': handlerMap || {},
-            'resourceHandlerMap': resourceHandlerMap || {},
-            'serverParams': serverParams || {},
-            'sharedLists': sharedLists || {},
-            fullOutput
-        } )
     }
 
 
@@ -708,21 +678,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     static async _testHook_resolveSchemaFilePath( { schemaRef } ) {
         return await SchemaSource.resolveSchemaFilePath( { schemaRef } )
     }
-
-
-    // internal: test access only — PRD-005
-    static async _testHook_runTypedTests( { main, schemaSource = null, handlerMap, resourceHandlerMap, serverParams, sharedLists, fullOutput = false } ) {
-        return await GradingDeterministic.runTypedTests( {
-            main,
-            schemaSource,
-            'handlerMap': handlerMap || {},
-            'resourceHandlerMap': resourceHandlerMap || {},
-            'serverParams': serverParams || {},
-            'sharedLists': sharedLists || {},
-            fullOutput
-        } )
-    }
-
 
 
     // Memo 152 / PRD-018 (D-06) — #loadOneLibrary moved to core LibraryLoader.#loadOneFromBases;

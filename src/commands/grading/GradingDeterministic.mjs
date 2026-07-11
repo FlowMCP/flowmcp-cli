@@ -52,369 +52,9 @@ class GradingDeterministic {
     // Memo 152 / PRD-019 (D-08) — #detectCoreInfo moved to src/commands/InitCommand.mjs.
 
 
-    static getAllTestsTyped( { main } ) {
-        const schemaRef = main[ 'namespace' ] || 'unknown'
-        const tests = []
-
-        // (1) Tools (also accepts legacy v1.x `routes`)
-        const tools = main[ 'tools' ] || main[ 'routes' ] || {}
-        Object.entries( tools )
-            .forEach( ( [ toolName, toolConfig ] ) => {
-                const toolTests = toolConfig[ 'tests' ] || []
-
-                toolTests
-                    .forEach( ( testCase ) => {
-                        const { _description, ...userParams } = testCase
-
-                        tests.push( {
-                            'primitive': 'tool',
-                            schemaRef,
-                            'name': toolName,
-                            'test': { '_description': _description || '', userParams },
-                            'context': { 'routeName': toolName }
-                        } )
-                    } )
-            } )
-
-        // (2) Resources — main.resources is an object of resources, each with queries, each with tests
-        const resources = main[ 'resources' ] || {}
-        Object.entries( resources )
-            .forEach( ( [ resourceName, resourceConfig ] ) => {
-                const queries = resourceConfig[ 'queries' ] || {}
-
-                Object.entries( queries )
-                    .forEach( ( [ queryName, queryConfig ] ) => {
-                        const queryTests = queryConfig[ 'tests' ] || []
-
-                        queryTests
-                            .forEach( ( testCase ) => {
-                                const { _description, ...userParams } = testCase
-
-                                tests.push( {
-                                    'primitive': 'resource',
-                                    schemaRef,
-                                    'name': `${resourceName}.${queryName}`,
-                                    'test': { '_description': _description || '', userParams },
-                                    'context': { resourceName, queryName }
-                                } )
-                            } )
-                    } )
-            } )
-
-        // (3) Skills — Structural-Tests; implizites Structural-Test-Set falls keine tests
-        const skills = main[ 'skills' ] || []
-        skills
-            .forEach( ( skill ) => {
-                const skillName = skill[ 'name' ]
-                const explicitTests = skill[ 'tests' ] || []
-
-                const skillTests = explicitTests.length > 0
-                    ? explicitTests
-                    : [ { '_description': `Structural: ${skillName}` } ]
-
-                skillTests
-                    .forEach( ( testCase ) => {
-                        const { _description, ...userParams } = testCase
-
-                        tests.push( {
-                            'primitive': 'skill',
-                            schemaRef,
-                            'name': skillName,
-                            'test': { '_description': _description || '', userParams },
-                            'context': { skill, 'kind': 'structural' }
-                        } )
-                    } )
-            } )
-
-        // (4) Prompts
-        const prompts = main[ 'prompts' ] || []
-        prompts
-            .forEach( ( prompt ) => {
-                const promptName = prompt[ 'name' ]
-                const promptTests = prompt[ 'tests' ] || []
-
-                promptTests
-                    .forEach( ( testCase ) => {
-                        const { _description, ...userParams } = testCase
-
-                        tests.push( {
-                            'primitive': 'prompt',
-                            schemaRef,
-                            'name': promptName,
-                            'test': { '_description': _description || '', userParams },
-                            'context': { prompt }
-                        } )
-                    } )
-            } )
-
-        // (5) Selection — transitive Member-Liste + Inline-Skills
-        const selection = main[ 'selection' ] || null
-        if( selection ) {
-            const memberLists = [
-                { 'type': 'tool',     'ids': selection[ 'tools' ] || [] },
-                { 'type': 'resource', 'ids': selection[ 'resources' ] || [] },
-                { 'type': 'prompt',   'ids': selection[ 'prompts' ] || [] }
-            ]
-
-            memberLists
-                .forEach( ( { type, ids } ) => {
-                    ids
-                        .forEach( ( memberId ) => {
-                            tests.push( {
-                                'primitive': 'selection-member',
-                                schemaRef,
-                                'name': memberId,
-                                'test': { '_description': `Selection member: ${memberId}`, 'userParams': {} },
-                                'context': { memberId, 'memberType': type }
-                            } )
-                        } )
-                } )
-
-            const inlineSkills = selection[ 'skills' ] || []
-
-            inlineSkills
-                .forEach( ( skill ) => {
-                    const skillName = skill[ 'name' ]
-                    const skillTests = skill[ 'tests' ] || [ { '_description': `Selection-skill (structural): ${skillName}` } ]
-
-                    skillTests
-                        .forEach( ( testCase ) => {
-                            const { _description, ...userParams } = testCase
-
-                            tests.push( {
-                                'primitive': 'skill',
-                                schemaRef,
-                                'name': skillName,
-                                'test': { '_description': _description || '', userParams },
-                                'context': { skill, 'kind': 'selection-inline' }
-                            } )
-                        } )
-                } )
-        }
-
-        return tests
-    }
-
-
-    // Output capture: full string in JSON mode (fullOutput), 200-char preview otherwise.
-    // The human/terminal renderer never prints this field, so the preview cap only ever
-    // affected the JSON payload that machine analysis consumes — full output is required there.
-    static limitOutput( { dataAsString, fullOutput } ) {
-        const previewLimit = 200
-
-        if( !dataAsString ) {
-            return null
-        }
-
-        return fullOutput === true ? dataAsString : dataAsString.slice( 0, previewLimit )
-    }
-
-
-    // PRD-005: Primitive-aware test dispatcher (v4-ready)
-    // Routes per typedTest.primitive: tool, resource, skill, prompt, selection-member
-    // Always returns { status, error, output, durationMs, primitive } — never throws
-    static async executeTest( { typedTest, schemaMain, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {}, fullOutput = false } ) {
-        const startedAt = Date.now()
-        const primitive = typedTest[ 'primitive' ]
-
-        try {
-            if( primitive === 'tool' ) {
-                const { routeName } = typedTest[ 'context' ]
-                const { userParams } = typedTest[ 'test' ]
-
-                const fetchResult = await FlowMCP.fetch( {
-                    'main': schemaMain,
-                    handlerMap,
-                    userParams,
-                    serverParams,
-                    routeName
-                } )
-
-                const { status, messages, dataAsString } = fetchResult
-                const output = GradingDeterministic.limitOutput( { dataAsString, fullOutput } )
-                const error = status ? null : ( ( messages || [] )[ 0 ] || 'unknown error' )
-
-                return {
-                    status,
-                    error,
-                    output,
-                    'durationMs': Date.now() - startedAt,
-                    primitive
-                }
-            }
-
-            if( primitive === 'resource' ) {
-                const { resourceName, queryName } = typedTest[ 'context' ]
-                const { userParams } = typedTest[ 'test' ]
-                const resources = schemaMain[ 'resources' ] || {}
-                const resourceDefinition = resources[ resourceName ]
-                const schemaRef = typedTest[ 'schemaRef' ] || schemaMain[ 'namespace' ] || 'unknown'
-
-                if( !resourceDefinition ) {
-                    return {
-                        'status': false,
-                        'error': `resource "${resourceName}" not found in schema`,
-                        'output': null,
-                        'durationMs': Date.now() - startedAt,
-                        primitive
-                    }
-                }
-
-                const execResult = await FlowMCP.executeResource( {
-                    resourceDefinition,
-                    resourceName,
-                    queryName,
-                    userParams,
-                    'handlerMap': resourceHandlerMap,
-                    schemaRef
-                } )
-
-                const struct = execResult && execResult[ 'struct' ] ? execResult[ 'struct' ] : execResult || {}
-                const ok = struct[ 'status' ] === true
-                const dataString = struct[ 'dataAsString' ]
-                    ? struct[ 'dataAsString' ]
-                    : ( struct[ 'data' ] ? JSON.stringify( struct[ 'data' ] ) : null )
-                const output = GradingDeterministic.limitOutput( { 'dataAsString': dataString, fullOutput } )
-                const error = ok ? null : ( ( struct[ 'messages' ] || [] )[ 0 ] || 'resource execution failed' )
-
-                return {
-                    'status': ok,
-                    error,
-                    output,
-                    'durationMs': Date.now() - startedAt,
-                    primitive
-                }
-            }
-
-            // skill / prompt / selection-member carry no downloadable data. They are
-            // validated STRUCTURALLY against the real v4 modules (no longer stub-passed):
-            // SkillValidator / SelectionValidator / a prompt field check. A structurally
-            // invalid primitive returns status:false.
-            if( primitive === 'skill' ) {
-                const tools = schemaMain[ 'tools' ] || {}
-                const resources = schemaMain[ 'resources' ] || {}
-                const skill = typedTest[ 'context' ][ 'skill' ]
-                const skillName = typedTest[ 'name' ]
-                const { status, messages } = SkillValidator.validate( {
-                    'skills': { [ skillName ]: skill },
-                    tools,
-                    resources
-                } )
-                return {
-                    status,
-                    'error': status ? null : ( ( messages || [] )[ 0 ] || 'skill structurally invalid' ),
-                    'output': `skill-structural:${skillName}`,
-                    'durationMs': Date.now() - startedAt,
-                    primitive
-                }
-            }
-
-            if( primitive === 'prompt' ) {
-                // No dedicated v4 PromptValidator export — the honest structural check is
-                // field-level: a prompt must carry a non-empty string name.
-                const prompt = typedTest[ 'context' ][ 'prompt' ]
-                const status = prompt !== undefined && prompt !== null && typeof prompt[ 'name' ] === 'string' && prompt[ 'name' ].length > 0
-                return {
-                    status,
-                    'error': status ? null : 'prompt structurally invalid: missing string name',
-                    'output': `prompt-structural:${typedTest[ 'name' ]}`,
-                    'durationMs': Date.now() - startedAt,
-                    primitive
-                }
-            }
-
-            if( primitive === 'selection-member' ) {
-                // Single-schema structural validation of the selection block via the real
-                // v4 module. Catalog-resolvability (SEL003) needs cross-schema registry
-                // data not available here, so it is omitted.
-                const selection = schemaMain[ 'selection' ] || null
-                const { valid, errors } = selection === null
-                    ? { 'valid': false, 'errors': [ 'selection block missing on schema' ] }
-                    : SelectionValidator.validate( { selection, 'catalog': null } )
-                return {
-                    'status': valid,
-                    'error': valid ? null : ( ( errors || [] )[ 0 ] || 'selection structurally invalid' ),
-                    'output': `selection-member:${typedTest[ 'name' ]}`,
-                    'durationMs': Date.now() - startedAt,
-                    primitive
-                }
-            }
-
-            return {
-                'status': false,
-                'error': `unknown primitive: ${primitive}`,
-                'output': null,
-                'durationMs': Date.now() - startedAt,
-                primitive
-            }
-        } catch( err ) {
-            return {
-                'status': false,
-                'error': `CLI-021 executeTest: ${err && err.message ? err.message : String( err )}`,
-                'output': null,
-                'durationMs': Date.now() - startedAt,
-                primitive
-            }
-        }
-    }
-
-
-    // PRD-005: Iterate typed tests + dispatch + aggregate per-primitive summary
-    // Returns { results, summary: { byPrimitive: {...}, overall: 'PASS' | 'FAIL' } }
-    static async runTypedTests( { main, schemaSource = null, handlerMap = {}, resourceHandlerMap = {}, serverParams = {}, sharedLists = {}, fullOutput = false } ) {
-        const typedTests = GradingDeterministic.getAllTestsTyped( { main } )
-
-        const results = await typedTests
-            .reduce( ( promise, typedTest ) => promise.then( async ( acc ) => {
-                const result = await GradingDeterministic.executeTest( {
-                    typedTest,
-                    'schemaMain': main,
-                    schemaSource,
-                    handlerMap,
-                    resourceHandlerMap,
-                    serverParams,
-                    sharedLists,
-                    fullOutput
-                } )
-
-                acc.push( {
-                    'primitive': typedTest[ 'primitive' ],
-                    'name': typedTest[ 'name' ],
-                    'schemaRef': typedTest[ 'schemaRef' ],
-                    ...result
-                } )
-
-                return acc
-            } ), Promise.resolve( [] ) )
-
-        const byPrimitive = results
-            .reduce( ( acc, r ) => {
-                const key = r[ 'primitive' ] || 'unknown'
-
-                if( !acc[ key ] ) {
-                    acc[ key ] = { 'pass': 0, 'fail': 0 }
-                }
-
-                if( r[ 'status' ] === true ) {
-                    acc[ key ][ 'pass' ] = acc[ key ][ 'pass' ] + 1
-                } else {
-                    acc[ key ][ 'fail' ] = acc[ key ][ 'fail' ] + 1
-                }
-
-                return acc
-            }, {} )
-
-        const totalFail = Object
-            .values( byPrimitive )
-            .reduce( ( sum, v ) => sum + v[ 'fail' ], 0 )
-
-        const overall = totalFail === 0 ? 'PASS' : 'FAIL'
-
-        return {
-            results,
-            'summary': { byPrimitive, overall }
-        }
-    }
+    // Memo 152 / PRD-019 (F20) — the live test-runner (getAllTestsTyped / limitOutput /
+    // executeTest / runTypedTests) is consolidated into flowmcp-grading DataPretest.
+    // deterministicPrimitiveView drives the ONE executor via grading.DataPretest.runTypedTests.
 
 
     // PRD-006: validate --only=<csv> filter, map plural CLI values -> internal singular discriminators
@@ -460,67 +100,9 @@ class GradingDeterministic {
     }
 
 
-    // PRD-006: compute "declared" map per primitive from a schema main
-    static computeDeclared( { main } ) {
-        const safeMain = main || {}
-        const tools = safeMain[ 'tools' ] || safeMain[ 'routes' ]
-        const resources = safeMain[ 'resources' ]
-        const skills = safeMain[ 'skills' ]
-        const prompts = safeMain[ 'prompts' ]
-        const selection = safeMain[ 'selection' ]
-
-        const declared = {
-            'tool':              tools !== undefined && tools !== null,
-            'resource':          resources !== undefined && resources !== null,
-            'skill':             skills !== undefined && skills !== null,
-            'prompt':            prompts !== undefined && prompts !== null,
-            'selection-member':  selection !== undefined && selection !== null
-        }
-
-        return { declared }
-    }
-
-
-    // PRD-006: aggregate per-primitive summary { passed, total, declared, filtered }
-    static aggregateByPrimitive( { results, declared, filter } ) {
-        const primitives = [ 'tool', 'resource', 'skill', 'prompt', 'selection-member' ]
-        const safeResults = results || []
-        const safeDeclared = declared || {}
-        const filteredSet = filter ? new Set( filter ) : null
-
-        const summary = primitives
-            .reduce( ( acc, p ) => {
-                const own = safeResults
-                    .filter( ( r ) => {
-                        const matches = r[ 'primitive' ] === p
-
-                        return matches
-                    } )
-
-                const passed = own
-                    .filter( ( r ) => {
-                        const isPass = r[ 'status' ] === true
-
-                        return isPass
-                    } )
-                    .length
-
-                const total = own.length
-                const isFiltered = filteredSet ? !filteredSet.has( p ) : false
-                const isDeclared = safeDeclared[ p ] === true
-
-                acc[ p ] = {
-                    passed,
-                    total,
-                    'declared': isDeclared,
-                    'filtered': isFiltered
-                }
-
-                return acc
-            }, {} )
-
-        return { summary }
-    }
+    // Memo 152 / PRD-019 (F20) — computeDeclared / aggregateByPrimitive moved to
+    // flowmcp-grading DataPretest (PRD-006 per-primitive rollup); deterministicPrimitiveView
+    // calls grading.DataPretest.computeDeclared / .aggregateByPrimitive.
 
 
     // PRD-4.2 — concise human summary for a deterministic result, to STDERR.
@@ -574,9 +156,9 @@ class GradingDeterministic {
     //
     // PRD-002 — the --only flag carries the v4-primitive view that used to live in
     // `dev test`: tool/resource run through the DataPretest path; skill/prompt/
-    // selection-member run through the existing structural primitive check
-    // (#runTypedTests + #aggregateByPrimitive). The same #validateOnlyFilter
-    // allowlist applies (no duplication).
+    // selection-member run through the consolidated structural runner
+    // (grading.DataPretest.runTypedTests + .aggregateByPrimitive). The same
+    // validateOnlyFilter allowlist applies (no duplication).
     static async gradingDeterministic( { cwd, target, gradingDataDir, gradingExportDir = null, withKeys, only, dryRun = false, force = false, quiet = false, json, skipRollup = false, throttleMs = 0 } ) {
         const grading = await GradingTarget.loadGrading()
         if( grading === null || grading[ 'DataPretest' ] === undefined ) {
@@ -716,10 +298,10 @@ class GradingDeterministic {
 
         // PRD-002 — optional v4-primitive view (the migrated `dev test --only`
         // capability). tool/resource come from the DataPretest results; skill/
-        // prompt/selection-member from the structural #runTypedTests path.
+        // prompt/selection-member from the consolidated grading.DataPretest runner.
         let primitives = null
         if( onlyFilter !== null ) {
-            const { view } = await GradingDeterministic.deterministicPrimitiveView( { main, handlersFn, 'schemaSource': sourcePath, serverParams, sharedLists, onlyFilter, toolFilter, pretest } )
+            const { view } = await GradingDeterministic.deterministicPrimitiveView( { grading, main, handlersFn, 'schemaSource': sourcePath, serverParams, sharedLists, onlyFilter, toolFilter, pretest } )
             primitives = view
         }
 
@@ -1144,16 +726,18 @@ class GradingDeterministic {
     }
 
 
-    // PRD-002 — the migrated v4-primitive view (`dev test --only`). tool/resource
-    // are sourced from the DataPretest results (PRD-001); skill/prompt/
-    // selection-member from the structural #runTypedTests path. Aggregated per
-    // primitive via #aggregateByPrimitive (the exact shape `dev test` produced).
-    static async deterministicPrimitiveView( { main, handlersFn, schemaSource, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
+    // PRD-002 — the migrated v4-primitive view (`dev test --only`). Memo 152 / PRD-019
+    // (F20): the test-runner is consolidated in flowmcp-grading (DataPretest). tool/
+    // resource run through the ONE executor `grading.DataPretest.runTypedTests`; the
+    // per-primitive rollup uses `grading.DataPretest.computeDeclared` /
+    // `.aggregateByPrimitive` (the exact shape `dev test` produced). The CLI keeps no
+    // runner copy — this bridge only scopes + shapes the result.
+    static async deterministicPrimitiveView( { grading, main, handlersFn, schemaSource, serverParams, sharedLists, onlyFilter, toolFilter, pretest } ) {
         const { handlerMap, resourceHandlerMap } = await HandlerResolver.resolve( { main, handlersFn, 'filePath': schemaSource } )
 
         let typedResults = []
         try {
-            const typedRun = await GradingDeterministic.runTypedTests( {
+            const typedRun = await grading[ 'DataPretest' ].runTypedTests( {
                 main,
                 schemaSource,
                 handlerMap,
@@ -1173,8 +757,8 @@ class GradingDeterministic {
             .filter( ( r ) => onlyFilter.includes( r[ 'primitive' ] ) )
             .filter( ( r ) => toolFilter === null || r[ 'primitive' ] !== 'tool' || r[ 'name' ] === toolFilter )
 
-        const { declared } = GradingDeterministic.computeDeclared( { main } )
-        const { summary } = GradingDeterministic.aggregateByPrimitive( { 'results': scoped, declared, 'filter': onlyFilter } )
+        const { declared } = grading[ 'DataPretest' ].computeDeclared( { main } )
+        const { summary } = grading[ 'DataPretest' ].aggregateByPrimitive( { 'results': scoped, declared, 'filter': onlyFilter } )
 
         const view = {
             'tools': summary[ 'tool' ],
