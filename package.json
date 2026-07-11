@@ -33,7 +33,7 @@
     "ethers": "^6.16.0",
     "figlet": "^1.10.0",
     "flowmcp": "git+https://github.com/FlowMCP/flowmcp-core.git#53f5b2d8e2df4598bc5dd2eff561c9cbe1c934d1",
-    "flowmcp-grading": "github:FlowMCP/flowmcp-grading#c25f20fdfdc9484d0246ba64475871d68ba82a53",
+    "flowmcp-grading": "github:FlowMCP/flowmcp-grading#e9f6385",
     "geo-csv-tsv-toolkit": "git+https://github.com/FlowMCP/geo-csv-tsv-toolkit.git#5d5e51f8d88a35a20dc44489958e5f376e1674eb",
     "geo-dzt-toolkit": "git+https://github.com/FlowMCP/geo-dzt-toolkit.git#9f1d52c9b4f9372bd3749ebb0bb53b48e22a364d",
     "geo-geojson-toolkit": "git+https://github.com/FlowMCP/geo-geojson-toolkit.git#af764638f215083da52be785b8e276fa98217b02",
