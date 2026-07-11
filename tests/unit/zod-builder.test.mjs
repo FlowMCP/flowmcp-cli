@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 
-import { ZodBuilder } from '../../src/task/ZodBuilder.mjs'
+import { ZodBuilder } from 'flowmcp'
 
 
 describe( 'ZodBuilder.getZodSchema', () => {
@@ -114,7 +114,9 @@ describe( 'ZodBuilder.getZodSchema', () => {
 
         expect( zodSchema ).toHaveProperty( 'limit' )
         const parsed = zodSchema[ 'limit' ].parse( undefined )
-        expect( parsed ).toBe( '10' )
+        // Memo 152 / PRD-012 (B-03) — core ZodBuilder types default(N) on number()
+        // as a real number (10), fixing the CLI fork's string coercion ('10').
+        expect( parsed ).toBe( 10 )
     } )
 
 
@@ -223,6 +225,7 @@ describe( 'ZodBuilder.getZodSchema', () => {
 
         expect( zodSchema ).toHaveProperty( 'page' )
         const parsed = zodSchema[ 'page' ].parse( undefined )
-        expect( parsed ).toBe( '1' )
+        // Memo 152 / PRD-012 (B-03) — typed default: number() default(1) -> 1 (not '1').
+        expect( parsed ).toBe( 1 )
     } )
 } )

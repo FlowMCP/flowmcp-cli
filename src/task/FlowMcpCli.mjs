@@ -21,10 +21,7 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP } from 'flowmcp/v2'
-import { SkillValidator, SelectionValidator } from 'flowmcp/v4'
-
-import { ZodBuilder } from './ZodBuilder.mjs'
+import { FlowMCP, SkillValidator, SelectionValidator, MainValidator, MetaGenerator } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -1483,7 +1480,7 @@ class FlowMcpCli {
             return { result }
         }
 
-        const v4 = await FlowMcpCli.#loadV4Module()
+        const v4 = FlowMcpCli.#v4Module()
 
         if( !schemaPath && cwd ) {
             const { schemas: groupSchemas, error: groupError } = await FlowMcpCli.#resolveDefaultGroupSchemas( { cwd } )
@@ -1980,7 +1977,7 @@ class FlowMcpCli {
 
                 Object.keys( main[ 'tools' ] || main[ 'routes' ] || {} )
                     .forEach( ( routeName ) => {
-                        const { toolName, description, zod, func } = FlowMcpCli.#prepareServerTool( {
+                        const { toolName, description, zod, func } = FlowMCP.prepareServerTool( {
                             main,
                             handlerMap,
                             serverParams,
@@ -2117,7 +2114,7 @@ class FlowMcpCli {
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
-                            const { toolName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                            const { toolName } = FlowMCP.buildToolName( { routeName, namespace } )
                             const description = routes[ routeName ][ 'description' ] || ''
 
                             // PRD-008 — surface the source coordinate so a qualified
@@ -2215,7 +2212,7 @@ class FlowMcpCli {
 
             sourceFilter = source
             lazySpec = { namespace, 'routeName': specName }
-            const { toolName: mcpToolName } = FlowMcpCli.#buildToolName( { 'routeName': specName, 'namespace': namespace } )
+            const { toolName: mcpToolName } = FlowMCP.buildToolName( { 'routeName': specName, 'namespace': namespace } )
             resolvedToolName = mcpToolName
         }
 
@@ -3177,7 +3174,7 @@ class FlowMcpCli {
                 Object.keys( routes )
                     .forEach( ( routeName ) => {
                         try {
-                            const { toolName: name } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                            const { toolName: name } = FlowMCP.buildToolName( { routeName, namespace } )
                             const description = routes[ routeName ][ 'description' ] || ''
 
                             const routeConfig = routes[ routeName ]
@@ -5908,7 +5905,7 @@ class FlowMcpCli {
                                 .forEach( ( [ routeName, routeConfig ] ) => {
                                     const routeDescription = routeConfig[ 'description' ] || ''
                                     const toolRef = `${schemaRef}::${routeName}`
-                                    const { toolName } = FlowMcpCli.#buildToolName( {
+                                    const { toolName } = FlowMCP.buildToolName( {
                                         routeName,
                                         'namespace': effectiveNamespace
                                     } )
@@ -6225,47 +6222,11 @@ class FlowMcpCli {
     }
 
 
-    // PRD-008 — the MCP tool name is `<route>_<namespace>` (snake_case, 63-char cap).
-    // The optional `source` (schemaFolders[] name) is appended ONLY when
-    // `disambiguate === true`, i.e. on a real collision between two folders that
-    // carry the same provider. Without disambiguation the name is byte-identical to
-    // the pre-PRD-008 behaviour — agents that reference existing tool names keep
-    // working (no silent rename). The source append is deterministic (same source
-    // string -> same suffix) and re-applies the 63-char cap so the SDK never sees an
-    // over-long name.
-    static #buildToolName( { routeName, namespace, source = null, disambiguate = false } ) {
-        const routeNameSnakeCase = routeName
-            .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
-            .toLowerCase()
-        const namespaceSnakeCase = namespace
-            .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
-            .toLowerCase()
-
-        const sanitize = ( value ) => value
-            .replaceAll( ':', '' )
-            .replaceAll( '-', '_' )
-            .replaceAll( '/', '_' )
-
-        if( disambiguate === true && typeof source === 'string' && source.length > 0 ) {
-            const sourceSnakeCase = source
-                .replace( /([a-z0-9])([A-Z])/g, '$1_$2' )
-                .toLowerCase()
-            // Reserve room for the source suffix so the base name is not truncated
-            // away entirely: cap the base at 63 - (1 + sourceLen) before appending.
-            const suffix = `_${sanitize( sourceSnakeCase )}`
-            const baseCap = Math.max( 0, 63 - suffix.length )
-            const base = sanitize( `${routeNameSnakeCase}_${namespaceSnakeCase}` ).substring( 0, baseCap )
-            const toolName = `${base}${suffix}`.substring( 0, 63 )
-
-            return { toolName }
-        }
-
-        let toolName = `${routeNameSnakeCase}_${namespaceSnakeCase}`
-        toolName = sanitize( toolName.substring( 0, 63 ) )
-
-        return { toolName }
-    }
-
+    // Memo 152 / PRD-012 (B-04) — buildToolName is now the public core v4 API
+    // (FlowMCP.buildToolName), byte-identical to the former CLI copy. The MCP tool
+    // name is `<route>_<namespace>` (snake_case, 63-char cap); the optional `source`
+    // (schemaFolders[] name) is appended ONLY when `disambiguate === true`. Tool
+    // names are a Wire-Contract — no silent rename.
 
     // PRD-008 — stateful pre-serve dedup planner (the SDK throws on a duplicate tool
     // name). Given the already-registered names set, decide the final registerable
@@ -6280,7 +6241,7 @@ class FlowMcpCli {
             return { 'finalName': baseName, 'skip': false, 'note': null }
         }
 
-        const { toolName: qualifiedName } = FlowMcpCli.#buildToolName( { routeName, namespace, source, 'disambiguate': true } )
+        const { toolName: qualifiedName } = FlowMCP.buildToolName( { routeName, namespace, source, 'disambiguate': true } )
         if( qualifiedName !== baseName && registeredToolNames.has( qualifiedName ) === false ) {
             registeredToolNames.add( qualifiedName )
 
@@ -8650,7 +8611,7 @@ allowlist, migrate-config, etc.).
     static #detectCoreInfo() {
         try {
             const require = createRequire( import.meta.url )
-            const corePath = require.resolve( 'flowmcp/v2' )
+            const corePath = require.resolve( 'flowmcp' )
             let dir = dirname( corePath )
 
             let version = 'unknown'
@@ -9669,35 +9630,9 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #prepareServerTool( { main, handlerMap, serverParams, routeName } ) {
-        const namespace = main[ 'namespace' ] || 'unknown'
-        const routes = main[ 'tools' ] || main[ 'routes' ] || {}
-        const routeConfig = routes[ routeName ]
-
-        if( !routeConfig ) {
-            throw new Error( `Route "${routeName}" not found in schema "${namespace}"` )
-        }
-
-        const { toolName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
-        const { description } = routeConfig
-        const zod = ZodBuilder.getZodSchema( { 'route': routeConfig } )
-
-        const func = async ( userParams ) => {
-            const fetchResult = await FlowMCP.fetch( {
-                main,
-                handlerMap,
-                userParams,
-                serverParams,
-                routeName
-            } )
-
-            const { status, messages, data, dataAsString } = fetchResult
-
-            return { status, messages, data, dataAsString }
-        }
-
-        return { toolName, description, zod, func }
-    }
+    // Memo 152 / PRD-012 (B-04) — prepareServerTool is now the public core v4 API
+    // (FlowMCP.prepareServerTool), including the core v4 ZodBuilder (typed defaults).
+    // The former CLI copy + local ZodBuilder fork are deleted (drift fix, B-03).
 
 
     static async #loadSchema( { filePath, bustCache = false } ) {
@@ -10556,31 +10491,14 @@ allowlist, migrate-config, etc.).
     }
 
 
-    static #normalizeMainForValidation( { main } ) {
-        if( !main ) {
-            return main
-        }
-
-        if( main[ 'tools' ] && !main[ 'routes' ] ) {
-            const { tools, resources, skills, ...rest } = main
-            const normalizedMain = { ...rest, 'routes': tools }
-
-            return normalizedMain
-        }
-
-        return main
-    }
-
-
-    static async #loadV4Module() {
+    // Memo 152 / PRD-012 (B-07) — v4 is a hard dependency of the CLI: the v4 core
+    // surface is statically imported (no dynamic import, no CLI-022 degradation).
+    // This returns the v4 module shape the validate path consumes; the #v4Override
+    // test seam stays for now (removed in D-11/Phase 4).
+    static #v4Module() {
         if( FlowMcpCli.#v4Override ) { return FlowMcpCli.#v4Override }
-        try {
-            const v4 = await import( 'flowmcp/v4' )
-            return v4
-        } catch( err ) {
-            FlowMcpCli.#emitCoded( { 'code': 'CLI-022', 'location': 'loadV4Module: flowmcp/v4 import failed', err } )
-            return null
-        }
+
+        return { MainValidator, MetaGenerator, SkillValidator, SelectionValidator }
     }
 
 
@@ -10644,35 +10562,27 @@ allowlist, migrate-config, etc.).
 
         const sqliteGtfsErrors = FlowMcpCli.#runSqliteGtfsResourceChecks( { main } )
 
-        try {
-            if( isV4 ) {
-                if( !v4 || !v4[ 'MainValidator' ] ) {
-                    return {
-                        file, namespace,
-                        'status': false,
-                        'messages': [ 'v4 validator unavailable: install flowmcp-core with v4 export' ],
-                        'tools': toolCount, 'resources': resourceCount, 'skills': skillCount
-                    }
-                }
-                // Memo 119 Kap 3 — version-consistency gate. A schema declaring a 4.x
-                // version must be SHAPED like v4: no populated v2 `routes`, no populated
-                // v3 `skills`, and at most 8 tools per file. Because v4 reuses the v2
-                // transport, a mis-declared schema otherwise only fails at runtime.
-                const consistencyErrors = FlowMcpCli.#v4ConsistencyErrors( { main, toolCount } )
-                const enriched = v4[ 'MetaGenerator' ]
-                    ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
-                    : main
-                const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
-                const combinedMessages = [ ...consistencyErrors, ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
-                const combinedStatus = status && sqliteGtfsErrors.length === 0 && consistencyErrors.length === 0
-                return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
-            }
+        // Memo 152 / PRD-012 (B-06) — v4-only: a schema that does not declare a 4.x
+        // version is rejected fail-loud (no silent normalization, no v2 validateMain
+        // fallback). Convert a legacy schema explicitly with `flowmcp migrate`.
+        if( !isV4 ) {
+            const combinedMessages = [ `VAL-009: schema version "${version || 'missing'}" is not v4 — this CLI validates v4-only schemas (version 4.x). Convert a legacy schema with \`flowmcp migrate\`.`, ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+            return { file, namespace, 'status': false, 'messages': combinedMessages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+        }
 
-            const normalizedMain = FlowMcpCli.#normalizeMainForValidation( { main } )
-            const { status, messages } = FlowMCP.validateMain( { 'main': normalizedMain } )
-            const combinedMessages = [ ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
-            const combinedStatus = status && sqliteGtfsErrors.length === 0
-            return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
+        try {
+            // Memo 119 Kap 3 — version-consistency gate. A schema declaring a 4.x
+            // version must be SHAPED like v4: no populated v2 `routes`, no populated
+            // v3 `skills`, and at most 8 tools per file. Because v4 reuses the v2
+            // transport, a mis-declared schema otherwise only fails at runtime.
+            const consistencyErrors = FlowMcpCli.#v4ConsistencyErrors( { main, toolCount } )
+            const enriched = v4[ 'MetaGenerator' ]
+                ? FlowMcpCli.#enrichV4WithRuntimeMeta( { main, 'MetaGenerator': v4[ 'MetaGenerator' ] } )
+                : main
+            const { status, messages, warnings } = v4[ 'MainValidator' ].validate( { 'main': enriched } )
+            const combinedMessages = [ ...consistencyErrors, ...( messages || [] ), ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
+            const combinedStatus = status && sqliteGtfsErrors.length === 0 && consistencyErrors.length === 0
+            return { file, namespace, 'status': combinedStatus, 'messages': combinedMessages, warnings, 'tools': toolCount, 'resources': resourceCount, 'skills': skillCount }
         } catch( err ) {
             const combinedMessages = [ `SKL-003 validateSingleSchema: ${err.message}`, ...sqliteGtfsErrors.map( ( e ) => `${e.code}: ${e.message} (${e.path})` ) ]
             return {
@@ -11953,7 +11863,7 @@ allowlist, migrate-config, etc.).
                         }
 
                         try {
-                            const { toolName: candidateName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                            const { toolName: candidateName } = FlowMCP.buildToolName( { routeName, namespace } )
 
                             if( candidateName === resolvedToolName ) {
                                 matchedMain = main
@@ -11978,7 +11888,7 @@ allowlist, migrate-config, etc.).
 
 
     static __testOnly_buildToolName( { routeName, namespace, source = null, disambiguate = false } ) {
-        return FlowMcpCli.#buildToolName( { routeName, namespace, source, disambiguate } )
+        return FlowMCP.buildToolName( { routeName, namespace, source, disambiguate } )
     }
 
 
@@ -11991,7 +11901,7 @@ allowlist, migrate-config, etc.).
         const plan = entries
             .map( ( entry ) => {
                 const { routeName, namespace, source } = entry
-                const { toolName: baseName } = FlowMcpCli.#buildToolName( { routeName, namespace } )
+                const { toolName: baseName } = FlowMCP.buildToolName( { routeName, namespace } )
                 const decided = FlowMcpCli.#disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } )
 
                 return { baseName, 'finalName': decided.finalName, 'skip': decided.skip, 'note': decided.note }
@@ -12582,89 +12492,30 @@ allowlist, migrate-config, etc.).
             return { result }
         }
 
-        // Try flowmcp/v4 SelectionValidator first
-        try {
-            const v4 = await import( 'flowmcp/v4' )
-            const SelectionValidator = v4 && v4[ 'SelectionValidator' ]
-
-            if( SelectionValidator && typeof SelectionValidator.validate === 'function' ) {
-                const validatorResult = SelectionValidator.validate( { selection } )
-                const rawErrors = validatorResult[ 'errors' ] || []
-                const errors = rawErrors.map( ( e ) => {
-                    if( typeof e === 'string' ) {
-                        const match = e.match( /^([A-Z]+\d*):\s*(.*)$/ )
-                        if( match ) {
-                            return { 'code': match[ 1 ], 'message': match[ 2 ] }
-                        }
-                        return { 'code': 'SEL000', 'message': e }
-                    }
-                    return e
-                } )
-                if( typeof selection[ 'namespace' ] === 'string' && selection[ 'namespace' ].includes( '/' ) ) {
-                    errors.push( { 'code': 'VAL110', 'message': `"namespace" must not contain slashes (got: "${selection[ 'namespace' ]}")` } )
+        // Memo 152 / PRD-012 (B-07) — v4 is a hard dependency: use the statically
+        // imported v4 SelectionValidator directly. No dynamic import, no inline
+        // fallback validator (the removed CLI-022/VAL-008 degradation class).
+        const validatorResult = SelectionValidator.validate( { selection } )
+        const rawErrors = validatorResult[ 'errors' ] || []
+        const errors = rawErrors.map( ( e ) => {
+            if( typeof e === 'string' ) {
+                const match = e.match( /^([A-Z]+\d*):\s*(.*)$/ )
+                if( match ) {
+                    return { 'code': match[ 1 ], 'message': match[ 2 ] }
                 }
-                if( typeof selection[ 'name' ] === 'string' && selection[ 'name' ].includes( '/' ) ) {
-                    errors.push( { 'code': 'VAL110', 'message': `"name" must not contain slashes (got: "${selection[ 'name' ]}")` } )
-                }
-                const status = errors.length === 0
-                const warnings = validatorResult[ 'warnings' ] || []
-                const result = { status, errors, warnings }
-
-                return { result }
+                return { 'code': 'SEL000', 'message': e }
             }
-        } catch( err ) {
-            // v4 not available — use inline fallback below
-            FlowMcpCli.#emitCoded( { 'code': 'VAL-008', 'location': 'selectionValidate: v4 SelectionValidator import failed', err } )
-        }
-
-        // Inline fallback validator
-        const errors = []
-        const warnings = []
-
-        // SEL001: required keys present + whenToUse non-empty
-        const requiredKeys = [ 'namespace', 'name', 'description', 'whenToUse' ]
-        requiredKeys
-            .forEach( ( key ) => {
-                if( !selection[ key ] || ( typeof selection[ key ] === 'string' && selection[ key ].trim() === '' ) ) {
-                    errors.push( { 'code': 'SEL001', 'message': `Required field "${key}" is missing or empty` } )
-                }
-            } )
-
-        // SEL001 (continued): at least one of tools/resources/prompts/skills must be non-empty
-        const toolsArr = Array.isArray( selection[ 'tools' ] ) ? selection[ 'tools' ] : []
-        const resourcesArr = Array.isArray( selection[ 'resources' ] ) ? selection[ 'resources' ] : []
-        const promptsArr = Array.isArray( selection[ 'prompts' ] ) ? selection[ 'prompts' ] : []
-        const skillsArr = Array.isArray( selection[ 'skills' ] ) ? selection[ 'skills' ] : []
-        const totalPrimitives = toolsArr.length + resourcesArr.length + promptsArr.length + skillsArr.length
-
-        if( totalPrimitives === 0 ) {
-            errors.push( { 'code': 'SEL002', 'message': 'At least one of tools/resources/prompts/skills must be non-empty' } )
-        }
-
-        // VAL110: namespace and name must be single words (no slashes)
-        if( selection[ 'namespace' ] && selection[ 'namespace' ].includes( '/' ) ) {
+            return e
+        } )
+        if( typeof selection[ 'namespace' ] === 'string' && selection[ 'namespace' ].includes( '/' ) ) {
             errors.push( { 'code': 'VAL110', 'message': `"namespace" must not contain slashes (got: "${selection[ 'namespace' ]}")` } )
         }
-
-        if( selection[ 'name' ] && selection[ 'name' ].includes( '/' ) ) {
+        if( typeof selection[ 'name' ] === 'string' && selection[ 'name' ].includes( '/' ) ) {
             errors.push( { 'code': 'VAL110', 'message': `"name" must not contain slashes (got: "${selection[ 'name' ]}")` } )
         }
-
-        // SEL002: id format check (if id field provided)
-        if( selection[ 'id' ] ) {
-            const idParts = selection[ 'id' ].split( '/' )
-            const isValidId = idParts.length === 3 && idParts[ 1 ] === 'selection'
-
-            if( !isValidId ) {
-                errors.push( { 'code': 'SEL002', 'message': `"id" must follow format namespace/selection/name (got: "${selection[ 'id' ]}")` } )
-            }
-        }
-
-        const result = {
-            'status': errors.length === 0,
-            errors,
-            warnings
-        }
+        const status = errors.length === 0
+        const warnings = validatorResult[ 'warnings' ] || []
+        const result = { status, errors, warnings }
 
         return { result }
     }
@@ -13477,7 +13328,7 @@ allowlist, migrate-config, etc.).
 
         // Step 1 — structural validation (Memo REV-08 Kap. 1: structural validate
         // FIRST, then the deterministic data-pretest = "the validation").
-        const v4 = await FlowMcpCli.#loadV4Module()
+        const v4 = FlowMcpCli.#v4Module()
         const validate = FlowMcpCli.#validateSingleSchema( { main, 'file': basename( sourcePath ), v4 } )
 
         // Step 2 — the deterministic data-pretest (status === true AND #hasData),

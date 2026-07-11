@@ -33,7 +33,12 @@ afterAll( async () => {
 
 
 describe( 'v3 extensions - validate with tools key', () => {
-    it( 'processes a v3 schema with tools key without crashing', async () => {
+    // Memo 152 / PRD-012 (B-06) — v4-only: the non-v4 mock schemas (version 2.0.0)
+    // are now rejected fail-loud (VAL-009) instead of normalized. These were
+    // acceptance tests before the v2 validation branch was removed; they are now
+    // rejection tests. validate() still returns gracefully (no crash) with the
+    // correct namespace/file metadata.
+    it( 'rejects a non-v4 tools-key schema fail-loud (VAL-009)', async () => {
         const schemaPath = join( SCHEMAS_DIR, 'v3-tools-only.mjs' )
         const { result } = await FlowMcpCli.validate( { schemaPath } )
 
@@ -41,11 +46,12 @@ describe( 'v3 extensions - validate with tools key', () => {
         expect( result[ 'results' ] ).toBeDefined()
         expect( result[ 'results' ][ 0 ][ 'namespace' ] ).toBe( 'testtoolsonly' )
         expect( result[ 'results' ][ 0 ][ 'file' ] ).toBe( 'v3-tools-only.mjs' )
-        expect( result[ 'results' ][ 0 ][ 'status' ] ).toBe( true )
+        expect( result[ 'results' ][ 0 ][ 'status' ] ).toBe( false )
+        expect( result[ 'results' ][ 0 ][ 'messages' ].some( ( m ) => m.includes( 'VAL-009' ) ) ).toBe( true )
     } )
 
 
-    it( 'processes a v3 schema with all three primitives', async () => {
+    it( 'rejects a non-v4 three-primitive schema fail-loud (VAL-009)', async () => {
         const schemaPath = join( SCHEMAS_DIR, 'v3-full.mjs' )
         const { result } = await FlowMcpCli.validate( { schemaPath } )
 
@@ -53,7 +59,8 @@ describe( 'v3 extensions - validate with tools key', () => {
         expect( result[ 'results' ] ).toBeDefined()
         expect( result[ 'results' ][ 0 ][ 'namespace' ] ).toBe( 'testapivsthree' )
         expect( result[ 'results' ][ 0 ][ 'file' ] ).toBe( 'v3-full.mjs' )
-        expect( result[ 'results' ][ 0 ][ 'status' ] ).toBe( true )
+        expect( result[ 'results' ][ 0 ][ 'status' ] ).toBe( false )
+        expect( result[ 'results' ][ 0 ][ 'messages' ].some( ( m ) => m.includes( 'VAL-009' ) ) ).toBe( true )
     } )
 
 

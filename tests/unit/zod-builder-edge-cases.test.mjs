@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 
-import { ZodBuilder } from '../../src/task/ZodBuilder.mjs'
+import { ZodBuilder } from 'flowmcp'
 
 
 const buildRoute = ( { key, primitive, options = [] } ) => {

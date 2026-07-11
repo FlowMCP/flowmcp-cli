@@ -1,9 +1,17 @@
 import { jest, describe, it, expect, beforeAll } from '@jest/globals'
 
 
-// Mock flowmcp/v2 so #executeTest tool + resource paths are deterministic
-jest.unstable_mockModule( 'flowmcp/v2', () => {
+// Mock the flowmcp facade so #executeTest tool + resource paths are deterministic.
+// SkillValidator / SelectionValidator / MainValidator / MetaGenerator pass through
+// to the real v4 modules (via the ./v4 alias) so validate paths are unaffected.
+const { SkillValidator, SelectionValidator, MainValidator, MetaGenerator } = await import( 'flowmcp/v4' )
+
+jest.unstable_mockModule( 'flowmcp', () => {
     return {
+        SkillValidator,
+        SelectionValidator,
+        MainValidator,
+        MetaGenerator,
         'FlowMCP': {
             'fetch': async ( { routeName, userParams } ) => {
                 // Simulate failure for a special marker route

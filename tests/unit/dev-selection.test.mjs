@@ -293,50 +293,6 @@ describe( 'selectionValidate — namespace with slashes', () => {
     } )
 } )
 
-
-// ─── test 8: validate falls back gracefully when core SelectionValidator is unavailable ─
-
-describe( 'selectionValidate — graceful fallback (inline validator)', () => {
-    let tmpDir
-    let selectionFile
-
-    beforeAll( async () => {
-        tmpDir = join( tmpdir(), `flowmcp-sel-fallback-${Date.now()}` )
-        await mkdir( tmpDir, { recursive: true } )
-
-        selectionFile = join( tmpDir, 'selection.mjs' )
-        await writeFile(
-            selectionFile,
-            makeSelectionContent( {
-                'namespace': 'fallback-ns',
-                'name': 'fallback-sel',
-                'description': 'Fallback test',
-                'whenToUse': 'Used for fallback testing',
-                'tools': [ 'some/tool/doThing' ]
-            } ),
-            'utf-8'
-        )
-    } )
-
-    afterAll( async () => {
-        await rm( tmpDir, { recursive: true, force: true } ).catch( () => {} )
-    } )
-
-    it( 'validates successfully even when flowmcp/v4 is not available (inline fallback path)', async () => {
-        // The inline fallback is always exercised when flowmcp/v4 SelectionValidator
-        // is not present (which is the case in the current pinned v3.0.0 install).
-        // We verify the result structure is always correct regardless of backend.
-        const { result } = await FlowMcpCli.selectionValidate( { 'cwd': tmpDir, 'path': 'selection.mjs' } )
-
-        expect( typeof result[ 'status' ] ).toBe( 'boolean' )
-        expect( Array.isArray( result[ 'errors' ] ) ).toBe( true )
-        expect( Array.isArray( result[ 'warnings' ] ) ).toBe( true )
-    } )
-
-    it( 'inline fallback passes a well-formed selection', async () => {
-        const { result } = await FlowMcpCli.selectionValidate( { 'cwd': tmpDir, 'path': 'selection.mjs' } )
-
-        expect( result[ 'status' ] ).toBe( true )
-        expect( result[ 'errors' ].length ).toBe( 0 )
-    } )
-} )
+// Memo 152 / PRD-012 (B-07/B-09) — the inline-fallback describe block was removed:
+// v4 is now a hard dependency (static SelectionValidator import), so there is no
+// "v4 unavailable" degradation path left to test.
