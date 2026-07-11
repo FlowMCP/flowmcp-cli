@@ -21,7 +21,7 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver, LibraryLoader, SchemaLoader } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -6347,16 +6347,15 @@ allowlist, migrate-config, etc.).
     // The former CLI copy + local ZodBuilder fork are deleted (drift fix, B-03).
 
 
+    // Memo 152 / PRD-018 (D-06) — the raw module import is delegated to the core v4
+    // SchemaLoader.load (the single load leaf). The CLI keeps only the SCH-003 error
+    // adapter: SchemaLoader throws on a bad import and returns main:null on a module
+    // without a main export, whereas the CLI callers expect a { main, handlersFn, error }
+    // shape. This wrapper preserves that contract while the load logic itself lives in core.
     static async #loadSchema( { filePath, bustCache = false } ) {
         try {
             const resolvedPath = resolve( filePath )
-            const fileUrl = pathToFileURL( resolvedPath ).href
-            const importPath = bustCache
-                ? `${fileUrl}?t=${Date.now()}`
-                : fileUrl
-            const mod = await import( importPath )
-            const main = mod[ 'main' ] || null
-            const handlersFn = mod[ 'handlers' ] || null
+            const { main, handlersFn } = await SchemaLoader.load( { 'filePath': resolvedPath, bustCache } )
 
             if( !main ) {
                 return { 'main': null, 'handlersFn': null, 'error': `No main export in: ${filePath}` }
