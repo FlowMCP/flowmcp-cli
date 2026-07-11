@@ -366,7 +366,7 @@ class FlowMcpCli {
                 return { result }
             }
 
-            const { files } = await FlowMcpCli.#findSchemaFiles( { dirPath: resolvedDir } )
+            const { files } = await FsUtils.findSchemaFiles( { dirPath: resolvedDir } )
             filePaths = files
         } else {
             const resolvedPath = resolve( schemaPath )
@@ -381,7 +381,7 @@ class FlowMcpCli {
             }
 
             if( pathStat.isDirectory() ) {
-                const { files } = await FlowMcpCli.#findSchemaFiles( { dirPath: resolvedPath } )
+                const { files } = await FsUtils.findSchemaFiles( { dirPath: resolvedPath } )
                 filePaths = files
             } else {
                 filePaths = [ resolvedPath ]
@@ -5416,25 +5416,8 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
 
 
-    static async #findSchemaFiles( { dirPath } ) {
-        const entries = await readdir( dirPath, { recursive: true } )
-        const files = entries
-            .filter( ( entry ) => {
-                const ext = extname( entry )
-                const isSchema = ext === '.mjs' || ext === '.js'
-
-                return isSchema
-            } )
-            .map( ( entry ) => {
-                const fullPath = join( dirPath, entry )
-
-                return fullPath
-            } )
-            .sort()
-
-        return { files }
-    }
-
+    // Memo 152 / PRD-019 (D-08) — #findSchemaFiles moved to FsUtils.findSchemaFiles
+    // (shared by the validate/schema-check and resource-migrate paths).
 
 
     // Memo 152 / PRD-012 (B-07) — v4 is a hard dependency of the CLI: the v4 core
@@ -5926,7 +5909,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
         let schemaFiles = []
 
         try {
-            const { files } = await FlowMcpCli.#findSchemaFiles( { 'dirPath': schemasDir } )
+            const { files } = await FsUtils.findSchemaFiles( { 'dirPath': schemasDir } )
             schemaFiles = files
         } catch( err ) {
             CliOutput.emitCoded( { 'code': 'SQL-017', 'location': 'resourceMigrate: schema files scan failed', err } )

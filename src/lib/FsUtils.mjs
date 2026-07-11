@@ -8,8 +8,8 @@
  * call-site; __testWriteGuarded remains a facade hook (removed in PRD-020/D-11).
  */
 
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
-import { resolve, dirname } from 'node:path'
+import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises'
+import { resolve, dirname, join, extname } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import { CliOutput } from './CliOutput.mjs'
@@ -101,6 +101,29 @@ class FsUtils {
         await rename( tmp, absolutePath )
 
         return { 'written': true, 'skipped': false, 'error': null }
+    }
+
+
+    // Memo 152 / PRD-019 (D-08) — recursively collect schema module files (.mjs/.js)
+    // under dirPath, sorted. Shared by the validate/schema-check and resource-migrate
+    // paths (formerly FlowMcpCli.#findSchemaFiles).
+    static async findSchemaFiles( { dirPath } ) {
+        const entries = await readdir( dirPath, { recursive: true } )
+        const files = entries
+            .filter( ( entry ) => {
+                const ext = extname( entry )
+                const isSchema = ext === '.mjs' || ext === '.js'
+
+                return isSchema
+            } )
+            .map( ( entry ) => {
+                const fullPath = join( dirPath, entry )
+
+                return fullPath
+            } )
+            .sort()
+
+        return { files }
     }
 }
 
