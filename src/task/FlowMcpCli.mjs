@@ -21,7 +21,7 @@ import chalk from 'chalk'
 import Database from 'better-sqlite3'
 import figlet from 'figlet'
 import inquirer from 'inquirer'
-import { FlowMCP, SkillValidator, SelectionValidator } from 'flowmcp'
+import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver } from 'flowmcp'
 
 import { appConfig, catalogCategories } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
@@ -33,6 +33,7 @@ import { CliOutput, CliError } from '../lib/CliOutput.mjs'
 import { FsUtils } from '../lib/FsUtils.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { SchemaSource } from '../lib/SchemaSource.mjs'
+import { NamespaceIndexCache } from '../lib/NamespaceIndexCache.mjs'
 
 
 // TODO(next major): remove this delegation facade — the command/lib modules live
@@ -8039,88 +8040,12 @@ allowlist, migrate-config, etc.).
     }
 
 
+    // Memo 152 / PRD-018 (D-07) — the spec-id grammar is now a core v4 Spec
+    // concern (IdResolver.parseSpecId). This CLI method is a thin delegation kept
+    // as the internal call surface + the __testOnly_parseSpecId hook (Hook removal
+    // is PRD-020/D-11). Output is byte-identical to the former CLI implementation.
     static #parseSpecId( { specId } ) {
-        if( typeof specId !== 'string' || specId.length === 0 ) {
-            return { 'valid': false, 'error': 'Spec-ID must be a non-empty string' }
-        }
-
-        // PRD-008 — optional leading "<source>:" coordinate. The colon trenner does
-        // not collide with the slash-based Spec-ID grammar, so it is split off first
-        // and the remainder is parsed unchanged. No silent default: an empty source
-        // ("...:foo") or an empty remainder ("source:") is a hard error.
-        let source = null
-        let rest = specId
-        const colonIndex = specId.indexOf( ':' )
-        if( colonIndex !== -1 ) {
-            source = specId.slice( 0, colonIndex )
-            rest = specId.slice( colonIndex + 1 )
-
-            if( source.length === 0 ) {
-                return { 'valid': false, 'error': `Invalid source coordinate in "${specId}": the prefix before ":" must be a schemaFolders[] name.` }
-            }
-
-            if( rest.length === 0 ) {
-                return { 'valid': false, 'error': `Invalid Spec-ID "${specId}": nothing after the "${source}:" source prefix. Expected "${source}:<namespace>[/tool/name]".` }
-            }
-        }
-
-        const parts = rest.split( '/' )
-        const slashCount = parts.length - 1
-
-        if( slashCount === 0 ) {
-            const [ namespace ] = parts
-            const namespaceValid = /^[a-z][a-z0-9-]*$/.test( namespace )
-
-            if( namespaceValid === false ) {
-                return { 'valid': false, 'error': `Invalid namespace "${namespace}": expected a lowercase identifier matching ^[a-z][a-z0-9-]*$ (e.g. "etherscan").` }
-            }
-
-            return { 'valid': true, source, namespace, 'type': 'namespace' }
-        }
-
-        if( slashCount === 1 ) {
-            const [ namespace, name ] = parts
-
-            return { 'valid': true, source, namespace, 'type': 'schema', name }
-        }
-
-        if( slashCount === 2 ) {
-            const [ namespace, type, name ] = parts
-            const allowedTypes = [ 'tool', 'resource', 'prompt', 'skill', 'selection', 'agent' ]
-            const isAllowed = allowedTypes
-                .find( ( t ) => {
-                    const matches = t === type
-
-                    return matches
-                } )
-
-            if( !isAllowed ) {
-                return { 'valid': false, 'error': `Unknown Spec-ID type "${type}": expected one of tool|resource|prompt|skill|selection|agent. Example: "${namespace}/tool/${name || 'someRoute'}".` }
-            }
-
-            return { 'valid': true, source, namespace, type, name }
-        }
-
-        // Per-test selector: "<namespace>/tool/<name>/tests/<N>" (4 slashes). The finest
-        // addressing granularity — one recorded test of a tool. <N> is the 1-based test
-        // index matching test-<N>.json. No silent default: a malformed sub-path or a
-        // non-positive-integer index is a hard error, never widened to the parent tool.
-        if( slashCount === 4 ) {
-            const [ namespace, kind, name, sub, indexRaw ] = parts
-            if( kind !== 'tool' || sub !== 'tests' ) {
-                return { 'valid': false, 'error': `Invalid per-test Spec-ID "${specId}": expected "<namespace>/tool/<name>/tests/<N>".` }
-            }
-            if( /^[1-9][0-9]*$/.test( indexRaw ) === false ) {
-                return { 'valid': false, 'error': `Invalid test index "${indexRaw}" in "${specId}": expected a positive 1-based integer.` }
-            }
-
-            return { 'valid': true, source, namespace, 'type': 'test', name, 'testIndex': Number( indexRaw ) }
-        }
-
-        return {
-            'valid': false,
-            'error': `Invalid Spec-ID format: "${specId}". Valid forms: "<namespace>" (whole provider), "<namespace>/<schema-name>" (1 slash = schema), "<namespace>/tool/<name>" (2 slashes = tool), "<namespace>/tool/<name>/tests/<N>" (4 slashes = one test). Optional "<source>:" prefix. Example: "etherscan/tool/getBalance".`
-        }
+        return IdResolver.parseSpecId( { specId } )
     }
 
 
@@ -8130,30 +8055,11 @@ allowlist, migrate-config, etc.).
     // first-wins duplicate. The collision entry carries `files` AND `sources` so the
     // visible warning can suggest the qualified "<source>:<spec-id>" fix (PRD-008).
     // Mutates `map` and `collisions`.
+    // Memo 152 / PRD-018 (D-07) — the catalog build primitives moved to core v4
+    // (CatalogIndex). These CLI methods stay as thin delegations for the remaining
+    // internal callers + the __testOnly_* hooks (Hook removal is PRD-020/D-11).
     static #trackPrimitive( { map, collisions, specId, file, source, extra } ) {
-        if( map[ specId ] ) {
-            const existing = collisions
-                .find( ( c ) => {
-                    const matches = c[ 'specId' ] === specId
-
-                    return matches
-                } )
-
-            if( existing ) {
-                existing[ 'files' ].push( file )
-                existing[ 'sources' ].push( source )
-            } else {
-                collisions.push( {
-                    specId,
-                    'files': [ map[ specId ][ 'file' ], file ],
-                    'sources': [ map[ specId ][ 'source' ], source ]
-                } )
-            }
-
-            return
-        }
-
-        map[ specId ] = { file, source, ...extra }
+        return CatalogIndex.trackPrimitive( { map, collisions, specId, file, source, extra } )
     }
 
 
@@ -8163,192 +8069,17 @@ allowlist, migrate-config, etc.).
     // "<source>:<spec-id>" (PRD-008). One bundled line per spec-id (no per-call
     // noise). English, no risk jargon. Returns [] when there is no collision.
     static #formatCollisionWarnings( { collisions } ) {
-        if( Array.isArray( collisions ) === false || collisions.length === 0 ) {
-            return { 'warnings': [] }
-        }
-
-        const warnings = collisions
-            .map( ( collision ) => {
-                const { specId, files, sources } = collision
-                const knownSources = ( Array.isArray( sources ) ? sources : [] )
-                    .filter( ( s ) => typeof s === 'string' && s.length > 0 )
-                const uniqueSources = [ ...new Set( knownSources ) ]
-                const fixForms = uniqueSources.length > 0
-                    ? uniqueSources
-                        .map( ( s ) => `${s}:${specId}` )
-                        .join( ' or ' )
-                    : `<source>:${specId}`
-                const sourceLabel = uniqueSources.length > 0 ? uniqueSources.join( ', ' ) : 'unknown sources'
-                const fileLabel = ( Array.isArray( files ) ? files : [] ).join( ', ' )
-
-                return {
-                    specId,
-                    'sources': uniqueSources,
-                    'files': Array.isArray( files ) ? files : [],
-                    'message': `Collision on "${specId}" across sources [${sourceLabel}] (files: ${fileLabel}). The unqualified call uses the first match. To pick one explicitly, prefix the source: ${fixForms}.`
-                }
-            } )
-
-        return { warnings }
+        return CatalogIndex.formatCollisionWarnings( { collisions } )
     }
 
 
+    // Memo 152 / PRD-018 (D-07) — schema discovery stays CLI-side (schemaFolders[]
+    // iteration + source coordinate), the catalog transform is the core v4
+    // CatalogIndex.build. The on-disk cache IO lives in lib/NamespaceIndexCache.
     static async #buildNamespaceIndex( { cwd } ) {
         const { schemas } = await FlowMcpCli.#loadAllSchemas()
 
-        const tools = {}
-        const resources = {}
-        const prompts = {}
-        const skills = {}
-        const containers = {}
-        const collisions = []
-        const schemasSkipped = []
-
-        schemas
-            .forEach( ( schemaEntry ) => {
-                const { main, file, source } = schemaEntry
-
-                if( !main ) {
-                    return
-                }
-
-                const namespace = main[ 'namespace' ]
-
-                if( !namespace ) {
-                    schemasSkipped.push( { file, source, 'reason': 'missing namespace' } )
-
-                    return
-                }
-
-                const schemaTools = main[ 'tools' ] || main[ 'routes' ] || {}
-
-                Object.keys( schemaTools )
-                    .forEach( ( routeName ) => {
-                        const specId = `${namespace}/tool/${routeName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': tools, collisions, specId, file, source, 'extra': { routeName } } )
-                    } )
-
-                const schemaResources = main[ 'resources' ] || {}
-
-                Object.keys( schemaResources )
-                    .forEach( ( resourceName ) => {
-                        const specId = `${namespace}/resource/${resourceName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': resources, collisions, specId, file, source, 'extra': { resourceName } } )
-                    } )
-
-                const schemaPrompts = main[ 'prompts' ] || {}
-
-                Object.keys( schemaPrompts )
-                    .forEach( ( promptName ) => {
-                        const specId = `${namespace}/prompt/${promptName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': prompts, collisions, specId, file, source, 'extra': { promptName } } )
-                    } )
-
-                const schemaSkills = main[ 'skills' ] || []
-
-                schemaSkills
-                    .forEach( ( skill ) => {
-                        const skillName = skill[ 'name' ]
-
-                        if( !skillName ) {
-                            return
-                        }
-
-                        const specId = `${namespace}/skill/${skillName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': skills, collisions, specId, file, source, 'extra': { skillName } } )
-                    } )
-            } )
-
-        const containerGroups = {}
-
-        schemas
-            .forEach( ( schemaEntry ) => {
-                const { main, file, source } = schemaEntry
-
-                if( !main ) {
-                    return
-                }
-
-                const namespace = main[ 'namespace' ]
-
-                if( !namespace ) {
-                    return
-                }
-
-                const containerName = file.replace( /\.mjs$/, '' ).replace( /-part\d+$/, '' )
-                const containerKey = `${namespace}/${containerName}`
-
-                if( !containerGroups[ containerKey ] ) {
-                    containerGroups[ containerKey ] = { namespace, containerName, source, 'files': [] }
-                }
-
-                containerGroups[ containerKey ][ 'files' ].push( file )
-            } )
-
-        Object.keys( containerGroups )
-            .forEach( ( key ) => {
-                const { files } = containerGroups[ key ]
-                containers[ key ] = { files }
-            } )
-
-        const index = {
-            tools,
-            resources,
-            prompts,
-            skills,
-            containers,
-            collisions,
-            'builtAt': new Date().toISOString(),
-            'schemaCount': schemas.length
-        }
-
-        return { index }
-    }
-
-
-    static async #cachePath( { cwd } ) {
-        const cachePath = join( cwd, '.flowmcp', 'namespace-index.json' )
-        await mkdir( join( cwd, '.flowmcp' ), { recursive: true } )
-
-        return { cachePath }
-    }
-
-
-    static async #writeNamespaceIndexCache( { cwd, index } ) {
-        try {
-            const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
-            // Namespace-index cache refresh is a deliberate, named overwrite (Memo 068 R2).
-            await FsUtils.writeGuarded( { 'path': cachePath, 'content': JSON.stringify( index, null, 4 ), 'onExists': 'overwrite' } )
-
-            return { 'success': true, 'path': cachePath }
-        } catch( err ) {
-            return { 'success': false, 'error': `CCH-008 writeNamespaceIndexCache: ${err.message}` }
-        }
-    }
-
-
-    static async #readNamespaceIndexCache( { cwd } ) {
-        try {
-            const { cachePath } = await FlowMcpCli.#cachePath( { cwd } )
-
-            let content
-            try {
-                content = await readFile( cachePath, 'utf-8' )
-            } catch( err ) {
-                CliOutput.emitCoded( { 'code': 'CCH-009', 'location': 'readNamespaceIndexCache: cache read failed', err } )
-                return { 'exists': false, 'index': null }
-            }
-
-            try {
-                const index = JSON.parse( content )
-
-                return { 'exists': true, index, 'stale': false }
-            } catch( parseErr ) {
-                return { 'exists': true, 'index': null, 'stale': true, 'error': `CCH-010 readNamespaceIndexCache: ${parseErr.message}` }
-            }
-        } catch( err ) {
-            return { 'exists': false, 'index': null, 'error': `CCH-011 readNamespaceIndexCache: ${err.message}` }
-        }
+        return CatalogIndex.build( { schemas } )
     }
 
 
@@ -8356,19 +8087,19 @@ allowlist, migrate-config, etc.).
     static async getNamespaceIndex( { cwd, forceRebuild = false } ) {
         if( forceRebuild ) {
             const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
-            await FlowMcpCli.#writeNamespaceIndexCache( { cwd, index } )
+            await NamespaceIndexCache.write( { cwd, index } )
 
             return { index, 'source': 'rebuilt' }
         }
 
-        const { exists, index: cachedIndex, stale } = await FlowMcpCli.#readNamespaceIndexCache( { cwd } )
+        const { exists, index: cachedIndex, stale } = await NamespaceIndexCache.read( { cwd } )
 
         if( exists && cachedIndex && !stale ) {
             return { 'index': cachedIndex, 'source': 'cache' }
         }
 
         const { index } = await FlowMcpCli.#buildNamespaceIndex( { cwd } )
-        await FlowMcpCli.#writeNamespaceIndexCache( { cwd, index } )
+        await NamespaceIndexCache.write( { cwd, index } )
 
         return { index, 'source': 'rebuilt' }
     }
@@ -8560,105 +8291,7 @@ allowlist, migrate-config, etc.).
 
 
     static async __testOnly_buildIndex( { schemas } ) {
-        const tools = {}
-        const resources = {}
-        const prompts = {}
-        const skills = {}
-        const containers = {}
-        const collisions = []
-
-        schemas
-            .forEach( ( schemaEntry ) => {
-                const { main, file, source } = schemaEntry
-
-                if( !main ) {
-                    return
-                }
-
-                const namespace = main[ 'namespace' ]
-
-                if( !namespace ) {
-                    return
-                }
-
-                const schemaTools = main[ 'tools' ] || main[ 'routes' ] || {}
-
-                Object.keys( schemaTools )
-                    .forEach( ( routeName ) => {
-                        const specId = `${namespace}/tool/${routeName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': tools, collisions, specId, file, source, 'extra': { routeName } } )
-                    } )
-
-                const schemaResources = main[ 'resources' ] || {}
-
-                Object.keys( schemaResources )
-                    .forEach( ( resourceName ) => {
-                        const specId = `${namespace}/resource/${resourceName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': resources, collisions, specId, file, source, 'extra': { resourceName } } )
-                    } )
-
-                const schemaPrompts = main[ 'prompts' ] || {}
-
-                Object.keys( schemaPrompts )
-                    .forEach( ( promptName ) => {
-                        const specId = `${namespace}/prompt/${promptName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': prompts, collisions, specId, file, source, 'extra': { promptName } } )
-                    } )
-
-                const schemaSkills = main[ 'skills' ] || []
-
-                schemaSkills
-                    .forEach( ( skill ) => {
-                        const skillName = skill[ 'name' ]
-
-                        if( !skillName ) {
-                            return
-                        }
-
-                        const specId = `${namespace}/skill/${skillName}`
-                        FlowMcpCli.#trackPrimitive( { 'map': skills, collisions, specId, file, source, 'extra': { skillName } } )
-                    } )
-            } )
-
-        const containerGroups = {}
-
-        schemas
-            .forEach( ( schemaEntry ) => {
-                const { main, file } = schemaEntry
-
-                if( !main || !main[ 'namespace' ] ) {
-                    return
-                }
-
-                const namespace = main[ 'namespace' ]
-                const containerName = file.replace( /\.mjs$/, '' ).replace( /-part\d+$/, '' )
-                const containerKey = `${namespace}/${containerName}`
-
-                if( !containerGroups[ containerKey ] ) {
-                    containerGroups[ containerKey ] = { 'files': [] }
-                }
-
-                containerGroups[ containerKey ][ 'files' ].push( file )
-            } )
-
-        Object.keys( containerGroups )
-            .forEach( ( key ) => {
-                const { files } = containerGroups[ key ]
-                containers[ key ] = { files }
-            } )
-
-        const index = {
-            tools,
-            resources,
-            prompts,
-            skills,
-            containers,
-            collisions,
-            'builtAt': new Date().toISOString(),
-            'schemaCount': schemas.length
-        }
-
-        return { index }
+        return CatalogIndex.build( { schemas } )
     }
 
 
