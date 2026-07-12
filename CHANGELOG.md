@@ -2,6 +2,20 @@
 
 All notable changes to `flowmcp-cli` are documented here.
 
+## Deferred removals (next major)
+
+Two bridges are **kept on purpose** through the Memo-152 CLI split and are scheduled
+for removal with the next major release. They are intentional, not oversights:
+
+- **`dev` prefix shim** (`src/index.mjs`, `isDevPrefix`) — a cosmetic no-op that strips
+  a leading `dev` positional so `flowmcp env …` and `flowmcp dev env …` hit the same
+  handler. Documented compatibility sugar. *Keep through the split, remove with the next major.*
+- **`dev allowlist add`/`remove` deprecation no-op** (`src/commands/AllowlistCommand.mjs`) —
+  since Memo 150 folder presence in `allowed-libraries` is the gate and the CLI never
+  installs; these subcommands now print the exact `npm install --prefix <path> <lib>`
+  command instead of acting. Fresh deprecation UX that users still rely on for the hint.
+  *Keep through the split, remove with the next major.*
+
 ## 4.8.0 — 2026-06-20 (Memos 119 + 128 + 141)
 
 ### Added
