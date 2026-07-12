@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 
-const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
+import { FlowMCP } from 'flowmcp'
 
 
 // Memo 152 / PRD-012 (B-09) — Wire-Contract regression guard.
@@ -55,7 +55,7 @@ describe( 'Tool-name Wire-Contract — byte-identical to pre-de-fork CLI', () =>
     goldens
         .forEach( ( { label, input, expected } ) => {
             it( `reproduces "${expected}" — ${label}`, () => {
-                const { toolName } = FlowMcpCli.__testOnly_buildToolName( input )
+                const { toolName } = FlowMCP.buildToolName( input )
 
                 expect( toolName ).toBe( expected )
                 expect( toolName.length ).toBeLessThanOrEqual( 63 )

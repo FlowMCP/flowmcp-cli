@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 
 
 const here = dirname( fileURLToPath( import.meta.url ) )
@@ -131,7 +132,7 @@ describe( 'grading dispatch — allowlist + dev-prefix-strip', () => {
 
 describe( 'grading methods — module guard + input validation', () => {
     afterEach( () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': null } )
+        ModuleRegistry.inject( { 'grading': null } )
     } )
 
     // PRD-006: the gradingImport method was removed (no `grading import` command);
@@ -139,7 +140,7 @@ describe( 'grading methods — module guard + input validation', () => {
     // machinery is covered by flowmcp-grading's own tests.
 
     it( 'gradingExport reports a missing target', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'GradingExport': { 'run': async () => ( {} ) } } } )
+        ModuleRegistry.inject( { 'grading': { 'GradingExport': { 'run': async () => ( {} ) } } } )
         const { result } = await FlowMcpCli.gradingExport( { 'cwd': '/tmp', 'target': '', 'onConflict': null, 'json': false } )
 
         expect( result[ 'status' ] ).toBe( false )
@@ -147,7 +148,7 @@ describe( 'grading methods — module guard + input validation', () => {
     } )
 
     it( 'gradingRun requires a mode flag (no silent default)', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'RebuildIndex': {} } } )
+        ModuleRegistry.inject( { 'grading': { 'RebuildIndex': {} } } )
         const { result } = await FlowMcpCli.gradingRun( { 'cwd': '/tmp', 'target': 'ns', 'phase': null, 'emitPrompts': false, 'consumeScores': null, 'onConflict': null, 'json': false } )
 
         expect( result[ 'status' ] ).toBe( false )
@@ -155,7 +156,7 @@ describe( 'grading methods — module guard + input validation', () => {
     } )
 
     it( 'gradingState reports a missing target', async () => {
-        FlowMcpCli.__testInjectGrading( { 'grading': { 'ModuleApi': {} } } )
+        ModuleRegistry.inject( { 'grading': { 'ModuleApi': {} } } )
         const { result } = await FlowMcpCli.gradingState( { 'cwd': '/tmp', 'target': '', 'json': false } )
 
         expect( result[ 'status' ] ).toBe( false )

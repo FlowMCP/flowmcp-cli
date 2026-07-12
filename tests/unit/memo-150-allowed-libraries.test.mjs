@@ -3,6 +3,7 @@ import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
+import { HandlerResolver } from '../../src/lib/HandlerResolver.mjs'
 
 const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
 
@@ -100,7 +101,7 @@ describe( 'Memo 150 P1 — requiredLibrary resolves from allowed-libraries (real
             return { 'ping': { 'before': ( { userParams } ) => userParams } }
         }
 
-        const { handlerMap } = await FlowMcpCli._testHook_resolveHandlers( {
+        const { handlerMap } = await HandlerResolver.resolve( {
             main,
             handlersFn,
             'filePath': join( testHome.root, 'schemas150', 'v4.0.0', 'present.mjs' )
@@ -119,7 +120,7 @@ describe( 'Memo 150 P1 — requiredLibrary resolves from allowed-libraries (real
         const handlersFn = () => ( { 'ping': { 'before': ( { userParams } ) => userParams } } )
 
         await expect(
-            FlowMcpCli._testHook_resolveHandlers( {
+            HandlerResolver.resolve( {
                 main,
                 handlersFn,
                 'filePath': join( testHome.root, 'schemas150', 'v4.0.0', 'missing.mjs' )

@@ -33,6 +33,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -103,11 +104,11 @@ async function consume( { cwd, scoresPath } ) {
 
 // ---- G2: Task-ID known (unknown taskId rejected before rebuild/grade) -----------
 describe( 'G2 — Task-ID known (consume rejects an unknown taskId)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'PASS — the exact emitted Task-ID is accepted', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
@@ -125,7 +126,7 @@ describe( 'G2 — Task-ID known (consume rejects an unknown taskId)', () => {
 
     it( 'REJECT — an unknown taskId is refused and never reaches rebuild (no proof written)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         await emit( { cwd, phase: 'single-test' } )
 
@@ -144,7 +145,7 @@ describe( 'G2 — Task-ID known (consume rejects an unknown taskId)', () => {
 
     it( 'REJECT — a taskId without an open emit is refused', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         // Note: no emit -> no open emit/state taskId.
 
@@ -163,11 +164,11 @@ describe( 'G2 — Task-ID known (consume rejects an unknown taskId)', () => {
 
 // ---- G3: Area-Set complete / partial --------------------------------------------
 describe( 'G3 — Area-Set complete / partial (full -> complete; subset -> pending)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'PASS — the full emitted set marks taskComplete with no missing areas', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
@@ -186,7 +187,7 @@ describe( 'G3 — Area-Set complete / partial (full -> complete; subset -> pendi
 
     it( 'REJECT (not complete) — a subset accepts per-area, leaves the rest pending, taskComplete false', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
 
@@ -206,7 +207,7 @@ describe( 'G3 — Area-Set complete / partial (full -> complete; subset -> pendi
 
     it( 'REJECT — an area outside the emitted set is refused', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
@@ -225,11 +226,11 @@ describe( 'G3 — Area-Set complete / partial (full -> complete; subset -> pendi
 
 // ---- G4: Per-area question-count (answered == asked) ----------------------------
 describe( 'G4 — Per-area question-count (answered == asked, else reject)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'PASS — an answered area matching the asked count is accepted', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
@@ -252,7 +253,7 @@ describe( 'G4 — Per-area question-count (answered == asked, else reject)', () 
 
     it( 'REJECT — an answered count that differs from the asked count is refused', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         await importFixture( { cwd } )
         const e = await emit( { cwd, phase: 'single-test' } )
 

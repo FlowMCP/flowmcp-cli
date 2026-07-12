@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 
-import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { CatalogIndex } from 'flowmcp'
 
 
 // PRD-009 — collision tracking is extended from tools to ALL four primitives
@@ -31,7 +31,7 @@ describe( 'PRD-009 — resource collision', () => {
             schemaEntry( { 'namespace': 'gtfs', 'file': 'b.mjs', 'source': 'Prod', 'resources': { 'stops': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
         const collision = index[ 'collisions' ]
             .find( ( c ) => c[ 'specId' ] === 'gtfs/resource/stops' )
 
@@ -49,7 +49,7 @@ describe( 'PRD-009 — prompt collision', () => {
             schemaEntry( { 'namespace': 'core', 'file': 'b.mjs', 'source': 'Prod', 'prompts': { 'greet': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
         const collision = index[ 'collisions' ]
             .find( ( c ) => c[ 'specId' ] === 'core/prompt/greet' )
 
@@ -65,7 +65,7 @@ describe( 'PRD-009 — skill collision', () => {
             schemaEntry( { 'namespace': 'geo', 'file': 'b.mjs', 'source': 'Prod', 'skills': [ { 'name': 'lookup' } ] } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
         const collision = index[ 'collisions' ]
             .find( ( c ) => c[ 'specId' ] === 'geo/skill/lookup' )
 
@@ -77,7 +77,7 @@ describe( 'PRD-009 — skill collision', () => {
             schemaEntry( { 'namespace': 'geo', 'file': 'a.mjs', 'source': 'Dev', 'skills': [ {} ] } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'collisions' ].length ).toBe( 0 )
     } )
@@ -86,7 +86,7 @@ describe( 'PRD-009 — skill collision', () => {
 
 describe( 'PRD-009 — collision warning formatter', () => {
     it( 'returns [] when there are no collisions', () => {
-        const { warnings } = FlowMcpCli.__testOnly_formatCollisions( { 'collisions': [] } )
+        const { warnings } = CatalogIndex.formatCollisionWarnings( { 'collisions': [] } )
 
         expect( warnings ).toEqual( [] )
     } )
@@ -96,7 +96,7 @@ describe( 'PRD-009 — collision warning formatter', () => {
             { 'specId': 'etherscan/tool/getBalance', 'files': [ 'a.mjs', 'b.mjs' ], 'sources': [ 'Development', 'Production' ] }
         ]
 
-        const { warnings } = FlowMcpCli.__testOnly_formatCollisions( { collisions } )
+        const { warnings } = CatalogIndex.formatCollisionWarnings( { collisions } )
 
         expect( warnings.length ).toBe( 1 )
         expect( warnings[ 0 ][ 'message' ] ).toMatch( /etherscan\/tool\/getBalance/ )

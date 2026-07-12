@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { main as demoMain } from '../integration/fixtures/grading-provider/demoapi.mjs'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
@@ -59,11 +60,11 @@ async function seedGradedIsland( { cwd, schemaHash, grade = 'B' } ) {
 
 
 describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'ungraded namespace (no index.json) → schema is in the worklist', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: null, json: false } )
         expect( result.status ).toBe( true )
@@ -75,7 +76,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'graded + stored hash == live hash → fresh, skipped (not stale)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
         await seedGradedIsland( { cwd, schemaHash: LIVE_HASH } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: null, json: false } )
@@ -87,7 +88,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'graded + stored hash != live hash → stale, in the worklist', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
         await seedGradedIsland( { cwd, schemaHash: 'deadbeef' } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: null, json: false } )
@@ -97,7 +98,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'graded fresh but below --target → under-target, in the worklist', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
         await seedGradedIsland( { cwd, schemaHash: LIVE_HASH, grade: 'B' } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: 'A', json: false } )
@@ -107,7 +108,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'graded fresh at/above --target → skipped (no work)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
         await seedGradedIsland( { cwd, schemaHash: LIVE_HASH, grade: 'B' } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: 'B', json: false } )
@@ -118,7 +119,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'legacy grade (no stored hash) is NOT treated as stale', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
         await seedGradedIsland( { cwd, schemaHash: null, grade: 'B' } )
 
         const { result } = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi', gradingDataDir: GRADING_DIR, targetGrade: null, json: false } )
@@ -129,7 +130,7 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
     it( 'rejects ns/schema and a missing target (no silent default)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
 
         const sub = await FlowMcpCli.gradingPlan( { cwd, target: 'demoapi/demoapi', gradingDataDir: GRADING_DIR, targetGrade: null, json: false } )
         expect( sub.result.status ).toBe( false )
@@ -143,11 +144,11 @@ describe( 'Memo 112 P6.2 — grading plan: staleness worklist', () => {
 
 
 describe( 'Memo 112 P6.1 — grading finalize: guards', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'rejects a ns/schema target (finalize is namespace-level)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
 
         const { result } = await FlowMcpCli.gradingFinalize( { cwd, target: 'demoapi/demoapi', gradingDataDir: GRADING_DIR, gradingExportDir: null, targetGrade: null, json: false } )
         expect( result.status ).toBe( false )
@@ -156,7 +157,7 @@ describe( 'Memo 112 P6.1 — grading finalize: guards', () => {
 
     it( 'rejects a missing target', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
 
         const { result } = await FlowMcpCli.gradingFinalize( { cwd, target: '', gradingDataDir: GRADING_DIR, gradingExportDir: null, targetGrade: null, json: false } )
         expect( result.status ).toBe( false )
@@ -166,7 +167,7 @@ describe( 'Memo 112 P6.1 — grading finalize: guards', () => {
 
 
 describe( 'Memo 112 P6.3/P6.4 — orchestrator emit: worklist filter + outer-loop doc', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     function gradingStub() {
         const stub = {
@@ -191,7 +192,7 @@ describe( 'Memo 112 P6.3/P6.4 — orchestrator emit: worklist filter + outer-loo
 
     it( 'P6.4 — the orchestrator carries the outer loop: state → re-dispatch → finalize', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingStub() } )
+        ModuleRegistry.inject( { grading: gradingStub() } )
 
         const { result } = await emit( { cwd } )
         expect( result.status ).toBe( true )
@@ -202,7 +203,7 @@ describe( 'Memo 112 P6.3/P6.4 — orchestrator emit: worklist filter + outer-loo
 
     it( 'P6.3 — a fresh schema is skipped (not dispatched) by the orchestrator', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingStub() } )
+        ModuleRegistry.inject( { grading: gradingStub() } )
         // Mark demoapi as graded + fresh (stored hash == live) BEFORE the emit.
         await seedGradedIsland( { cwd, schemaHash: LIVE_HASH } )
 
@@ -214,7 +215,7 @@ describe( 'Memo 112 P6.3/P6.4 — orchestrator emit: worklist filter + outer-loo
 
     it( 'P6.3 — an ungraded schema IS dispatched (worklist non-empty)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingStub() } )
+        ModuleRegistry.inject( { grading: gradingStub() } )
 
         const { result } = await emit( { cwd } )
         expect( result.status ).toBe( true )

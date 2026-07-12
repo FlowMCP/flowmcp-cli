@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -31,14 +32,14 @@ async function writeGlobalEnv( { content } ) {
 
 
 describe( 'gradingDeterministic — empty .env value is key-gated, not a FAIL', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'an EMPTY SOME_KEY routes the schema to key-gated (DPT-007), not FAIL', async () => {
         await seedGradingSchemaFolder( { providerFixture: keygateFixture, namespace: 'keygate', sourceName: 'keygate-src' } )
         await writeGlobalEnv( { content: 'SOME_KEY=\n' } )
 
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: realGrading } )
+        ModuleRegistry.inject( { grading: realGrading } )
 
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'keygate/keygate', gradingDataDir: '.flowmcp/grading', withKeys: true, only: null, dryRun: true, json: true } )
 

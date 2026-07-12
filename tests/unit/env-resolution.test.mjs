@@ -3,9 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
-
-
-const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
+import { EnvResolver } from '../../src/lib/EnvResolver.mjs'
 
 
 describe( 'env resolution: local override + global fallback (Memo 032 PRD-07)', () => {
@@ -33,7 +31,7 @@ describe( 'env resolution: local override + global fallback (Memo 032 PRD-07)', 
         await writeFile( testHome.envPath(), 'GLOBAL_KEY=global_value\nSHARED=global\n', 'utf-8' )
         await writeFile( testHome.globalConfigPath, JSON.stringify( { 'envPath': testHome.envPath() } ), 'utf-8' )
 
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject[ 'GLOBAL_KEY' ] ).toBe( 'global_value' )
         expect( envObject[ 'SHARED' ] ).toBe( 'global' )
@@ -44,7 +42,7 @@ describe( 'env resolution: local override + global fallback (Memo 032 PRD-07)', 
     it( 'local-only: returns local keys', async () => {
         await writeFile( join( projectDir, '.flowmcp', '.env' ), 'LOCAL_KEY=local_value\n', 'utf-8' )
 
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject[ 'LOCAL_KEY' ] ).toBe( 'local_value' )
         expect( sources.local ).toBe( join( projectDir, '.flowmcp', '.env' ) )
@@ -56,7 +54,7 @@ describe( 'env resolution: local override + global fallback (Memo 032 PRD-07)', 
         await writeFile( testHome.globalConfigPath, JSON.stringify( { 'envPath': testHome.envPath() } ), 'utf-8' )
         await writeFile( join( projectDir, '.flowmcp', '.env' ), 'SHARED=local\nONLY_LOCAL=l\n', 'utf-8' )
 
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject[ 'SHARED' ] ).toBe( 'local' )    // local wins
         expect( envObject[ 'ONLY_GLOBAL' ] ).toBe( 'g' )
@@ -66,7 +64,7 @@ describe( 'env resolution: local override + global fallback (Memo 032 PRD-07)', 
     } )
 
     it( 'neither: returns empty object', async () => {
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject ).toEqual( {} )
         expect( sources.local ).toBeNull()

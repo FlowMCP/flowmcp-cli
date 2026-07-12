@@ -3,6 +3,8 @@ import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
+import { SchemaSource } from '../../src/lib/SchemaSource.mjs'
+import { HandlerResolver } from '../../src/lib/HandlerResolver.mjs'
 
 const { FlowMcpCli, CliError } = await import( '../../src/task/FlowMcpCli.mjs' )
 
@@ -113,7 +115,7 @@ describe( 'Memo 149 Strang C — CliError class', () => {
 
 describe( 'Memo 149 Strang B — single-source schema file path + fail-loud shared lists', () => {
     it( '#resolveSchemaFilePath returns an empty path for an empty ref (no throw)', async () => {
-        const { filePath } = await FlowMcpCli._testHook_resolveSchemaFilePath( { schemaRef: '' } )
+        const { filePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: '' } )
 
         expect( filePath ).toBe( '' )
     } )
@@ -123,7 +125,7 @@ describe( 'Memo 149 Strang B — single-source schema file path + fail-loud shar
         const handlersFn = () => ( {} )
 
         await expect(
-            FlowMcpCli._testHook_resolveHandlers( { main, handlersFn, filePath: '/tmp/does-not-exist/schema.mjs' } )
+            HandlerResolver.resolve( { main, handlersFn, filePath: '/tmp/does-not-exist/schema.mjs' } )
         ).rejects.toThrow( /^LST-001/ )
     } )
 
@@ -131,7 +133,7 @@ describe( 'Memo 149 Strang B — single-source schema file path + fail-loud shar
         const main = { 'namespace': 'x', 'tools': {}, 'sharedLists': [] }
         const handlersFn = () => ( {} )
 
-        const { handlerMap } = await FlowMcpCli._testHook_resolveHandlers( { main, handlersFn, filePath: '/tmp/does-not-exist/schema.mjs' } )
+        const { handlerMap } = await HandlerResolver.resolve( { main, handlersFn, filePath: '/tmp/does-not-exist/schema.mjs' } )
 
         expect( handlerMap ).toEqual( {} )
     } )

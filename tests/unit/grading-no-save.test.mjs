@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -89,11 +90,11 @@ async function snapshotTree( { root } ) {
 
 
 describe( 'grading deterministic --no-save — byte-identical island', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'writes NO files (provider dir not created) yet returns the pretest + hints', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const islandRoot = join( cwd, '.flowmcp', 'grading' )
         const before = await snapshotTree( { root: islandRoot } )
@@ -125,7 +126,7 @@ describe( 'grading deterministic --no-save — byte-identical island', () => {
     it( 'WITHOUT --no-save the default still persists (saved:true, dryRun not set)', async () => {
         const cwd = await freshCwd()
         const grading = gradingWithStubbedPretest( { ok: true } )
-        FlowMcpCli.__testInjectGrading( { grading } )
+        ModuleRegistry.inject( { grading } )
 
         const { result } = await FlowMcpCli.gradingDeterministic( {
             cwd, target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading',
@@ -140,12 +141,12 @@ describe( 'grading deterministic --no-save — byte-identical island', () => {
 
 
 describe( 'grading non-deterministic --emit-prompts --no-save — byte-identical island', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'emits NO prompts.json/state.json yet returns the Task-ID + area-set', async () => {
         const cwd = await freshCwd()
         const grading = gradingWithStubbedPretest( { ok: true } )
-        FlowMcpCli.__testInjectGrading( { grading } )
+        ModuleRegistry.inject( { grading } )
 
         const islandRoot = join( cwd, '.flowmcp', 'grading' )
         const before = await snapshotTree( { root: islandRoot } )
@@ -177,11 +178,11 @@ describe( 'grading non-deterministic --emit-prompts --no-save — byte-identical
 
 
 describe( 'grading non-deterministic --consume-scores --no-save — byte-identical island', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'writes NO index.json/grade.json/state.json; island untouched; saved:false', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         // Build a real island first (default emit writes prompts.json + state.json).
         await FlowMcpCli.gradingRun( {
@@ -230,11 +231,11 @@ describe( 'grading non-deterministic --consume-scores --no-save — byte-identic
 
 
 describe( 'PRD-012 orthogonality — --on-conflict is a write-policy, not a write-toggle', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( '--on-conflict still behaves as the write-policy WITHOUT --no-save (abort on existing handoff)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         // First real emit writes prompts.json.
         await FlowMcpCli.gradingRun( {
@@ -255,7 +256,7 @@ describe( 'PRD-012 orthogonality — --on-conflict is a write-policy, not a writ
 
     it( '--no-save WITH --on-conflict abort does NOT error — the conflict gate is never consulted (no write)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         // First real emit writes prompts.json (the file --on-conflict would collide with).
         await FlowMcpCli.gradingRun( {

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -67,7 +68,7 @@ describe( 'gradingDeterministic — perf guard (compile only the target namespac
     } )
 
     afterEach( () => {
-        FlowMcpCli.__testInjectGrading( { grading: null } )
+        ModuleRegistry.inject( { grading: null } )
         delete process.env.PERF_COMPILE_LOG
     } )
 
@@ -75,7 +76,7 @@ describe( 'gradingDeterministic — perf guard (compile only the target namespac
         await seedGradingSchemaFolder( { providerFixture: perfFixture, namespace: 'perfprobe', sourceName: 'perfprobe-src' } )
 
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
 
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'perfprobe/target', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, dryRun: true, json: true } )
 

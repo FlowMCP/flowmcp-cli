@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -52,14 +53,14 @@ async function freshCwd() {
 
 
 async function importAndEmit( { cwd, ok = true } ) {
-    FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok } ) } )
+    ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok } ) } )
     await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
 }
 
 
 // ---- PRD-009: grading doctor <ns> ---------------------------------------------
 describe( 'PRD-009 — grading doctor <ns> (defects + tips + nextLoop, read-only)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'returns ONE merged read-only result: defects + tips + nextLoop + nextAction, online:false', async () => {
         const cwd = await freshCwd()
@@ -102,7 +103,7 @@ describe( 'PRD-009 — grading doctor <ns> (defects + tips + nextLoop, read-only
 
     it( 'no prompts.json -> deterministic-only soft state (defects [] WITH explicit note, NOT a hard WL-001 error)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingDoctor( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', json: true } )
 
@@ -156,7 +157,7 @@ describe( 'PRD-009 — grading doctor <ns> (defects + tips + nextLoop, read-only
     } )
 
     it( 'reports a missing target', async () => {
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const { result } = await FlowMcpCli.gradingDoctor( { cwd: '/tmp', gradingDataDir: '.flowmcp/grading', target: '', json: true } )
 
         expect( result.status ).toBe( false )
@@ -167,7 +168,7 @@ describe( 'PRD-009 — grading doctor <ns> (defects + tips + nextLoop, read-only
 
 // ---- PRD-009: worklist subsumed into the shared collector (regression) --------
 describe( 'PRD-009 — worklist is a thin wrapper over the shared collector', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'worklist still returns a flat array and doctor.defects equals it', async () => {
         const cwd = await freshCwd()
@@ -187,7 +188,7 @@ describe( 'PRD-009 — worklist is a thin wrapper over the shared collector', ()
 
     it( 'worklist keeps the WL-001 guard (no prompts.json -> coded error)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', json: true } )
         expect( Array.isArray( result ) ).toBe( false )
@@ -198,7 +199,7 @@ describe( 'PRD-009 — worklist is a thin wrapper over the shared collector', ()
 
 // ---- PRD-010: nextAction (deterministic-now / one non-det set / gated) --------
 describe( 'PRD-010 — nextAction split (graph-driven, read-only, no emission)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'below deterministic-green: namespace areas stay gated; the schema-areas form the ready non-det set (Befund I-4)', async () => {
         const cwd = await freshCwd()
@@ -272,7 +273,7 @@ describe( 'PRD-010 — nextAction split (graph-driven, read-only, no emission)',
 
     it( 'no prompts.json: nextAction is explicit (empty det areas + note), never a fabricated graph', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingState( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', json: true } )
         const na = result.nextAction

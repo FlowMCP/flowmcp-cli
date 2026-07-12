@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from '@jest/globals'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { GradingDeterministic } from '../../src/commands/grading/GradingDeterministic.mjs'
 import { seedInitializedGlobalConfig } from '../helpers/seed-home.mjs'
 
 
@@ -11,7 +12,7 @@ beforeAll( async () => {
 
 describe( 'PRD-006: #validateOnlyFilter', () => {
     it( 'returns null filter when only is undefined', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': undefined } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': undefined } )
 
         expect( filter ).toBe( null )
         expect( error ).toBe( null )
@@ -19,7 +20,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'returns null filter when only is empty string', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': '' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': '' } )
 
         expect( filter ).toBe( null )
         expect( error ).toBe( null )
@@ -27,7 +28,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'maps "tools" to singular internal discriminator', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': 'tools' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': 'tools' } )
 
         expect( error ).toBe( null )
         expect( filter ).toEqual( [ 'tool' ] )
@@ -35,7 +36,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'handles comma-separated values', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': 'tools,resources' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': 'tools,resources' } )
 
         expect( error ).toBe( null )
         expect( filter ).toEqual( [ 'tool', 'resource' ] )
@@ -43,7 +44,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'trims whitespace', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': ' tools , resources ' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': ' tools , resources ' } )
 
         expect( error ).toBe( null )
         expect( filter ).toEqual( [ 'tool', 'resource' ] )
@@ -51,7 +52,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'maps "selections" to "selection-member"', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': 'selections' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': 'selections' } )
 
         expect( error ).toBe( null )
         expect( filter ).toEqual( [ 'selection-member' ] )
@@ -59,7 +60,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'returns error for invalid value', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': 'foo' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': 'foo' } )
 
         expect( filter ).toBe( null )
         expect( error ).toContain( 'Invalid --only values: foo' )
@@ -68,7 +69,7 @@ describe( 'PRD-006: #validateOnlyFilter', () => {
 
 
     it( 'returns error listing all invalid values', () => {
-        const { filter, error } = FlowMcpCli._testHook_validateOnlyFilter( { 'only': 'tools,foo,bar' } )
+        const { filter, error } = GradingDeterministic.validateOnlyFilter( { 'only': 'tools,foo,bar' } )
 
         expect( filter ).toBe( null )
         expect( error ).toContain( 'foo, bar' )

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
+import { GradingTarget } from '../../src/commands/grading/GradingTarget.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -65,7 +67,7 @@ async function freshCwd() {
 
 
 describe( 'gradingRun — flow detection (F29)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'errors when the target is in neither the island nor schemaFolders[]', async () => {
         const cwd = await freshCwd()
@@ -91,7 +93,7 @@ describe( 'gradingRun — flow detection (F29)', () => {
 
     it( 'detects the provider tier (autonomous, max B) on emit-prompts', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
@@ -104,7 +106,7 @@ describe( 'gradingRun — flow detection (F29)', () => {
 
 
 describe( 'gradingRun — mode + conflict guards (no silent defaults)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'requires exactly one mode flag', async () => {
         const cwd = await freshCwd()
@@ -133,7 +135,7 @@ describe( 'gradingRun — mode + conflict guards (no silent defaults)', () => {
 
 
 describe( 'gradingRun — F16 dependency resolver', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'hard-aborts (coded, no silent skip) when index.json is missing and the namespace is not in schemaFolders[]', async () => {
         const cwd = await freshCwd()
@@ -141,7 +143,7 @@ describe( 'gradingRun — F16 dependency resolver', () => {
         // `bare` namespace is not registered in schemaFolders[]. PRD-004 (B3): the
         // provider branch resolves live and surfaces the coded SRC-001 hard abort.
         await mkdir( join( cwd, '.flowmcp', 'grading','providers', 'bare' ), { recursive: true } )
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'bare', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
@@ -153,7 +155,7 @@ describe( 'gradingRun — F16 dependency resolver', () => {
 
     it( 'reports (does not block) when rollup quality is below stable', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         // First run auto-builds the island index from the live read (B3). The
         // second run sees an existing (below-stable) index -> the resolver's
@@ -170,11 +172,11 @@ describe( 'gradingRun — F16 dependency resolver', () => {
 
 
 describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'emits prompts.json + state.json with a Goal-Block', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
@@ -194,7 +196,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'Memo 097 PA-1: emits composed areas[] (not just a goalBlock) with maxIterations default 1', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
 
@@ -232,7 +234,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'Memo 097 PA-1: --max-iterations opt-in higher is threaded into prompts.json', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: '3', json: false } )
 
@@ -243,7 +245,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'Memo 097 PA-1: rejects a non-integer --max-iterations (no silent default)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: 'lots', json: false } )
 
@@ -254,7 +256,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'F26: persisted pretest handoff carries no request field and no key value', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
         const raw = await readFile( result.promptsPath, 'utf-8' )
@@ -269,7 +271,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'second emit with --on-conflict=abort returns a NO-OVERWRITE error', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: 'abort', json: false } )
@@ -280,7 +282,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
     it( 'second emit with --on-conflict=skip keeps the existing handoff', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: 'skip', json: false } )
@@ -292,7 +294,7 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
     it( 'passes flat serverParams to DataPretest.run (CLI is the only env consumer)', async () => {
         const cwd = await freshCwd()
         const injected = gradingWithStubbedPretest( { ok: true } )
-        FlowMcpCli.__testInjectGrading( { grading: injected } )
+        ModuleRegistry.inject( { grading: injected } )
 
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
@@ -305,11 +307,11 @@ describe( 'gradingRun — Stage 1 emit-prompts (handoff + baton)', () => {
 
 
 describe( 'gradingRun — Stage 3 consume-scores', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'consumes a scores fixture, rebuilds the 5-status index, finalizes state', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -329,7 +331,7 @@ describe( 'gradingRun — Stage 3 consume-scores', () => {
 
     it( 'reports a missing scores file', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: false, consumeScores: 'nope.json', onConflict: null, json: false } )
 
@@ -340,11 +342,11 @@ describe( 'gradingRun — Stage 3 consume-scores', () => {
 
 
 describe( 'gradingState — read-only rollup', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'returns the rollup state for a built namespace (read-only)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         // PRD-006: the island is built by the first emit run (no import).
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
 
@@ -367,11 +369,11 @@ describe( 'gradingState — read-only rollup', () => {
 
 
 describe( 'gradingExport — OUT round-trip (never overwrites source)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'exports index.json into a fresh folder, source untouched', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         // PRD-006: the island (and its index.json) is built by the first emit run
         // from the live schemaFolders[] read — no import step.
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
@@ -394,7 +396,7 @@ describe( 'gradingExport — OUT round-trip (never overwrites source)', () => {
 
 describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-007)', () => {
     afterEach( () => {
-        FlowMcpCli.__testInjectGrading( { grading: null } )
+        ModuleRegistry.inject( { grading: null } )
         delete process.env[ 'FLOWMCP_GRADING_EXPORT' ]
     } )
 
@@ -403,7 +405,7 @@ describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-
     // schemaFolders[] read (no import). Emit so export has an index.json to export.
     async function seedImportedNamespace() {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, json: false } )
         return cwd
     }
@@ -492,7 +494,7 @@ describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-
                 } )
             }
         }
-        FlowMcpCli.__testInjectGrading( { grading: injected } )
+        ModuleRegistry.inject( { grading: injected } )
         // F29 needs a real provider folder to pass flow detection.
         await mkdir( join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'demoapi' ), { recursive: true } )
 
@@ -523,12 +525,12 @@ describe( 'gradingExport — config-driven destination (#gradingExportRoot, PRD-
 
 // Memo 097 PA-3 — grading worklist <ns> --json (flat, deduplicated error list).
 describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
 
     async function seedEmitted( { ok } ) {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
         return cwd
     }
@@ -536,7 +538,7 @@ describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
 
     it( 'returns a flat array of { namespace, schema, code, message } from pretest errors', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
         // Inject deterministic pretest errors into the emitted handoff.
@@ -569,7 +571,7 @@ describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
 
     it( 'deduplicates identical (schema, code, message) tuples', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, json: false } )
 
         const promptsPath = join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'prompts.json' )
@@ -602,7 +604,7 @@ describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
 
     it( 'NO SILENT DEFAULT: missing prompts.json returns a coded error, not an empty list', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         // Import only — never emit, so prompts.json does not exist.
 
         const { result } = await FlowMcpCli.gradingWorklist( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', json: true } )
@@ -626,7 +628,7 @@ describe( 'gradingWorklist — flat dedup error list (PA-3)', () => {
 // Memo 097 PA-5 — grading.useKeys dev-flag (DEFAULT OFF).
 describe( 'gradingRun useKeys gate (PA-5, default OFF)', () => {
     afterEach( () => {
-        FlowMcpCli.__testInjectGrading( { grading: null } )
+        ModuleRegistry.inject( { grading: null } )
         delete process.env[ 'FLOWMCP_GRADING_USE_KEYS' ]
     } )
 
@@ -634,7 +636,7 @@ describe( 'gradingRun useKeys gate (PA-5, default OFF)', () => {
     it( 'default OFF: passes an EMPTY serverParams object to DataPretest (no live keys)', async () => {
         const cwd = await freshCwd()
         const injected = gradingWithStubbedPretest( { ok: true } )
-        FlowMcpCli.__testInjectGrading( { grading: injected } )
+        ModuleRegistry.inject( { grading: injected } )
 
         const { result } = await FlowMcpCli.gradingRun( { cwd, gradingDataDir: '.flowmcp/grading', target:'demoapi', phase: null, emitPrompts: true, consumeScores: null, onConflict: null, maxIterations: null, withKeys: false, json: false } )
 
@@ -649,19 +651,19 @@ describe( 'gradingRun useKeys gate (PA-5, default OFF)', () => {
 
     it( 'env FLOWMCP_GRADING_USE_KEYS=1 opts in (serverParams populated when keys exist)', async () => {
         process.env[ 'FLOWMCP_GRADING_USE_KEYS' ] = '1'
-        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: false } )
+        const { useKeys } = await GradingTarget.gradingUseKeys( { withKeys: false } )
         expect( useKeys ).toBe( true )
     } )
 
 
     it( '--with-keys flag opts in regardless of env/config', async () => {
-        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: true } )
+        const { useKeys } = await GradingTarget.gradingUseKeys( { withKeys: true } )
         expect( useKeys ).toBe( true )
     } )
 
 
     it( 'default (no flag, no env, no config) resolves to false', async () => {
-        const { useKeys } = await FlowMcpCli.__testGradingUseKeys( { withKeys: false } )
+        const { useKeys } = await GradingTarget.gradingUseKeys( { withKeys: false } )
         expect( useKeys ).toBe( false )
     } )
 } )
@@ -674,7 +676,7 @@ describe( 'island resolution precedence (PA-6)', () => {
 
     it( '--grading-data flag wins (cwd-relative)', async () => {
         const cwd = await freshCwd()
-        const { root } = await FlowMcpCli.__testGradingDataRoot( { cwd, gradingDataDir: 'custom/island' } )
+        const root = await GradingTarget.gradingDataRoot( { cwd, gradingDataDir: 'custom/island' } )
         expect( root ).toBe( join( cwd, 'custom', 'island' ) )
     } )
 
@@ -682,7 +684,7 @@ describe( 'island resolution precedence (PA-6)', () => {
     it( 'env FLOWMCP_GRADING_DATA wins when no flag', async () => {
         const cwd = await freshCwd()
         process.env[ 'FLOWMCP_GRADING_DATA' ] = 'env/island'
-        const { root } = await FlowMcpCli.__testGradingDataRoot( { cwd, gradingDataDir: null } )
+        const root = await GradingTarget.gradingDataRoot( { cwd, gradingDataDir: null } )
         expect( root ).toBe( join( cwd, 'env', 'island' ) )
     } )
 } )

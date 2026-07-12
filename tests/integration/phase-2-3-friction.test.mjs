@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
+import { EnvResolver } from '../../src/lib/EnvResolver.mjs'
 
 
 const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
@@ -128,7 +129,7 @@ describe( 'Phase 2/3 friction — full coverage (Memo 032 PRD-13)', () => {
         await writeFile( testHome.envPath(), 'SHARED_KEY=global_value_long_enough\nGLOBAL_ONLY=global_only_value\n', 'utf-8' )
         await writeFile( join( projectDir, '.flowmcp', '.env' ), 'SHARED_KEY=local_value_long_enough\n', 'utf-8' )
 
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject[ 'SHARED_KEY' ] ).toBe( 'local_value_long_enough' )
         expect( envObject[ 'GLOBAL_ONLY' ] ).toBe( 'global_only_value' )

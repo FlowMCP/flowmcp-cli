@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { CatalogIndex } from 'flowmcp'
 
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ function schemaEntry( { namespace, file, source = 'testsrc', tools = {}, resourc
 
 describe( 'FlowMcpCli.#parseSpecId — valid 2-slash tool', () => {
     it( 'returns valid: true with namespace, type tool, and name', async () => {
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { 'schemas': [] } )
+        const { index } = await CatalogIndex.build( { 'schemas': [] } )
         // We test parseSpecId indirectly via __testOnly_buildIndex which exercises the same logic.
         // For direct access to #parseSpecId we use the getNamespaceIndex path with fixture schemas.
         // Direct parse tests are exercised below via a thin exported wrapper pattern.
@@ -65,7 +66,7 @@ describe( 'parseSpecId logic — verified via index key structure', () => {
             } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'tools' ][ 'moralis/tool/getBlock' ] ).toBeDefined()
         expect( index[ 'tools' ][ 'moralis/tool/getBlock' ][ 'routeName' ] ).toBe( 'getBlock' )
@@ -80,7 +81,7 @@ describe( 'parseSpecId logic — verified via index key structure', () => {
             } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'resources' ][ 'moralis/resource/chainDb' ] ).toBeDefined()
     } )
@@ -94,7 +95,7 @@ describe( 'parseSpecId logic — verified via index key structure', () => {
             } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'prompts' ][ 'kba/prompt/intro' ] ).toBeDefined()
     } )
@@ -108,7 +109,7 @@ describe( 'parseSpecId logic — verified via index key structure', () => {
             } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'skills' ][ 'kba/skill/lookup' ] ).toBeDefined()
     } )
@@ -132,7 +133,7 @@ describe( 'Collision detection', () => {
             } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'collisions' ].length ).toBe( 1 )
         expect( index[ 'collisions' ][ 0 ][ 'specId' ] ).toBe( 'moralis/tool/getBlock' )
@@ -147,7 +148,7 @@ describe( 'Collision detection', () => {
             schemaEntry( { 'namespace': 'foo', 'file': 'c.mjs', 'tools': { 'ping': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
         const collision = index[ 'collisions' ]
             .find( ( c ) => {
                 const matches = c[ 'specId' ] === 'foo/tool/ping'
@@ -165,7 +166,7 @@ describe( 'Collision detection', () => {
             schemaEntry( { 'namespace': 'ns2', 'file': 'b.mjs', 'tools': { 'getData': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'collisions' ].length ).toBe( 0 )
         expect( index[ 'tools' ][ 'ns1/tool/getData' ] ).toBeDefined()
@@ -183,7 +184,7 @@ describe( 'Multi-part container grouping', () => {
             schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part2.mjs', 'tools': { 'getNftMetadata': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'containers' ][ 'moralis/nftApi' ] ).toBeDefined()
         expect( index[ 'containers' ][ 'moralis/nftApi' ][ 'files' ] ).toContain( 'nftApi-part1.mjs' )
@@ -196,7 +197,7 @@ describe( 'Multi-part container grouping', () => {
             schemaEntry( { 'namespace': 'moralis', 'file': 'walletApi.mjs', 'tools': { 'getWallet': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'containers' ][ 'moralis/walletApi' ] ).toBeDefined()
         expect( index[ 'containers' ][ 'moralis/walletApi' ][ 'files' ] ).toEqual( [ 'walletApi.mjs' ] )
@@ -209,7 +210,7 @@ describe( 'Multi-part container grouping', () => {
             schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi-part3.mjs', 'tools': {} } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'containers' ][ 'moralis/nftApi' ][ 'files' ].length ).toBe( 3 )
     } )
@@ -232,7 +233,7 @@ describe( 'Schema skipping — missing namespace', () => {
             }
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         const toolKeys = Object.keys( index[ 'tools' ] )
 
@@ -250,7 +251,7 @@ describe( 'Index metadata', () => {
             schemaEntry( { 'namespace': 'ns', 'file': 'api.mjs', 'tools': { 'get': {} } } )
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( typeof index[ 'builtAt' ] ).toBe( 'string' )
         expect( new Date( index[ 'builtAt' ] ).toString() ).not.toBe( 'Invalid Date' )
@@ -278,7 +279,7 @@ describe( 'Cache write and read roundtrip', () => {
             schemaEntry( { 'namespace': 'moralis', 'file': 'nftApi.mjs', 'tools': { 'getNft': {} } } )
         ]
 
-        const { index: originalIndex } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index: originalIndex } = await CatalogIndex.build( { schemas } )
 
         // Write via getNamespaceIndex with fixture — but since #buildNamespaceIndex calls
         // #loadAllSchemas (global config dependent), we test the cache path directly
@@ -354,7 +355,7 @@ describe( 'parseSpecId — invalid inputs produce no index entry', () => {
             { 'main': null, 'file': 'broken.mjs', 'source': 'test' }
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( Object.keys( index[ 'tools' ] ).length ).toBe( 0 )
     } )
@@ -371,7 +372,7 @@ describe( 'parseSpecId — invalid inputs produce no index entry', () => {
             }
         ]
 
-        const { index } = await FlowMcpCli.__testOnly_buildIndex( { schemas } )
+        const { index } = await CatalogIndex.build( { schemas } )
 
         expect( index[ 'tools' ][ 'alias/tool/doThing' ] ).toBeDefined()
     } )

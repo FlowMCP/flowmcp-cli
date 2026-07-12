@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createTestHome } from '../helpers/test-home.mjs'
+import { EnvResolver } from '../../src/lib/EnvResolver.mjs'
 
 
 const { FlowMcpCli } = await import( '../../src/task/FlowMcpCli.mjs' )
@@ -109,7 +110,7 @@ describe( 'Phase 1 friction — empty env (Memo 032 PRD-12)', () => {
         // No env file at all (global config has envPath set but file is absent)
         await rm( testHome.envPath(), { force: true } )
 
-        const { envObject, sources } = await FlowMcpCli._testResolveEnv( { cwd: projectDir } )
+        const { envObject, sources } = await EnvResolver.resolveEnv( { cwd: projectDir } )
 
         expect( envObject ).toEqual( {} )
         expect( sources[ 'global' ] ).toBeNull()

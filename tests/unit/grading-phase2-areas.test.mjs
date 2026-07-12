@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -61,11 +62,11 @@ async function emit( { cwd, phase, ok = true } ) {
 
 // ---- PRD-004: --phase multi-area selector --------------------------------------
 describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'default (no --phase) resolves mode=default and emits all applicable areas', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -75,7 +76,7 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
     it( 'single token resolves mode=single', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test' } )
         expect( result.status ).toBe( true )
@@ -85,7 +86,7 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
     it( 'comma-set resolves mode=subset and emits both named areas', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
         expect( result.status ).toBe( true )
@@ -95,7 +96,7 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
     it( 'rejects an unknown area token (lists allowed areas, no partial emit)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'not-a-real-area' } )
         expect( result.status ).toBe( false )
@@ -105,7 +106,7 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
     it( 'rejects a duplicate token (no silent dedupe)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test,single-test' } )
         expect( result.status ).toBe( false )
@@ -114,7 +115,7 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
     it( 'rejects an empty member (a,,b or a,)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test,' } )
         expect( result.status ).toBe( false )
@@ -125,11 +126,11 @@ describe( 'PRD-004 — --phase multi-area selector (3 modes, no silent default)'
 
 // ---- PRD-005: emit-time applicability + skippedAreas ---------------------------
 describe( 'PRD-005 — emit-time About applicability skip', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'About absent -> about-namespace skipped (out-of-scope-resource), not a blocker', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -145,7 +146,7 @@ describe( 'PRD-005 — emit-time About applicability skip', () => {
 
     it( 'About present -> about-namespace emitted normally', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         // Create the About resource at the source level for the single schema.
         await mkdir( join( cwd, '.flowmcp', 'grading', 'providers', 'demoapi', 'demoapi', 'resources', 'about' ), { recursive: true } )
@@ -160,11 +161,11 @@ describe( 'PRD-005 — emit-time About applicability skip', () => {
 
 // ---- PRD-006: Namespace-Gate (non-det areas gated below deterministic-green) ---
 describe( 'PRD-006 — Provider-Namespace-Gate at emit', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'schema below deterministic-green gates the non-det namespace areas', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: false } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: false } ) } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -182,7 +183,7 @@ describe( 'PRD-006 — Provider-Namespace-Gate at emit', () => {
 
     it( 'all schemas deterministic-green -> namespace areas emitted (gate open)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( result.status ).toBe( true )
@@ -195,11 +196,11 @@ describe( 'PRD-006 — Provider-Namespace-Gate at emit', () => {
 
 // ---- PRD-007: Task-ID emit + consume verification / partial-set ----------------
 describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'emit writes taskId + payloadSkeleton (prompts.json) and taskId + emittedAreaSet (state.json)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: null } )
         expect( typeof result.taskId ).toBe( 'string' )
@@ -222,7 +223,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
     it( 'Task-ID is order-independent over the area-set', async () => {
         const a = await freshCwd()
         const b = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const r1 = await emit( { cwd: a, phase: 'single-test,tools-aggregate-schema' } )
         const r2 = await emit( { cwd: b, phase: 'tools-aggregate-schema,single-test' } )
@@ -231,7 +232,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'consume with the full emitted set marks taskComplete', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -251,7 +252,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'consume with a subset accepts per-area, leaves the rest pending, not complete', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const e = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -271,7 +272,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'consume rejects an unknown taskId', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -287,7 +288,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'consume rejects an area outside the emitted set', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -303,7 +304,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'consume rejects a per-area question-count mismatch', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const e = await emit( { cwd, phase: 'single-test' } )
 
         // The emit recorded a per-area asked count (>0) for single-test; an answered
@@ -326,7 +327,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
     it( 'legacy scores without a taskId still consume (backward-compatible)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         await emit( { cwd, phase: null } )
 
         const scoresPath = join( cwd, 'scores.json' )
@@ -341,7 +342,7 @@ describe( 'PRD-007 — Task-ID emit payload + consume verification', () => {
 
 // ---- PRD-008: ProviderProof.write wired from consume ---------------------------
 describe( 'PRD-008 — grade.json produced from the consume-scores success path', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     async function emitThenConsume( { cwd, exportDir } ) {
         await emit( { cwd, phase: 'single-test' } )
@@ -360,7 +361,7 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
 
     it( 'writes exactly one grade.json under <exportRoot>/providers/<ns>/ with the proof shape', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emitThenConsume( { cwd, exportDir: 'out/exports' } )
         expect( result.status ).toBe( true )
@@ -378,7 +379,7 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
 
     it( 'a re-run preserves a non-null monitoring.githubIssue (idempotent)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         await emitThenConsume( { cwd, exportDir: 'out/exports' } )
         const gradeJsonPath = join( cwd, 'out', 'exports', 'providers', 'demoapi', 'grade.json' )
@@ -398,11 +399,11 @@ describe( 'PRD-008 — grade.json produced from the consume-scores success path'
 
 // ---- Memo 110 P3: self-contained Emit-Skill + configurable maxTurns ------------
 describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'emits the namespace ORCHESTRATOR with Task-ID + per-schema dispatch commands', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await emit( { cwd, phase: 'single-test,tools-aggregate-schema' } )
         expect( result.status ).toBe( true )
@@ -422,7 +423,7 @@ describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', 
 
     it( 'maxTurns is configurable (flows into the Goal-Block condition)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         await FlowMcpCli.gradingRun( {
             cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi',
@@ -436,7 +437,7 @@ describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', 
 
     it( 'rejects a malformed --max-turns (no silent fallback to 25)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingRun( {
             cwd, gradingDataDir: '.flowmcp/grading', target: 'demoapi',
@@ -451,7 +452,7 @@ describe( 'Memo 110 P3 — Emit-Skill text (PRD-3.3/3.4) + maxTurns (PRD-3.5)', 
 
 // ---- writeAtomic overwrite fix: --on-conflict=overwrite must actually rewrite ----
 describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fix)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     async function emitConflict( { cwd, onConflict } ) {
         return FlowMcpCli.gradingRun( {
@@ -463,7 +464,7 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
 
     it( 'default (skip) keeps the existing prompts.json but still hands back the skill (round-trip read-back)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const first = await emitConflict( { cwd, onConflict: null } )
         const { result } = await emitConflict( { cwd, onConflict: 'skip' } )
         expect( result.skipped ).toBe( true )
@@ -475,7 +476,7 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
 
     it( 'overwrite rewrites the prompts.json (skipped:false) instead of keeping a stale one', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const first = await emitConflict( { cwd, onConflict: null } )
         const promptsPath = join( cwd, '.flowmcp/grading/providers/demoapi/prompts.json' )
 
@@ -496,11 +497,11 @@ describe( 'emit --on-conflict — skip keeps, overwrite rewrites (writeAtomic fi
 
 // ---- `grading skill <ns>` — read-only printer of the emitted Emit-Skill ---------
 describe( 'gradingSkill — print the emitted Emit-Skill text', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'returns the filled skill text after an emit', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const emitted = await emit( { cwd, phase: null } )
 
         const { result } = await FlowMcpCli.gradingSkill( { cwd, target: 'demoapi', gradingDataDir: '.flowmcp/grading' } )
@@ -516,7 +517,7 @@ describe( 'gradingSkill — print the emitted Emit-Skill text', () => {
 
     it( 'errors clearly when nothing was emitted yet (no prompts.json)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
 
         const { result } = await FlowMcpCli.gradingSkill( { cwd, target: 'demoapi', gradingDataDir: '.flowmcp/grading' } )
         expect( result.status ).toBe( false )

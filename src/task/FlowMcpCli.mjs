@@ -17,20 +17,15 @@ import { constants, existsSync, readFileSync, readdirSync, statSync } from 'node
 import { createHash } from 'node:crypto'
 
 import chalk from 'chalk'
-import { FlowMCP, SkillValidator, SelectionValidator, CatalogIndex, IdResolver } from 'flowmcp'
 
 import { appConfig } from '../data/config.mjs'
 import { PathVariableResolver } from '../path/resolvePathVariables.mjs'
 import { SqliteGtfsRuntime } from '../addons/SqliteGtfsRuntime.mjs'
-import { ModuleRegistry } from '../lib/ModuleRegistry.mjs'
 import { CliOutput, CliError } from '../lib/CliOutput.mjs'
 import { FsUtils } from '../lib/FsUtils.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
-import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { HttpCache } from '../lib/HttpCache.mjs'
-import { EnvResolver } from '../lib/EnvResolver.mjs'
 import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
-import { HandlerResolver } from '../lib/HandlerResolver.mjs'
 import { NamespaceIndex } from '../lib/NamespaceIndex.mjs'
 import { CliBase } from '../lib/CliBase.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
@@ -422,11 +417,6 @@ class FlowMcpCli {
     // buildServerParams/isKeyFilled moved to src/lib/EnvResolver.mjs. Call sites
     // across the handler/call/search/serve/env-tools paths call EnvResolver directly.
 
-    // Test-only accessor for EnvResolver.resolveEnv (Memo 032 PRD-07). Do not use in production code.
-    static async _testResolveEnv( { cwd } ) {
-        return EnvResolver.resolveEnv( { cwd } )
-    }
-
 
 
 
@@ -540,30 +530,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     }
 
 
-    // internal: test access only — PRD-006. validateOnlyFilter stays CLI-side (a pure
-    // --only flag validator); Memo 152 / PRD-019 (F20) moved the test-runner
-    // (getAllTestsTyped / executeTest / runTypedTests / computeDeclared /
-    // aggregateByPrimitive) to flowmcp-grading DataPretest — those hooks are gone with it.
-    static _testHook_validateOnlyFilter( { only } ) {
-        return GradingDeterministic.validateOnlyFilter( { only } )
-    }
-
-
-    // internal: test access only — Memo 149 Strang B/C. Exposes #resolveHandlers so the
-    // fail-loud shared-list contract (LST-001 / HND-001) and the single-source path
-    // helper can be exercised deterministically without a live schemaFolders round-trip.
-    static async _testHook_resolveHandlers( { main, handlersFn, filePath } ) {
-        return await HandlerResolver.resolve( { main, handlersFn, filePath } )
-    }
-
-
-    // internal: test access only — Memo 149 Strang B. The single source of truth for a
-    // schema's on-disk file path.
-    static async _testHook_resolveSchemaFilePath( { schemaRef } ) {
-        return await SchemaSource.resolveSchemaFilePath( { schemaRef } )
-    }
-
-
     // Memo 152 / PRD-018 (D-06) — #loadOneLibrary moved to core LibraryLoader.#loadOneFromBases;
     // the requiredLibraries block of #resolveHandlers now delegates to LibraryLoader.resolveExternal.
 
@@ -656,7 +622,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // Memo 152 / PRD-019 (D-10) — the v4-surface access (#v4Module) and the grading
     // module loader (#loadGradingModule) moved out of the facade: grading modules
     // call ModuleRegistry.getV4() directly and GradingTarget.loadGrading() (the
-    // GRD-001 wrapper). The __testInject* hooks below still route ModuleRegistry.inject.
+    // GRD-001 wrapper).
 
 
     // Memo 152 / PRD-019 (D-08) — #enrichV4WithRuntimeMeta moved to src/commands/ValidateCommand.mjs.
@@ -706,39 +672,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // src/commands/CallCommand.mjs.
 
 
-    // Memo 152 / PRD-018 (D-07) — the spec-id grammar is now a core v4 Spec
-    // concern (IdResolver.parseSpecId). This CLI method is a thin delegation kept
-    // as the internal call surface + the __testOnly_parseSpecId hook (Hook removal
-    // is PRD-020/D-11). Output is byte-identical to the former CLI implementation.
-    static #parseSpecId( { specId } ) {
-        return IdResolver.parseSpecId( { specId } )
-    }
-
-
-    // PRD-009 — shared add-or-collide for ALL four primitives (tools/resources/
-    // prompts/skills). Before writing a spec-id, check whether it already exists; if
-    // so, record a collision instead of silently overwriting (last-wins) / pushing a
-    // first-wins duplicate. The collision entry carries `files` AND `sources` so the
-    // visible warning can suggest the qualified "<source>:<spec-id>" fix (PRD-008).
-    // Mutates `map` and `collisions`.
-    // Memo 152 / PRD-018 (D-07) — the catalog build primitives moved to core v4
-    // (CatalogIndex). These CLI methods stay as thin delegations for the remaining
-    // internal callers + the __testOnly_* hooks (Hook removal is PRD-020/D-11).
-    static #trackPrimitive( { map, collisions, specId, file, source, extra } ) {
-        return CatalogIndex.trackPrimitive( { map, collisions, specId, file, source, extra } )
-    }
-
-
-    // PRD-009 — render the collisions[] list (built by #trackPrimitive over all four
-    // primitives) into visible, non-blocking warnings. Each warning names the
-    // colliding spec-id, the involved sources and the copyable qualified fix
-    // "<source>:<spec-id>" (PRD-008). One bundled line per spec-id (no per-call
-    // noise). English, no risk jargon. Returns [] when there is no collision.
-    static #formatCollisionWarnings( { collisions } ) {
-        return CatalogIndex.formatCollisionWarnings( { collisions } )
-    }
-
-
     // Memo 152 / PRD-019 (D-08 foundation cluster "namespace-index") — build + get
     // orchestration moved to src/lib/NamespaceIndex.mjs (build/get/tryGet). getNamespaceIndex
     // stays public here as a delegation because tests call FlowMcpCli.getNamespaceIndex and
@@ -750,45 +683,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
     // Memo 152 / PRD-019 (D-09 cluster "call") — #resolveSchemaByIndex / #resolveSchemasForCall /
     // #matchToolInSchemas moved to src/commands/CallCommand.mjs.
-
-
-    static __testOnly_parseSpecId( { specId } ) {
-        return IdResolver.parseSpecId( { specId } )
-    }
-
-
-    static __testOnly_buildToolName( { routeName, namespace, source = null, disambiguate = false } ) {
-        return FlowMCP.buildToolName( { routeName, namespace, source, disambiguate } )
-    }
-
-
-    // PRD-008 — exercises the pre-serve dedup planner over a list of tool entries
-    // exactly like the serve-loop does, but without the MCP SDK. Returns the final
-    // registered names (and skips) so a test can prove two same-provider folders
-    // produce NO duplicate registration (the SDK would otherwise throw).
-    static __testOnly_planServeToolNames( { entries } ) {
-        const registeredToolNames = new Set()
-        const plan = entries
-            .map( ( entry ) => {
-                const { routeName, namespace, source } = entry
-                const { toolName: baseName } = FlowMCP.buildToolName( { routeName, namespace } )
-                const decided = ServeCommand.disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } )
-
-                return { baseName, 'finalName': decided.finalName, 'skip': decided.skip, 'note': decided.note }
-            } )
-
-        return { plan, 'registeredNames': [ ...registeredToolNames ] }
-    }
-
-
-    static __testOnly_formatCollisions( { collisions } ) {
-        return CatalogIndex.formatCollisionWarnings( { collisions } )
-    }
-
-
-    static async __testOnly_buildIndex( { schemas } ) {
-        return CatalogIndex.build( { schemas } )
-    }
 
 
     static async migrateConfig( { cwd, isGlobal = false, dryRun = false } ) {
@@ -817,29 +711,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
     static async selectionValidate( { cwd, path: selectionPath } ) {
         return await SelectionCommand.selectionValidate( { cwd, 'path': selectionPath } )
-    }
-
-
-    static __testInjectV4( { v4 } ) {
-        ModuleRegistry.inject( { v4 } )
-    }
-
-
-    static __testInjectGrading( { grading } ) {
-        ModuleRegistry.inject( { grading } )
-    }
-
-
-    // Test-only accessors (Memo 097 PA-5/PA-6). Do not use in production code.
-    static async __testGradingUseKeys( { withKeys } ) {
-        return GradingTarget.gradingUseKeys( { withKeys } )
-    }
-
-
-    static async __testGradingDataRoot( { cwd, gradingDataDir } ) {
-        const root = await GradingTarget.gradingDataRoot( { cwd, gradingDataDir } )
-
-        return { root }
     }
 
 
@@ -897,14 +768,6 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     static async gradingDoctor( args ) {
         return await GradingStatus.gradingDoctor( args )
     }
-
-    static async __testWriteGuarded( { path, content, onExists } ) {
-        return FsUtils.writeGuarded( { path, content, onExists } )
-    }
-
-
-
-
 }
 
 

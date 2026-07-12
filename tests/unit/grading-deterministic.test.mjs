@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
+import { ModuleRegistry } from '../../src/lib/ModuleRegistry.mjs'
 import * as realGrading from 'flowmcp-grading'
 import { seedGradingSchemaFolder } from '../helpers/seed-grading-source.mjs'
 
@@ -70,17 +71,17 @@ async function freshCwd() {
 // read live from schemaFolders[] (seeded in beforeAll); this helper now only
 // injects the stubbed grading module. The island is built on first run.
 async function importFixture( { cwd, grading } ) {
-    FlowMcpCli.__testInjectGrading( { grading } )
+    ModuleRegistry.inject( { grading } )
 
     return { status: true }
 }
 
 
 describe( 'gradingDeterministic — module + input guards', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'aborts when the grading module is unavailable', async () => {
-        FlowMcpCli.__testInjectGrading( { grading: {} } )
+        ModuleRegistry.inject( { grading: {} } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd: '/tmp', target: 'demoapi/demoapi', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: false } )
 
         expect( result.status ).toBe( false )
@@ -88,7 +89,7 @@ describe( 'gradingDeterministic — module + input guards', () => {
     } )
 
     it( 'reports a missing target', async () => {
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd: '/tmp', target: '', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: false } )
 
         expect( result.status ).toBe( false )
@@ -96,7 +97,7 @@ describe( 'gradingDeterministic — module + input guards', () => {
     } )
 
     it( 'rejects an unsupported Spec-ID type (e.g. resource-ID)', async () => {
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd: '/tmp', target: 'demoapi/resource/foo', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: false } )
 
         expect( result.status ).toBe( false )
@@ -105,7 +106,7 @@ describe( 'gradingDeterministic — module + input guards', () => {
 
     it( 'reports a namespace that is not in any schemaFolders[] source (SRC-001)', async () => {
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest() } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest() } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'ghost/ghost', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: false } )
 
         expect( result.status ).toBe( false )
@@ -117,7 +118,7 @@ describe( 'gradingDeterministic — module + input guards', () => {
 
 
 describe( 'gradingDeterministic — O(N^2) resolver fix (folder != declared namespace)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'resolves a schema by its DECLARED namespace even when the provider folder name differs', async () => {
         // crossschema declares namespace "crossfolderns" but is seeded into a folder
@@ -128,7 +129,7 @@ describe( 'gradingDeterministic — O(N^2) resolver fix (folder != declared name
         await seedGradingSchemaFolder( { providerFixture: crossFixture, namespace: 'mismatchfolder', sourceName: 'crossns-src' } )
 
         const cwd = await freshCwd()
-        FlowMcpCli.__testInjectGrading( { grading: gradingWithStubbedPretest( { ok: true } ) } )
+        ModuleRegistry.inject( { grading: gradingWithStubbedPretest( { ok: true } ) } )
         const { result } = await FlowMcpCli.gradingDeterministic( { cwd, target: 'crossfolderns/crossschema', gradingDataDir: '.flowmcp/grading', withKeys: false, only: null, json: true } )
 
         expect( result.mode ).toBe( 'deterministic' )
@@ -139,7 +140,7 @@ describe( 'gradingDeterministic — O(N^2) resolver fix (folder != declared name
 
 
 describe( 'gradingDeterministic — schema-ID flow (validate + pretest, no emit)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( '(a) runs structural validate + DataPretest and writes NO prompts.json/state.json', async () => {
         const cwd = await freshCwd()
@@ -177,7 +178,7 @@ describe( 'gradingDeterministic — schema-ID flow (validate + pretest, no emit)
 
 
 describe( 'gradingDeterministic — tool-ID flow (restricted to one tool)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( '(b) restricts the pretest results to the addressed tool', async () => {
         const cwd = await freshCwd()
@@ -213,7 +214,7 @@ describe( 'gradingDeterministic — tool-ID flow (restricted to one tool)', () =
 
 
 describe( 'gradingDeterministic — red pretest yields hints', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( '(c) FAIL on HTTP-200-but-empty-data carries DPT errors as hints', async () => {
         const cwd = await freshCwd()
@@ -247,7 +248,7 @@ function gradingWithRawPretest( { raw } ) {
 
 
 describe( 'gradingDeterministic — Phase 5 surfacing (key-gated / parameterless / broken)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'PRD-014: a key-gated schema surfaces its own class (keyGated) — NOT a generic FAIL', async () => {
         const cwd = await freshCwd()
@@ -325,7 +326,7 @@ describe( 'gradingDeterministic — Phase 5 surfacing (key-gated / parameterless
 
 
 describe( 'gradingDeterministic — det alias parity (dispatch level)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( '(d) the "det" alias resolves to the same method via dispatch', async () => {
         const { execFile } = await import( 'node:child_process' )
@@ -351,7 +352,7 @@ describe( 'gradingDeterministic — det alias parity (dispatch level)', () => {
 
 
 describe( 'gradingDeterministic — force / read-cache surfacing (Memo 110 P2)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'threads --force into DataPretest.run (cache bypass)', async () => {
         const cwd = await freshCwd()
@@ -403,7 +404,7 @@ describe( 'gradingDeterministic — force / read-cache surfacing (Memo 110 P2)',
 
 
 describe( 'gradingReload — data reload only (Memo 110 PRD-2.3)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'reloads a schema with force:true and writes no grade.json', async () => {
         const cwd = await freshCwd()
@@ -433,7 +434,7 @@ describe( 'gradingReload — data reload only (Memo 110 PRD-2.3)', () => {
 
 
 describe( 'gradingDeterministic — progress + summary (Memo 110 P4)', () => {
-    afterEach( () => { FlowMcpCli.__testInjectGrading( { grading: null } ) } )
+    afterEach( () => { ModuleRegistry.inject( { grading: null } ) } )
 
     it( 'ticks progress to STDERR by default, suppressed by --quiet', async () => {
         const cwd = await freshCwd()
