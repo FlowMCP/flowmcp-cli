@@ -18,6 +18,8 @@ const FIX = join( here, '..', 'fixtures', 'private' )
 const CLEAN = join( FIX, 'clean-schema.mjs' )
 const FORBIDDEN = join( FIX, 'forbidden-schema.mjs' )
 const SHAREDLIST = join( FIX, 'sharedlist-schema.mjs' )
+const LIB_CLEAN = join( FIX, 'lib-clean-schema.mjs' )
+const LIB_NOLIB = join( FIX, 'lib-unresolvable-schema.mjs' )
 const LISTS_DIR = join( FIX, 'lists' )
 const PUBLIC_SRC = join( FIX, 'public-src' )
 
@@ -203,6 +205,37 @@ describe( 'private call — no silent defaults, every arg validated', () => {
         expect( result[ 'status' ] ).toBe( false )
         expect( result[ 'code' ] ).toBe( 'PRV-007' )
         expect( result[ 'fix' ] ).toContain( 'ping_privfix' )
+    } )
+} )
+
+
+describe( 'private call — library gate is the Memo-150 model (E-07, F17=A)', () => {
+    it( 'a resolvable allowlisted requiredLibrary is injected into the handler and the tool runs', async () => {
+        const { result } = await PrivateCommand.call( {
+            'schemaPath': LIB_CLEAN, 'toolName': 'checkLib', 'jsonArgs': '{}', cwd
+        } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'content' ][ 'libLoaded' ] ).toBe( true )
+        expect( result[ 'content' ][ 'hasGzip' ] ).toBe( true )
+    } )
+
+    it( 'an unresolvable requiredLibrary fails loud with LIB-001 — no silent allowlist fallback', async () => {
+        const { result } = await PrivateCommand.call( {
+            'schemaPath': LIB_NOLIB, 'toolName': 'never', 'jsonArgs': '{}', cwd
+        } )
+
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'error' ] ).toContain( 'LIB-001' )
+    } )
+
+    it( 'computes the ordered resolveBases[] chain CLI-side and passes it to core (env-free)', async () => {
+        const source = await readFile( join( here, '..', '..', 'src', 'commands', 'PrivateCommand.mjs' ), 'utf-8' )
+
+        // The library bases are computed in the CLI and handed to core (core reads no env).
+        expect( source ).toMatch( /resolveBases/ )
+        expect( source ).toMatch( /resolveAllowedLibrariesBase/ )
+        expect( source ).toMatch( /Pipeline\.load/ )
     } )
 } )
 

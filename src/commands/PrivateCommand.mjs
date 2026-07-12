@@ -1,4 +1,4 @@
-import { isAbsolute, resolve, join } from 'node:path'
+import { isAbsolute, resolve, join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
 
@@ -7,6 +7,8 @@ import { FlowMCP, Pipeline } from 'flowmcp'
 import { appConfig } from '../data/config.mjs'
 import { CliOutput } from '../lib/CliOutput.mjs'
 import { EnvResolver } from '../lib/EnvResolver.mjs'
+import { CliBase } from '../lib/CliBase.mjs'
+import { AllowlistCommand } from './AllowlistCommand.mjs'
 
 
 // Memo 152 / PRD-021 (E-04, E-05) — the `flowmcp private call <schema-path> <tool> '{json}'`
@@ -63,6 +65,18 @@ class PrivateCommand {
         // --- env -> the CLI stays the sole env consumer; core is env-free ---
         const { envObject } = await EnvResolver.resolveEnv( { cwd } )
 
+        // --- E-07 (F17=A, Memo 150) — library gate: compute the ordered resolution chain
+        //     CLI-side and hand it to core. Same chain the normal call path uses
+        //     (HandlerResolver): allowed-libraries FIRST (user-owned, config
+        //     allowedLibrariesPath), then the CLI base (ships ethers/better-sqlite3), then
+        //     the schema dir. core stays env-free — it receives the bases, reads no config.
+        //     An unresolvable requiredLibrary fails loud as LIB-001 (strict:true below);
+        //     the silent Pipeline "default allowlist" fallback is gone (No-Silent-Defaults).
+        const schemaDir = dirname( resolvedPath )
+        const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
+        const { resolveBase } = CliBase.resolveBase()
+        const resolveBases = [ allowedLibrariesBase, resolveBase, schemaDir ]
+
         // --- load through core v4 Pipeline.load: SCAN ACTIVE (skipScan:false),
         //     strict fail-loud coded errors (LST-001/HND-001/LIB-001) ---
         let loaded
@@ -70,6 +84,7 @@ class PrivateCommand {
             loaded = await Pipeline.load( {
                 'filePath': resolvedPath,
                 'listsDir': resolvedListsDir,
+                'resolveBases': resolveBases,
                 'skipScan': false,
                 'strict': true
             } )
