@@ -24,7 +24,7 @@ import { SqliteGtfsRuntime } from '../addons/SqliteGtfsRuntime.mjs'
 // __testOnly hook). FlowMcpCli.callTool / callListTools stay public delegations (index.mjs +
 // tests call them). No back-reference to FlowMcpCli.
 class CallCommand {
-    static async callListTools( { group, cwd } ) {
+    static async callListTools( { cwd } ) {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
             const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
@@ -82,7 +82,7 @@ class CallCommand {
     }
 
 
-    static async callTool( { toolName, jsonArgs, group, cwd, noCache = false, refresh = false } ) {
+    static async callTool( { toolName, jsonArgs, cwd, noCache = false, refresh = false } ) {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
             const result = CliOutput.error( { 'error': initError, 'fix': initFix } )

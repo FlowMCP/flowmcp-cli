@@ -84,14 +84,15 @@ describe( 'FlowMcpCli.validate', () => {
     } )
 
 
-    it( 'returns error when no schemaPath and no default group', async () => {
+    // Memo 152 / PRD-020 (D-12) — no default-group fallback; a path is required.
+    it( 'requires a schema path when none is given', async () => {
         const emptyCwd = join( tmpdir(), 'flowmcp-validate-nogroup' )
         await mkdir( emptyCwd, { recursive: true } )
 
         const { result } = await FlowMcpCli.validate( { schemaPath: undefined, cwd: emptyCwd } )
 
         expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'No default group set' )
+        expect( result[ 'messages' ].join( ' ' ) ).toContain( 'Missing value' )
 
         await rm( emptyCwd, { recursive: true, force: true } )
     } )

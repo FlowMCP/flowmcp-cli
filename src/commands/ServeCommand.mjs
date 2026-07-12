@@ -1,5 +1,3 @@
-import { join } from 'node:path'
-
 import { FlowMCP } from 'flowmcp'
 
 import { appConfig } from '../data/config.mjs'
@@ -12,17 +10,42 @@ import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
 import { HandlerResolver } from '../lib/HandlerResolver.mjs'
 
 
-// Memo 152 / PRD-019 (D-09 cluster "serve-mcp" + "group-resolution") — `flowmcp run`, extracted
-// from FlowMcpCli. Spins up an MCP stdio server exposing the tools/resources/prompts of the
-// active schemas. The group-resolution helpers (resolveDefaultGroupSchemas / resolveGroupName /
-// resolveGroupSchemas / resolveToolRefs / filterMainRoutes / resolveActiveToolRefs /
-// resolveAgentSchemas) are moved UNCHANGED (F18=A — the --group -> selection rename is PRD-020/
-// D-12). parseToolRef, resolveDefaultGroupSchemas and disambiguateToolName are PUBLIC static
-// because ValidateCommand/MigrateCommand (validate uses resolveDefaultGroupSchemas, migrateConfig
-// uses parseToolRef) and the __testOnly_planServeToolNames hook consume them. FlowMcpCli.run stays
-// a public delegation (index.mjs + tests call it). No back-reference to FlowMcpCli.
+// Memo 152 / PRD-019 (D-09 cluster "serve-mcp") — `flowmcp run`, extracted from FlowMcpCli.
+// Spins up an MCP stdio server exposing the tools/resources/prompts of the active schemas.
+//
+// Memo 152 / PRD-020 (D-12 / F18=A) — the --group concept is gone (Memo 099: one concept,
+// selection replaces groups). `run` now serves the whole configured schemaFolders[] catalog
+// (a schema whose required keys are missing is disabled/skipped, not a hard abort). The former
+// group- and active-tool resolution helpers were removed; a legacy `--group` on the command line
+// is rejected with a hint to `dev selection`. parseToolRef and disambiguateToolName stay PUBLIC
+// static (MigrateCommand + the __testOnly_planServeToolNames hook consume them). FlowMcpCli.run
+// stays a public delegation. No back-reference to FlowMcpCli.
 class ServeCommand {
-    static async run( { group, cwd } ) {
+    // Memo 152 / PRD-020 (D-12) — a removed `--group` on the argv is rejected fail-loud with a
+    // selection hint. Kept out of index.mjs (the dispatcher no longer knows the flag).
+    static legacyGroupResult() {
+        const hasGroupFlag = process.argv
+            .some( ( arg ) => arg === '--group' || arg.startsWith( '--group=' ) )
+
+        if( hasGroupFlag === false ) {
+            return { 'legacy': false, 'result': null }
+        }
+
+        const result = CliOutput.error( {
+            'error': 'GRP-001 run: the --group flag was removed — groups were replaced by named selections (Memo 099).',
+            'fix': `Use a named selection instead: ${appConfig[ 'cliCommand' ]} dev selection list | show <name>`
+        } )
+
+        return { 'legacy': true, result }
+    }
+
+
+    static async run( { cwd } ) {
+        const { legacy, result: legacyResult } = ServeCommand.legacyGroupResult()
+        if( legacy === true ) {
+            return { result: legacyResult }
+        }
+
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
             const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
@@ -30,36 +53,13 @@ class ServeCommand {
             return { result }
         }
 
-        let resolvedSchemas = null
-        let serverName = null
+        // Memo 099 Kap 5 — serve every tool from the configured schemaFolders[] (no group,
+        // no activation). A duplicate schemaFolders[] name is a hard config error.
+        const { schemas: allSchemas, error: resolveError, fix: resolveFix } = await SchemaLoaderBridge.resolveAllSchemas()
+        if( resolveError !== null && resolveError !== undefined ) {
+            const result = CliOutput.error( { 'error': resolveError, 'fix': resolveFix } )
 
-        if( !group ) {
-            const { schemas: agentSchemas, error: agentError, fix: agentFix } = await ServeCommand.#resolveAgentSchemas( { cwd } )
-            if( !agentSchemas ) {
-                const result = CliOutput.error( { 'error': agentError, 'fix': agentFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = agentSchemas
-            serverName = 'default'
-        } else {
-            const { groupName, error: groupNameError, fix: groupNameFix } = await ServeCommand.#resolveGroupName( { group, cwd } )
-            if( !groupName ) {
-                const result = CliOutput.error( { 'error': groupNameError, 'fix': groupNameFix } )
-
-                return { result }
-            }
-
-            const { schemas: groupSchemas, error: schemasError, fix: schemasFix } = await ServeCommand.#resolveGroupSchemas( { groupName, cwd } )
-            if( !groupSchemas ) {
-                const result = CliOutput.error( { 'error': schemasError, 'fix': schemasFix } )
-
-                return { result }
-            }
-
-            resolvedSchemas = groupSchemas
-            serverName = groupName
+            return { result }
         }
 
         const { config } = await ConfigStore.readConfig( { cwd } )
@@ -76,40 +76,24 @@ class ServeCommand {
 
         const { envObject } = EnvResolver.parseEnvFile( { envContent } )
 
-        const missing = []
-        resolvedSchemas
-            .forEach( ( { main } ) => {
+        // Memo 099 — a schema whose required keys are missing is DISABLED (skipped with a
+        // visible stderr note), never a hard abort. Serve everything else.
+        const resolvedSchemas = allSchemas
+            .filter( ( { main } ) => {
                 const namespace = main[ 'namespace' ] || 'unknown'
                 const requiredServerParams = main[ 'requiredServerParams' ] || []
-                const { valid, error: envError } = ServeCommand.#validateEnvParams( {
-                    envObject,
-                    requiredServerParams,
-                    namespace,
-                    'envPath': envPath
-                } )
+                const { valid } = ServeCommand.#validateEnvParams( { envObject, requiredServerParams, namespace, envPath } )
 
-                if( !valid ) {
+                if( valid === false ) {
                     const missingParams = requiredServerParams
-                        .filter( ( param ) => {
-                            const exists = envObject[ param ] !== undefined
-
-                            return !exists
-                        } )
-
-                    missing.push( { namespace, 'params': missingParams } )
+                        .filter( ( param ) => envObject[ param ] === undefined )
+                    process.stderr.write( `${appConfig[ 'appName' ]}: schema "${namespace}" disabled (missing ${missingParams.join( ', ' )}) — skipped.\n` )
                 }
+
+                return valid
             } )
 
-        if( missing.length > 0 ) {
-            const result = {
-                'status': false,
-                'error': 'Cannot start server. Missing env vars.',
-                missing,
-                'fix': `Add missing vars to .env at ${envPath} or remove schemas from group.`
-            }
-
-            return { result }
-        }
+        const serverName = 'default'
 
         let McpServer, StdioServerTransport
         try {
@@ -262,7 +246,7 @@ class ServeCommand {
         await server.connect( transport )
         process.stderr.write( `${appConfig[ 'appName' ]} server "${serverName}" connected.\n` )
 
-        const result = { 'status': true, 'mode': 'stdio', 'group': serverName }
+        const result = { 'status': true, 'mode': 'stdio', 'server': serverName }
 
         return { result }
     }
@@ -284,39 +268,6 @@ class ServeCommand {
     // Public because migrateConfig (MigrateCommand) consumes it (F18=A move, unchanged).
     static parseToolRef( { toolRef } ) {
         return ServeCommand.#parseToolRefImpl( { toolRef } )
-    }
-
-
-    static #filterMainRoutes( { main, routeNames } ) {
-        const { namespace, name, description, version, docs, tags, root, requiredServerParams, headers, sharedLists, requiredLibraries } = main
-        const routesKey = main[ 'routes' ] ? 'routes' : ( main[ 'tools' ] ? 'tools' : 'routes' )
-        const originalRoutes = main[ routesKey ] || {}
-        const filteredRoutes = {}
-
-        routeNames
-            .forEach( ( routeName ) => {
-                if( originalRoutes[ routeName ] ) {
-                    filteredRoutes[ routeName ] = originalRoutes[ routeName ]
-                }
-            } )
-
-        const filteredMain = {
-            namespace,
-            name,
-            description,
-            version,
-            docs,
-            tags,
-            root,
-            requiredServerParams,
-            headers,
-            [ routesKey ]: filteredRoutes
-        }
-
-        if( sharedLists ) { filteredMain[ 'sharedLists' ] = sharedLists }
-        if( requiredLibraries ) { filteredMain[ 'requiredLibraries' ] = requiredLibraries }
-
-        return { 'main': filteredMain }
     }
 
 
@@ -342,158 +293,6 @@ class ServeCommand {
         }
 
         return { 'finalName': baseName, 'skip': true, 'note': `duplicate tool name "${baseName}" cannot be disambiguated (same source) — skipped.` }
-    }
-
-
-    // Public because validate (ValidateCommand) consumes it (F18=A move, unchanged).
-    static async resolveDefaultGroupSchemas( { cwd } ) {
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
-
-        if( !localConfig || !localConfig[ 'defaultGroup' ] ) {
-            return { 'schemas': null, 'error': 'No default group set. Provide a schema path or set a default group.' }
-        }
-
-        const { defaultGroup } = localConfig
-        const group = localConfig[ 'groups' ] && localConfig[ 'groups' ][ defaultGroup ]
-
-        if( !group ) {
-            return { 'schemas': null, 'error': `Default group "${defaultGroup}" not found.` }
-        }
-
-        const toolRefs = group[ 'tools' ] || group[ 'schemas' ] || []
-        const { schemas } = await ServeCommand.#resolveToolRefs( { toolRefs } )
-
-        return { schemas, 'error': null }
-    }
-
-
-    static async #resolveGroupName( { group, cwd } ) {
-        if( group ) {
-            return { 'groupName': group, 'error': null, 'fix': null }
-        }
-
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
-
-        if( !localConfig || !localConfig[ 'defaultGroup' ] ) {
-            return {
-                'groupName': null,
-                'error': 'No default group set.',
-                'fix': `Run ${appConfig[ 'cliCommand' ]} group set-default <name> or use --group <name>.`
-            }
-        }
-
-        const { defaultGroup } = localConfig
-
-        return { 'groupName': defaultGroup, 'error': null, 'fix': null }
-    }
-
-
-    static async #resolveGroupSchemas( { groupName, cwd } ) {
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
-
-        if( !localConfig || !localConfig[ 'groups' ] || !localConfig[ 'groups' ][ groupName ] ) {
-            return {
-                'schemas': null,
-                'error': `Group "${groupName}" not found.`,
-                'fix': `Run ${appConfig[ 'cliCommand' ]} group list to see available groups.`
-            }
-        }
-
-        const group = localConfig[ 'groups' ][ groupName ]
-        const toolRefs = group[ 'tools' ] || group[ 'schemas' ] || []
-        const { schemas } = await ServeCommand.#resolveToolRefs( { toolRefs } )
-
-        return { schemas, 'error': null, 'fix': null }
-    }
-
-
-    static async #resolveToolRefs( { toolRefs } ) {
-        const schemaRouteMap = {}
-
-        toolRefs
-            .forEach( ( ref ) => {
-                const { schemaRef, routeName } = ServeCommand.parseToolRef( { 'toolRef': ref } )
-                if( !schemaRouteMap[ schemaRef ] ) {
-                    schemaRouteMap[ schemaRef ] = []
-                }
-
-                if( routeName ) {
-                    schemaRouteMap[ schemaRef ].push( routeName )
-                }
-            } )
-
-        const schemas = []
-
-        await Object.entries( schemaRouteMap )
-            .reduce( ( promise, [ schemaRef, routeNames ] ) => promise.then( async () => {
-                const { filePath } = await SchemaSource.resolveSchemaPath( { schemaRef } )
-                const { main, handlersFn, error } = await SchemaLoaderBridge.loadSchema( { filePath } )
-
-                if( main ) {
-                    if( routeNames.length > 0 ) {
-                        const { main: filteredMain } = ServeCommand.#filterMainRoutes( { main, routeNames } )
-                        schemas.push( { 'main': filteredMain, handlersFn, 'file': schemaRef } )
-                    } else {
-                        schemas.push( { main, handlersFn, 'file': schemaRef } )
-                    }
-                } else {
-                    schemas.push( {
-                        'main': { 'namespace': 'unknown' },
-                        'handlersFn': null,
-                        'file': schemaRef,
-                        'loadError': error
-                    } )
-                }
-            } ), Promise.resolve() )
-
-        return { schemas }
-    }
-
-
-    static async #resolveActiveToolRefs( { cwd } ) {
-        const localConfigPath = join( cwd, appConfig[ 'localConfigDirName' ], 'config.json' )
-        const { data: localConfig } = await FsUtils.readJson( { filePath: localConfigPath } )
-
-        if( !localConfig ) {
-            return { 'toolRefs': [], 'source': null }
-        }
-
-        if( Array.isArray( localConfig[ 'tools' ] ) && localConfig[ 'tools' ].length > 0 ) {
-            return { 'toolRefs': localConfig[ 'tools' ], 'source': 'tools' }
-        }
-
-        if( localConfig[ 'defaultGroup' ] ) {
-            const groupName = localConfig[ 'defaultGroup' ]
-            const group = localConfig[ 'groups' ] && localConfig[ 'groups' ][ groupName ]
-            if( group ) {
-                const groupTools = group[ 'tools' ] || group[ 'schemas' ] || []
-                if( groupTools.length > 0 ) {
-                    return { 'toolRefs': groupTools, 'source': 'group', 'groupName': groupName }
-                }
-            }
-        }
-
-        return { 'toolRefs': [], 'source': null }
-    }
-
-
-    static async #resolveAgentSchemas( { cwd } ) {
-        const { toolRefs } = await ServeCommand.#resolveActiveToolRefs( { cwd } )
-
-        if( toolRefs.length === 0 ) {
-            return {
-                'schemas': null,
-                'error': 'No active tools.',
-                'fix': `Use ${appConfig[ 'cliCommand' ]} add <tool-name> to activate tools.`
-            }
-        }
-
-        const { schemas } = await ServeCommand.#resolveToolRefs( { toolRefs } )
-
-        return { schemas, 'error': null, 'fix': null }
     }
 
 

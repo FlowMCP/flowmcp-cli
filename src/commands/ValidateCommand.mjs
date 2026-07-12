@@ -13,9 +13,10 @@ import { ServeCommand } from './ServeCommand.mjs'
 // a schema that does not declare a 4.x version is rejected fail-loud (convert via `flowmcp
 // migrate`). validateSingleSchema is PUBLIC static because the grading-deterministic path reuses
 // it (shared validate-single family). The v4 core surface is read via ModuleRegistry.getV4()
-// (the old #v4Module was a thin delegation to it). Default-group resolution is delegated to
-// ServeCommand (F18=A move). FlowMcpCli.validate / schemas / validationValidate stay public
-// delegations (index.mjs + tests call them). No back-reference to FlowMcpCli.
+// (the old #v4Module was a thin delegation to it). Memo 152 / PRD-020 (D-12): the default-group
+// path is gone (a schema path is required); a removed `--group` routes to selection via
+// ServeCommand.legacyGroupResult(). FlowMcpCli.validate / schemas / validationValidate stay
+// public delegations (index.mjs + tests call them). No back-reference to FlowMcpCli.
 class ValidateCommand {
     static async schemas() {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
@@ -44,6 +45,12 @@ class ValidateCommand {
 
 
     static async validate( { schemaPath, cwd } ) {
+        // Memo 152 / PRD-020 (D-12 / F18=A) — a removed `--group` is rejected with a selection hint.
+        const { legacy, result: legacyResult } = ServeCommand.legacyGroupResult()
+        if( legacy === true ) {
+            return { result: legacyResult }
+        }
+
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
             const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
@@ -53,38 +60,8 @@ class ValidateCommand {
 
         const v4 = ModuleRegistry.getV4()
 
-        if( !schemaPath && cwd ) {
-            const { schemas: groupSchemas, error: groupError } = await ServeCommand.resolveDefaultGroupSchemas( { cwd } )
-            if( groupError ) {
-                const result = CliOutput.error( { error: groupError } )
-
-                return { result }
-            }
-
-            const results = groupSchemas
-                .map( ( { main, file } ) => ValidateCommand.validateSingleSchema( { main, file, v4 } ) )
-
-            const passed = results
-                .filter( ( { status } ) => {
-                    const isPassed = status === true
-
-                    return isPassed
-                } )
-                .length
-
-            const failed = results.length - passed
-
-            const result = {
-                'status': failed === 0,
-                'total': results.length,
-                passed,
-                failed,
-                results
-            }
-
-            return { result }
-        }
-
+        // Memo 152 / PRD-020 (D-12) — `schema-check` no longer resolves a default group when
+        // no path is given; a schema path (file or directory) is required (no silent default).
         const { status: validStatus, messages: validMessages } = ValidateCommand.validationValidate( { schemaPath } )
         if( !validStatus ) {
             const result = { 'status': false, 'messages': validMessages }

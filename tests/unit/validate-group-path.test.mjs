@@ -140,28 +140,24 @@ afterAll( async () => {
 } )
 
 
-describe( 'FlowMcpCli.validate with cwd (group resolution path)', () => {
-    it( 'resolves default group and returns validation results', async () => {
+// Memo 152 / PRD-020 (D-12 / F18=A) — `schema-check`/validate no longer resolves a default
+// group when no path is given; a schema path is required (no silent default). The --group flag
+// is removed (groups -> named selections, Memo 099).
+describe( 'FlowMcpCli.validate — no schema path (D-12)', () => {
+    it( 'requires a schema path (no default-group fallback)', async () => {
         const { result } = await FlowMcpCli.validate( { schemaPath: undefined, cwd: TEST_CWD } )
 
-        expect( result[ 'status' ] ).toBeDefined()
-        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 1 )
-        expect( result ).toHaveProperty( 'passed' )
-        expect( result ).toHaveProperty( 'failed' )
-        expect( result[ 'passed' ] + result[ 'failed' ] ).toBe( result[ 'total' ] )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'messages' ].join( ' ' ) ).toContain( 'Missing value' )
     } )
 
 
-    it( 'returns error when cwd has no local config', async () => {
-        const emptyCwd = join( tmpdir(), 'flowmcp-cli-validate-group-noconfig' )
-        await mkdir( emptyCwd, { recursive: true } )
+    it( 'validates a given schema path', async () => {
+        const { result } = await FlowMcpCli.validate( { schemaPath: join( SOURCE_DIR, 'check.mjs' ), cwd: TEST_CWD } )
 
-        const { result } = await FlowMcpCli.validate( { schemaPath: undefined, cwd: emptyCwd } )
-
-        expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'No default group set' )
-
-        await rm( emptyCwd, { recursive: true, force: true } )
+        expect( result[ 'status' ] ).toBeDefined()
+        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 1 )
+        expect( result[ 'passed' ] + result[ 'failed' ] ).toBe( result[ 'total' ] )
     } )
 } )
 

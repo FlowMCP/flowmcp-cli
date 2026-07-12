@@ -139,7 +139,9 @@ afterAll( async () => {
 // are independent and stay.
 
 
-describe( 'FlowMcpCli.validate with group — validate catch on broken schema', () => {
+// Memo 152 / PRD-020 (D-12) — the default-group validate path is removed; no-path validate
+// requires a schema path. Broken-schema catch coverage lives in the schemaPath describe below.
+describe( 'FlowMcpCli.validate — no path requires a schema path (D-12)', () => {
     const CWD = join( tmpdir(), `flowmcp-validate-catch-${Date.now()}` )
 
 
@@ -171,11 +173,11 @@ describe( 'FlowMcpCli.validate with group — validate catch on broken schema', 
     } )
 
 
-    it( 'handles schema without routes in validation gracefully', async () => {
+    it( 'requires a schema path when none is given', async () => {
         const { result } = await FlowMcpCli.validate( { 'cwd': CWD } )
 
-        expect( result[ 'status' ] ).toBeDefined()
-        expect( result[ 'total' ] ).toBeGreaterThanOrEqual( 1 )
+        expect( result[ 'status' ] ).toBe( false )
+        expect( result[ 'messages' ].join( ' ' ) ).toContain( 'Missing value' )
     } )
 } )
 

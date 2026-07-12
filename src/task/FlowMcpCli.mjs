@@ -217,25 +217,25 @@ class FlowMcpCli {
     }
 
 
-    // Memo 152 / PRD-019 (D-09 clusters "serve-mcp"+"group-resolution") — run + the group-
-    // resolution helpers moved UNCHANGED to src/commands/ServeCommand.mjs (F18=A: --group ->
-    // selection is PRD-020). run stays a public delegation (index.mjs + tests call it).
-    static async run( { group, cwd } ) {
-        return ServeCommand.run( { group, cwd } )
+    // Memo 152 / PRD-019 (D-09 cluster "serve-mcp") — run moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-020 (D-12 / F18=A) — the --group concept is gone; run serves the whole
+    // configured schemaFolders[] catalog. run stays a public delegation (index.mjs + tests call it).
+    static async run( { cwd } ) {
+        return ServeCommand.run( { cwd } )
     }
 
 
     // Memo 152 / PRD-019 (D-09 cluster "call") — callListTools + callTool (and the private
     // helpers #isSpecId / #callResourceQuery / #resolveSchemaByIndex / #resolveSchemasForCall /
     // #matchToolInSchemas) moved to src/commands/CallCommand.mjs. Both stay public delegations
-    // (index.mjs + tests call them).
-    static async callListTools( { group, cwd } ) {
-        return CallCommand.callListTools( { group, cwd } )
+    // (index.mjs + tests call them). Memo 152 / PRD-020 (D-12) — the ignored `group` param dropped.
+    static async callListTools( { cwd } ) {
+        return CallCommand.callListTools( { cwd } )
     }
 
 
-    static async callTool( { toolName, jsonArgs, group, cwd, noCache = false, refresh = false } ) {
-        return CallCommand.callTool( { toolName, jsonArgs, group, cwd, noCache, refresh } )
+    static async callTool( { toolName, jsonArgs, cwd, noCache = false, refresh = false } ) {
+        return CallCommand.callTool( { toolName, jsonArgs, cwd, noCache, refresh } )
     }
 
 
@@ -409,16 +409,10 @@ class FlowMcpCli {
     // (SchemaSource.listSources). Call sites here delegate to it.
 
 
-    // Memo 152 / PRD-019 (D-09) — #resolveDefaultGroupSchemas moved to src/commands/ServeCommand.mjs.
-
-
-    // Memo 152 / PRD-019 (D-09) — #resolveGroupName moved to src/commands/ServeCommand.mjs.
-
-
-    // Memo 152 / PRD-019 (D-09) — #resolveGroupSchemas moved to src/commands/ServeCommand.mjs.
-
-
-    // Memo 152 / PRD-019 (D-09) — #resolveToolRefs moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-020 (D-12 / F18=A) — the group-resolution helpers (default/named group +
+    // tool-ref resolution) were deleted: the --group concept is gone (Memo 099, selection
+    // replaces groups). `run` serves the whole schemaFolders[] catalog; `schema-check` requires
+    // a path. parseToolRef + disambiguateToolName remain public in ServeCommand.
 
 
 
@@ -604,10 +598,8 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // src/lib/EnvResolver.mjs (public statics). See the delegation note above.
 
 
-    // Memo 152 / PRD-019 (D-09) — #resolveActiveToolRefs moved to src/commands/ServeCommand.mjs.
-
-
-    // Memo 152 / PRD-019 (D-09) — #resolveAgentSchemas moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-020 (D-12) — the active-tools / agent-schema resolution helpers were
+    // deleted with the --group concept (Memo 099). `run` serves the whole schemaFolders[] catalog.
 
 
 

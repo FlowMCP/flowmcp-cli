@@ -242,7 +242,8 @@ describe( 'status — defaultGroup references non-existent group (line 3585)', (
 } )
 
 
-describe( 'validate — defaultGroup points to non-existent group (line 4621)', () => {
+// Memo 152 / PRD-020 (D-12) — validate no longer resolves a default group; a path is required.
+describe( 'validate — no schema path requires a path (D-12)', () => {
     const TEST_CWD = join( tmpdir(), 'flowmcp-deep-validate-missing-default' )
     const LOCAL_DIR = join( TEST_CWD, '.flowmcp' )
 
@@ -266,13 +267,11 @@ describe( 'validate — defaultGroup points to non-existent group (line 4621)', 
         await rm( TEST_CWD, { recursive: true, force: true } ).catch( () => {} )
     } )
 
-    it( 'returns error when defaultGroup key does not match any group', async () => {
+    it( 'returns a missing-path error when no schema path is given', async () => {
         const { result } = await FlowMcpCli.validate( { 'schemaPath': undefined, 'cwd': TEST_CWD } )
 
         expect( result[ 'status' ] ).toBe( false )
-        expect( result[ 'error' ] ).toContain( 'Default group' )
-        expect( result[ 'error' ] ).toContain( 'missing' )
-        expect( result[ 'error' ] ).toContain( 'not found' )
+        expect( result[ 'messages' ].join( ' ' ) ).toContain( 'Missing value' )
     } )
 } )
 

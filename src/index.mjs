@@ -23,7 +23,6 @@ const args = parseArgs( {
     options: {
         'route': { type: 'string' },
         'branch': { type: 'string' },
-        'group': { type: 'string' },
         'tools': { type: 'string' },
         'force': { type: 'boolean' },
         'no-cache': { type: 'boolean' },
@@ -136,10 +135,9 @@ const callBranch = {
     'description': 'Call a tool by name, or list the callable tools.',
     'children': {
         'list-tools': {
-            'description': 'List all callable tools (optionally filtered by --group).',
+            'description': 'List all callable tools.',
             'execute': async () => {
-                const group = values[ 'group' ]
-                const { result } = await FlowMcpCli.callListTools( { group, cwd } )
+                const { result } = await FlowMcpCli.callListTools( { cwd } )
                 output( { result } )
             }
         }
@@ -148,10 +146,9 @@ const callBranch = {
         // passthrough: any non-`list-tools` sub-command is a tool name.
         const toolName = positionals[ 1 ]
         const jsonArgs = positionals[ 2 ] || null
-        const group = values[ 'group' ]
         const noCache = values[ 'no-cache' ] || false
         const refresh = values[ 'refresh' ] || false
-        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, group, cwd, noCache, refresh } )
+        const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, cwd, noCache, refresh } )
         output( { result } )
     }
 }
@@ -724,10 +721,9 @@ const tree = {
             }
         },
         'run': {
-            'description': 'Run the configured group (exits 1 on failure).',
+            'description': 'Start the MCP server over the configured schemaFolders[] (exits 1 on failure).',
             'execute': async () => {
-                const group = values[ 'group' ]
-                const { result } = await FlowMcpCli.run( { group, cwd } )
+                const { result } = await FlowMcpCli.run( { cwd } )
 
                 if( !result[ 'status' ] ) {
                     output( { result } )
@@ -790,10 +786,9 @@ const tree = {
         // also runs the live data pretest). The old `validate` name is REMOVED, no
         // deprecated alias (deliberate breaking change).
         'schema-check': {
-            'description': 'Offline structural-only schema check.',
+            'description': 'Offline structural-only schema check of a schema path.',
             'execute': async () => {
-                const group = values[ 'group' ]
-                const { result } = await FlowMcpCli.validate( { schemaPath, cwd, group } )
+                const { result } = await FlowMcpCli.validate( { schemaPath, cwd } )
                 output( { result } )
             }
         }
