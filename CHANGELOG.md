@@ -11,7 +11,7 @@ for removal with the next major release. They are intentional, not oversights:
   a leading `dev` positional so `flowmcp env …` and `flowmcp dev env …` hit the same
   handler. Documented compatibility sugar. *Keep through the split, remove with the next major.*
 - **`dev allowlist add`/`remove` deprecation no-op** (`src/commands/AllowlistCommand.mjs`) —
-  since Memo 150 folder presence in `allowed-libraries` is the gate and the CLI never
+  since folder presence in `allowed-libraries` is the gate and the CLI never
   installs; these subcommands now print the exact `npm install --prefix <path> <lib>`
   command instead of acting. Fresh deprecation UX that users still rely on for the hint.
   *Keep through the split, remove with the next major.*
@@ -73,7 +73,7 @@ for removal with the next major release. They are intentional, not oversights:
   live 401 recorded as a false FAIL. Consistent with how `search`/`list` flag a tool as
   `[disabled: missing KEY]`.
 
-## 4.4.0 — 2026-06-04 (Memo 107)
+## 4.4.0 — 2026-06-04
 
 ### Added
 
