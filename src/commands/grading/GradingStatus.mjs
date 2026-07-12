@@ -505,6 +505,9 @@ class GradingStatus {
         // produced. No silent default — the swept/graded booleans are explicit per schema.
         const conformance = await GradingStatus.collectConformance( { targetDir: detected.targetDir } )
 
+        // G-13 — About-page consistency check wired into the doctor report.
+        const about = await GradingStatus.collectAboutConsistency( { grading, target, gradingDataRoot } )
+
         return {
             'result': {
                 'status': true,
@@ -513,12 +516,39 @@ class GradingStatus {
                 defects,
                 'defectsNote': defectsNote,
                 conformance,
+                about,
                 tips,
                 'tipsNote': tipsNote,
                 nextLoop,
                 nextAction
             }
         }
+    }
+
+
+    // G-13 — About-page consistency wired into `grading doctor`. Hundreds of About
+    // pages exist across the islands and, until now, nothing checked their
+    // consistency against the namespace schemas. This runs the grading module's
+    // AboutConsistencyCheck.checkNamespaceAbout for the doctor's namespace and
+    // surfaces its ABT-* findings as a read-only report section. Never online,
+    // never writes. An absent About Resource (ABT-002) is an explicit note, not a
+    // silent skip; a missing grading-module method is surfaced, not swallowed.
+    static async collectAboutConsistency( { grading, target, gradingDataRoot } ) {
+        const AboutConsistencyCheck = grading[ 'AboutConsistencyCheck' ]
+        if( AboutConsistencyCheck === undefined ) {
+            return { 'checked': false, 'passed': null, 'issues': [], 'note': 'AboutConsistencyCheck unavailable from flowmcp-grading; About consistency not checked.' }
+        }
+
+        const namespace = target.split( '/' )[ 0 ].split( ':' ).at( -1 )
+        const result = await AboutConsistencyCheck.checkNamespaceAbout( { gradingDataRoot, namespace } )
+        if( result.errors.length > 0 ) {
+            return { 'checked': false, 'passed': null, 'issues': [], 'note': `About consistency could not run: ${result.errors.join( '; ' )}` }
+        }
+
+        const aboutMissing = result.issues.some( ( issue ) => issue.code === 'ABT-002' )
+        const note = aboutMissing === true ? `No About Resource found namespace-wide for ${namespace} (nothing to check).` : null
+
+        return { 'checked': true, 'passed': result.passed, 'issues': result.issues, note }
     }
 
 
