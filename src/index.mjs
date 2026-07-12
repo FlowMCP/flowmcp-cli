@@ -61,7 +61,10 @@ const args = parseArgs( {
         'set-export-dir': { type: 'string' },
         'target': { type: 'string' },
         'throttle': { type: 'string' },
-        'version': { type: 'boolean' }
+        'version': { type: 'boolean' },
+        // Memo 152 / PRD-021 (E-05) — optional lists directory for a standalone
+        // `private call` schema whose sharedLists have no neighbouring _lists dir.
+        'lists-dir': { type: 'string' }
     }
 } )
 
@@ -149,6 +152,37 @@ const callBranch = {
         const noCache = values[ 'no-cache' ] || false
         const refresh = values[ 'refresh' ] || false
         const { result } = await FlowMcpCli.callTool( { toolName, jsonArgs, cwd, noCache, refresh } )
+        output( { result } )
+    }
+}
+
+
+// Memo 152 / PRD-021 (E-04, E-05) — `private call <schema-path> <tool> '{json}'`.
+// A path-addressed, ad-hoc call on the core v4 Pipeline (scan ACTIVE). The schema
+// is never registered/merged, so it stays invisible to search/list/serve. CLI-only
+// (F24=A — no serve variant). Placed right after the call branch.
+const privateBranch = {
+    'description': 'Ad-hoc call a path-addressed private schema (never registered; scan active).',
+    'children': {
+        'call': {
+            'description': "Call a tool in a private schema by path: private call <schema-path> <tool> '{json}' [--lists-dir <dir>].",
+            'execute': async () => {
+                const schemaPath = positionals[ 2 ]
+                const toolName = positionals[ 3 ]
+                const jsonArgs = positionals[ 4 ] || null
+                const listsDir = values[ 'lists-dir' ] === undefined ? null : values[ 'lists-dir' ]
+                const { result } = await FlowMcpCli.privateCall( { schemaPath, toolName, jsonArgs, listsDir, cwd } )
+                output( { result } )
+            }
+        }
+    },
+    'fallback': async () => {
+        const subCommand = positionals[ 1 ]
+        const result = {
+            'status': false,
+            'error': `Unknown private command "${subCommand}".`,
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} private call <schema-path> <tool> '{json}' [--lists-dir <dir>]`
+        }
         output( { result } )
     }
 }
@@ -689,6 +723,7 @@ const tree = {
         },
         'lists': listsBranch,
         'call': callBranch,
+        'private': privateBranch,
         'cache': cacheBranch,
         'status': {
             'description': 'Show the CLI / config status.',

@@ -41,6 +41,7 @@ import { ResourceCommand } from '../commands/ResourceCommand.mjs'
 import { SearchCommand } from '../commands/SearchCommand.mjs'
 import { ListCommand } from '../commands/ListCommand.mjs'
 import { CallCommand } from '../commands/CallCommand.mjs'
+import { PrivateCommand } from '../commands/PrivateCommand.mjs'
 import { ServeCommand } from '../commands/ServeCommand.mjs'
 import { ValidateCommand } from '../commands/ValidateCommand.mjs'
 import { MigrateCommand } from '../commands/MigrateCommand.mjs'
@@ -231,6 +232,15 @@ class FlowMcpCli {
 
     static async callTool( { toolName, jsonArgs, cwd, noCache = false, refresh = false } ) {
         return CallCommand.callTool( { toolName, jsonArgs, cwd, noCache, refresh } )
+    }
+
+
+    // Memo 152 / PRD-021 (E-04, E-05) — the `private call` leaf lives in
+    // src/commands/PrivateCommand.mjs. It loads a path-addressed schema through the
+    // core v4 Pipeline (scan ACTIVE) and NEVER registers it, so it stays invisible to
+    // search/list/serve. Stays a public delegation (index.mjs + tests call it).
+    static async privateCall( { schemaPath, toolName, jsonArgs, listsDir, cwd } ) {
+        return PrivateCommand.call( { schemaPath, toolName, jsonArgs, listsDir, cwd } )
     }
 
 
