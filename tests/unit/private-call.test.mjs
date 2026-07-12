@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
+import { Pipeline } from 'flowmcp'
+
 import { PrivateCommand } from '../../src/commands/PrivateCommand.mjs'
 import { FlowMcpCli } from '../../src/task/FlowMcpCli.mjs'
 
@@ -22,6 +24,7 @@ const LIB_CLEAN = join( FIX, 'lib-clean-schema.mjs' )
 const LIB_NOLIB = join( FIX, 'lib-unresolvable-schema.mjs' )
 const LISTS_DIR = join( FIX, 'lists' )
 const PUBLIC_SRC = join( FIX, 'public-src' )
+const FINCLARITY = join( FIX, 'financial-clarity-resource-schema.mjs' )
 
 const cwd = process.cwd()
 
@@ -248,5 +251,38 @@ describe( 'private call — facade delegation (index.mjs surface)', () => {
 
         expect( result[ 'status' ] ).toBe( true )
         expect( result[ 'content' ][ 'greeting' ] ).toBe( 'hello facade' )
+    } )
+} )
+
+
+describe( 'private call — named financial-clarity RESOURCE-schema proof (Memo 153, F23 / F2=B)', () => {
+    it( 'the financial-clarity RESOURCE schema passes the private v4 load gate with its resource intact', async () => {
+        // The named proof: a private schema that declares a v4 resource loads through the SAME
+        // core Pipeline.load the `private call` leaf uses (scan ACTIVE, strict), and the resource
+        // survives validation — proving a *Resource* schema (the financial-clarity shape) works
+        // through the private runtime, not only tool-only schemas.
+        const loaded = await Pipeline.load( { 'filePath': FINCLARITY, 'skipScan': false, 'strict': true } )
+
+        expect( loaded[ 'status' ] ).toBe( true )
+        expect( loaded[ 'main' ][ 'namespace' ] ).toBe( 'finclarity' )
+        expect( loaded[ 'main' ][ 'resources' ] ).toBeDefined()
+        expect( loaded[ 'main' ][ 'resources' ][ 'clarityGuide' ] ).toBeDefined()
+        expect( loaded[ 'main' ][ 'resources' ][ 'clarityGuide' ][ 'source' ] ).toBe( 'markdown' )
+    } )
+
+    it( 'runs end-to-end through the full `private call` leaf and returns data', async () => {
+        const { result } = await PrivateCommand.call( {
+            'schemaPath': FINCLARITY, 'toolName': 'reading_finclarity', 'jsonArgs': '{"metric":"runway"}', cwd
+        } )
+
+        expect( result[ 'status' ] ).toBe( true )
+        expect( result[ 'toolName' ] ).toBe( 'reading_finclarity' )
+        expect( result[ 'content' ][ 'metric' ] ).toBe( 'runway' )
+    } )
+
+    it( 'stays structurally invisible — the finclarity resource schema never appears in list', async () => {
+        const { result: listResult } = await FlowMcpCli.list( { cwd } )
+
+        expect( JSON.stringify( listResult ) ).not.toContain( 'finclarity' )
     } )
 } )
