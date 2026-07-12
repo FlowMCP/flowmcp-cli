@@ -240,21 +240,6 @@ class ConfigStore {
     }
 
 
-    static getCatalogDir( { globalConfig } ) {
-        const sources = globalConfig[ 'sources' ] || {}
-        const sourceNames = Object.keys( sources )
-
-        if( sourceNames.length === 0 ) {
-            return ConfigStore.schemasDir()
-        }
-
-        const firstSource = sourceNames[ 0 ]
-        const catalogDir = join( ConfigStore.schemasDir(), firstSource )
-
-        return catalogDir
-    }
-
-
     static validateGlobalConfig( { globalConfig } ) {
         const warnings = []
 

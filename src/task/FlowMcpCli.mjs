@@ -507,8 +507,8 @@ class FlowMcpCli {
 
     // Memo 152 / PRD-019 (D-08 cluster "catalog-skill") — catalogSources + validateCatalog
     // moved to src/commands/CatalogCommand.mjs. These stay as public delegations (index.mjs +
-    // the catalog test call them). generateSkill/generateCatalog/importAgent/catalogLink/Unlink
-    // stay here untouched (importAgent + link/unlink deletion is PRD-020 G-11/G-12).
+    // the catalog test call them). generateSkill/generateCatalog stay here; catalogLink/Unlink
+    // stay here untouched (link/unlink deletion is PRD-020 G-12).
     static async catalogSources() {
         return CatalogCommand.catalogSources()
     }
@@ -793,107 +793,9 @@ Note: Run "${cmd} init" first. This is the only interactive command.
 
 
 
-    // Retained for importAgent (G-11 stranded command) until its removal in
-    // PRD-020. Dataset r4 marked this init-only, but importAgent also calls it.
-    static #getRegistryPath( { globalConfig } ) {
-        const sources = globalConfig[ 'sources' ] || {}
-        const sourceNames = Object.keys( sources )
-
-        if( sourceNames.length === 0 ) {
-            return null
-        }
-
-        const firstSource = sourceNames[ 0 ]
-        const registryPath = join( ConfigStore.schemasDir(), firstSource, '_registry.json' )
-
-        return registryPath
-    }
-
-
-    static async importAgent( { agentName, cwd } ) {
-        const { initialized, error, fix } = await ConfigStore.requireInit()
-
-        if( !initialized ) {
-            return { result: CliOutput.error( { error, fix } ) }
-        }
-
-        if( !agentName ) {
-            return { result: CliOutput.error( { error: 'Missing agent name', fix: 'flowmcp import-agent <agent-name>' } ) }
-        }
-
-        const { globalConfig } = await ConfigStore.loadGlobalConfig()
-        const registryPath = FlowMcpCli.#getRegistryPath( { globalConfig } )
-        const registryData = await FsUtils.readJsonFile( { filePath: registryPath } )
-
-        if( !registryData ) {
-            return { result: CliOutput.error( { error: 'No registry found', fix: 'Run "flowmcp import-registry <url>" first' } ) }
-        }
-
-        const agents = registryData[ 'agents' ] || []
-        const agentEntry = agents
-            .find( ( entry ) => {
-                const isMatch = entry[ 'name' ] === agentName
-
-                return isMatch
-            } )
-
-        if( !agentEntry ) {
-            const availableNames = agents
-                .map( ( entry ) => {
-                    const name = entry[ 'name' ]
-
-                    return name
-                } )
-                .join( ', ' )
-
-            return { result: CliOutput.error( { error: `Agent "${agentName}" not found in registry`, fix: `Available agents: ${availableNames || 'none'}` } ) }
-        }
-
-        const manifestPath = agentEntry[ 'manifest' ]
-        const catalogDir = ConfigStore.getCatalogDir( { globalConfig } )
-        const fullManifestPath = `${catalogDir}/${manifestPath}`
-
-        let manifest = null
-
-        try {
-            manifest = await FsUtils.readJsonFile( { filePath: fullManifestPath } )
-        } catch( err ) {
-            return { result: CliOutput.error( { error: `IMP-003 importAgent: Cannot read manifest: ${err.message}`, fix: `Check file exists: ${fullManifestPath}` } ) }
-        }
-
-        if( !manifest ) {
-            return { result: CliOutput.error( { error: `Manifest not found at ${fullManifestPath}`, fix: 'Re-run "flowmcp import-registry <url>" to download' } ) }
-        }
-
-        const tools = manifest[ 'tools' ] || []
-        const addedTools = []
-
-        const addPromises = tools
-            .map( ( toolId ) => {
-                const parts = toolId.split( '/' )
-                const toolName = parts[ parts.length - 1 ]
-
-                return { toolId, toolName }
-            } )
-
-        addPromises
-            .forEach( ( { toolId, toolName } ) => {
-                addedTools.push( { toolId, toolName } )
-            } )
-
-        const result = {
-            status: true,
-            agent: agentName,
-            description: agentEntry[ 'description' ] || '',
-            model: manifest[ 'model' ] || 'not specified',
-            tools: addedTools,
-            toolCount: addedTools.length,
-            message: `Agent "${agentName}" imported with ${addedTools.length} tools`
-        }
-
-        return { result }
-    }
-
+    // Memo 152 / PRD-020 (G-11) — the stranded agent-manifest command + its handler
+    // and #getRegistryPath helper were deleted: the recovery text pointed at the
+    // Memo-099-removed `import-registry`, so the command could never succeed.
 
     static async validateCatalog( { catalogDir, cwd } ) {
         return CatalogCommand.validateCatalog( { catalogDir, cwd } )

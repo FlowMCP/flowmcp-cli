@@ -751,16 +751,10 @@ const tree = {
             }
         },
         // Memo 099 Kap 7 — `import`/`import-registry` removed (no registry/internet sync).
+        // Memo 152 / PRD-020 (G-11) — the stranded agent-manifest command was removed (its
+        // recovery text pointed at the removed `import-registry`, so it could never succeed).
         // Add a schema folder by editing schemaFolders[] in ~/.flowmcp/config.json;
         // clone repos yourself with `gh repo clone`.
-        'import-agent': {
-            'description': 'Import an agent definition by name.',
-            'execute': async () => {
-                const agentName = positionals[ 1 ]
-                const { result } = await FlowMcpCli.importAgent( { agentName, cwd } )
-                output( { result } )
-            }
-        },
         'skill': skillBranch,
         'catalog': catalogBranch,
         'validate-catalog': {

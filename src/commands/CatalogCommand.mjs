@@ -12,10 +12,10 @@ import { SearchCommand } from './SearchCommand.mjs'
 // Memo 152 / PRD-019 (D-08 cluster "catalog-skill", partial) — the two self-contained catalog
 // read/validate commands extracted from FlowMcpCli: `catalog sources` (lists the linked local
 // sources) and `validate-catalog` (structural registry.json check, CAT001..CAT007). The larger
-// generateSkill / generateCatalog members of this cluster, plus importAgent and catalog
-// link/unlink, stay in FlowMcpCli untouched (importAgent + link/unlink deletion is PRD-020
-// G-11/G-12). FlowMcpCli.catalogSources / validateCatalog stay as public delegations (index.mjs
-// + the catalog test call them). No back-reference to FlowMcpCli — lib deps only.
+// generateSkill / generateCatalog members of this cluster, plus catalog link/unlink, stay in
+// FlowMcpCli untouched (link/unlink deletion is PRD-020 G-12). FlowMcpCli.catalogSources /
+// validateCatalog stay as public delegations (index.mjs + the catalog test call them). No
+// back-reference to FlowMcpCli — lib deps only.
 class CatalogCommand {
     static async catalogSources() {
         const { localSources } = await ConfigStore.readLocalSources()
@@ -130,8 +130,8 @@ class CatalogCommand {
     }
 
     // Memo 152 / PRD-019 (D-08 cluster "catalog-skill") — generateCatalog + generateSkill moved
-    // here from FlowMcpCli (they reuse the SearchCommand discovery helpers). importAgent and
-    // catalog link/unlink stay in FlowMcpCli (deletion is PRD-020 G-11/G-12).
+    // here from FlowMcpCli (they reuse the SearchCommand discovery helpers). catalog link/unlink
+    // stay in FlowMcpCli (deletion is PRD-020 G-12).
     static async generateCatalog( { cwd } ) {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {

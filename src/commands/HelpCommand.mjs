@@ -88,7 +88,6 @@ Libraries (allowed-libraries):
 
 Schema Management:
   dev schemas                         List all schemas from the configured schemaFolders
-  dev import-agent <url>              Import an agent manifest
   dev status                          Show config, schemaFolders and health info
   (Memo 099: import/import-registry/update removed — add a folder by editing
    schemaFolders[] in ~/.flowmcp/config.json; clone repos with "gh repo clone")
