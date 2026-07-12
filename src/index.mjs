@@ -224,25 +224,10 @@ const catalogBranch = {
                 output( { result } )
             }
         },
-        'link': {
-            'description': 'Link a named catalog source to a path.',
-            'execute': async () => {
-                const name = positionals[ 2 ]
-                const path = positionals[ 3 ]
-                const { result } = await FlowMcpCli.catalogLink( { name, path } )
-                output( { result } )
-            }
-        },
-        'unlink': {
-            'description': 'Unlink a named catalog source.',
-            'execute': async () => {
-                const name = positionals[ 2 ]
-                const { result } = await FlowMcpCli.catalogUnlink( { name } )
-                output( { result } )
-            }
-        },
+        // Memo 152 / PRD-020 (G-12) — the catalog link/unlink writers were removed with the
+        // legacy source fallback. Add a source by editing schemaFolders[] in ~/.flowmcp/config.json.
         'sources': {
-            'description': 'List the linked catalog sources.',
+            'description': 'List the configured schemaFolders[] sources.',
             'execute': async () => {
                 const { result } = await FlowMcpCli.catalogSources()
                 output( { result } )
@@ -254,7 +239,7 @@ const catalogBranch = {
         const result = {
             'status': false,
             'error': `Unknown catalog command "${subCommand}".`,
-            'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate | link <name> <path> | unlink <name> | sources`
+            'fix': `Available: ${appConfig[ 'cliCommand' ]} catalog generate | sources`
         }
         output( { result } )
     }

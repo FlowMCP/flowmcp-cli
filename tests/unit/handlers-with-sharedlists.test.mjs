@@ -14,7 +14,8 @@ const SCHEMAS_DIR = testHome.schemasDir
 const ENV_PATH = testHome.envPath( '.hsl' )
 
 const SOURCE_NAME = 'hslsrc'
-const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME )
+// Memo 152 / PRD-020 (G-12) — schemaFolders[] layout: schemas live under <folder>/providers.
+const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME, 'providers' )
 const LISTS_DIR = join( SOURCE_DIR, '_lists' )
 
 
@@ -81,7 +82,8 @@ export const handlers = ( { sharedLists, libraries } ) => {
         'envPath': ENV_PATH,
         'flowmcpCore': { 'version': '2.0.0', 'commit': 'abc', 'schemaSpec': '4.0.0' },
         'initialized': new Date().toISOString(),
-        'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } }
+        'sources': { [SOURCE_NAME]: { 'type': 'local', 'schemaCount': 1 } },
+        'schemaFolders': [ { 'name': SOURCE_NAME, 'path': `~/.flowmcp/schemas/${SOURCE_NAME}` } ]
     }
 
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )

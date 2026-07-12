@@ -57,8 +57,11 @@ class SchemaSource {
 
     // Memo 099 Kap 4 — schemaFolders[] is the single source of truth (the disk = the truth).
     // Enumerate every configured source and the schemas it declares (via _registry.json when
-    // present, otherwise a raw FS scan). Legacy ~/.flowmcp/schemas scan + localSources are the
-    // fallback until migration (Memo 099 Kap 9).
+    // present, otherwise a raw FS scan).
+    // Memo 152 / PRD-020 (G-12) — the legacy per-source registry read is removed from the
+    // empty-schemaFolders fallback. The ~/.flowmcp/schemas disk-scan remains as the enumeration
+    // when schemaFolders[] is empty (turning that into a hard migration error is deferred — see
+    // the PRD-020 remainder note in the handover).
     static async listSources() {
         const schemasBaseDir = ConfigStore.schemasDir()
         const globalConfigPath = ConfigStore.globalConfigPath()
@@ -79,8 +82,6 @@ class SchemaSource {
             allSourceNames = schemaFolders
                 .map( ( entry ) => entry[ 'name' ] )
         } else {
-            const { localSources } = await ConfigStore.readLocalSources()
-
             let sourceDirs = []
             try {
                 const entries = await readdir( schemasBaseDir )
@@ -101,9 +102,7 @@ class SchemaSource {
                 sourceDirs = []
             }
 
-            const localSourceNames = Object.keys( localSources )
-                .filter( ( name ) => sourceDirs.includes( name ) === false )
-            allSourceNames = [ ...sourceDirs, ...localSourceNames ]
+            allSourceNames = sourceDirs
         }
 
         const sources = []

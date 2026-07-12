@@ -6,9 +6,9 @@
  * init-guard and config validation. Config-I/O stays in the CLI; schema LOADING
  * moves to core (PRD-018). Depends only on FsUtils, appConfig and Node builtins.
  *
- * NOTE (G-12, PRD-020): #readLocalSources and the localSources read in
- * resolveSourceDir are the legacy fallback (Memo 099 Kap 9) — carried here
- * UNCHANGED; their removal is PRD-020.
+ * Memo 152 / PRD-020 (G-12) — the legacy local-source fallback (the reader + the
+ * resolveSourceDir branch) is removed: schemaFolders[] is the single source of
+ * truth (Memo 099 Kap 4/9).
  */
 
 import { homedir } from 'node:os'
@@ -118,29 +118,6 @@ class ConfigStore {
     }
 
 
-    static async readLocalSources() {
-        const globalConfigPath = ConfigStore.globalConfigPath()
-        const { data: globalConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
-        const raw = globalConfig && globalConfig[ 'localSources' ]
-
-        if( raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray( raw ) ) {
-            return { localSources: {} }
-        }
-
-        const localSources = Object.entries( raw )
-            .reduce( ( acc, [ name, entry ] ) => {
-                const path = entry && typeof entry === 'object' ? entry[ 'path' ] : null
-                if( typeof path === 'string' && path.length > 0 ) {
-                    acc[ name ] = { path }
-                }
-
-                return acc
-            }, {} )
-
-        return { localSources }
-    }
-
-
     static async resolveSourceDir( { sourceName } ) {
         // Memo 099 Kap 4 — schemaFolders[] win: source dir = <path>/providers (direct, no disk-copy)
         const { schemaFolders } = await ConfigStore.readSchemaFolders()
@@ -151,13 +128,6 @@ class ConfigStore {
             const sourceDir = join( folder[ 'path' ], 'providers' )
 
             return { sourceDir, isLocal: true }
-        }
-
-        const { localSources } = await ConfigStore.readLocalSources()
-        const local = localSources[ sourceName ]
-
-        if( local !== undefined ) {
-            return { sourceDir: local[ 'path' ], isLocal: true }
         }
 
         const sourceDir = join( ConfigStore.schemasDir(), sourceName )

@@ -12,7 +12,8 @@ const testHome = createTestHome( { suite: 'fetch-fail' } )
 const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
 const SCHEMAS_DIR = testHome.schemasDir
 const SOURCE_NAME = 'fetchfail'
-const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME )
+// Memo 152 / PRD-020 (G-12) — schemaFolders[] layout: schemas live under <folder>/providers.
+const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME, 'providers' )
 const ENV_PATH = testHome.envPath( '.fetchfail' )
 const TEST_CWD = join( tmpdir(), 'flowmcp-cli-fetch-fail' )
 const LOCAL_CONFIG_DIR = join( TEST_CWD, '.flowmcp' )
@@ -124,7 +125,8 @@ beforeAll( async () => {
                 'type': 'builtin',
                 'schemaCount': 1
             }
-        }
+        },
+        'schemaFolders': [ { 'name': SOURCE_NAME, 'path': `~/.flowmcp/schemas/${SOURCE_NAME}` } ]
     }
 
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )

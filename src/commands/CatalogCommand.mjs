@@ -17,12 +17,14 @@ import { SearchCommand } from './SearchCommand.mjs'
 // validateCatalog stay as public delegations (index.mjs + the catalog test call them). No
 // back-reference to FlowMcpCli — lib deps only.
 class CatalogCommand {
+    // Memo 152 / PRD-020 (G-12) — catalog sources are the configured schemaFolders[]
+    // (the single source of truth). The legacy local-source read is gone with link/unlink.
     static async catalogSources() {
-        const { localSources } = await ConfigStore.readLocalSources()
+        const { schemaFolders } = await ConfigStore.readSchemaFolders()
 
-        const linked = Object.entries( localSources )
-            .map( ( [ name, entry ] ) => {
-                const sourceInfo = { name, 'path': entry[ 'path' ] }
+        const linked = schemaFolders
+            .map( ( entry ) => {
+                const sourceInfo = { 'name': entry[ 'name' ], 'path': entry[ 'path' ] }
 
                 return sourceInfo
             } )

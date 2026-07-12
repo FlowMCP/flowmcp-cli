@@ -12,7 +12,8 @@ const testHome = createTestHome( { suite: 'shared-lists' } )
 const GLOBAL_CONFIG_PATH = testHome.globalConfigPath
 const SCHEMAS_DIR = testHome.schemasDir
 const SOURCE_NAME = 'slsrc'
-const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME )
+// Memo 152 / PRD-020 (G-12) — schemaFolders[] layout: schemas live under <folder>/providers.
+const SOURCE_DIR = join( SCHEMAS_DIR, SOURCE_NAME, 'providers' )
 const LISTS_DIR = join( SOURCE_DIR, '_lists' )
 const ENV_PATH = testHome.envPath( '.sltest' )
 
@@ -117,7 +118,8 @@ beforeAll( async () => {
                 'type': 'builtin',
                 'schemaCount': 2
             }
-        }
+        },
+        'schemaFolders': [ { 'name': SOURCE_NAME, 'path': `~/.flowmcp/schemas/${SOURCE_NAME}` } ]
     }
 
     await writeFile( GLOBAL_CONFIG_PATH, JSON.stringify( globalConfig, null, 4 ), 'utf-8' )

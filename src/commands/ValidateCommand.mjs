@@ -25,7 +25,14 @@ class ValidateCommand {
             return { result }
         }
 
-        const { sources } = await SchemaSource.listSources()
+        // Memo 152 / PRD-020 (G-12) — surface the coded migration error when
+        // schemaFolders[] is empty (no silent empty list).
+        const { sources, error: listError, fix: listFix } = await SchemaSource.listSources()
+        if( listError ) {
+            const result = CliOutput.error( { 'error': listError, 'fix': listFix } )
+
+            return { result }
+        }
 
         const result = {
             'status': true,

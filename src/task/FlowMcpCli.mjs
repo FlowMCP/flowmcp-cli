@@ -9,8 +9,8 @@
  * For more information, see LICENSE.md and DISCLAIMER.md in the repo root.
  */
 
-import { readFile, writeFile, mkdir, readdir, stat, access, unlink, rename } from 'node:fs/promises'
-import { join, resolve, basename, extname, dirname, relative, isAbsolute } from 'node:path'
+import { readFile, writeFile, mkdir, readdir, stat, unlink, rename } from 'node:fs/promises'
+import { join, basename, extname, dirname, relative, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
@@ -392,123 +392,13 @@ class FlowMcpCli {
 
 
 
-    static async catalogLink( { name, path } ) {
-        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
-        if( !initialized ) {
-            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
-
-            return { result }
-        }
-
-        if( typeof name !== 'string' || name.trim().length === 0 ) {
-            const result = CliOutput.error( {
-                'error': 'Missing source name.',
-                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
-            } )
-
-            return { result }
-        }
-
-        if( typeof path !== 'string' || path.trim().length === 0 ) {
-            const result = CliOutput.error( {
-                'error': 'Missing source path.',
-                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog link <name> <absolute-path>`
-            } )
-
-            return { result }
-        }
-
-        const absolutePath = resolve( path )
-        const dirExists = await access( absolutePath )
-            .then( () => true )
-            .catch( () => false )
-
-        if( dirExists === false ) {
-            const result = CliOutput.error( {
-                'error': `Source path does not exist: ${absolutePath}`,
-                'fix': 'Provide an existing directory that contains FlowMCP schema files.'
-            } )
-
-            return { result }
-        }
-
-        const globalConfigPath = ConfigStore.globalConfigPath()
-        const { data: existingConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
-        const globalConfig = existingConfig || {}
-
-        if( !globalConfig[ 'localSources' ] || typeof globalConfig[ 'localSources' ] !== 'object' || Array.isArray( globalConfig[ 'localSources' ] ) ) {
-            globalConfig[ 'localSources' ] = {}
-        }
-
-        globalConfig[ 'localSources' ][ name ] = {
-            'path': absolutePath,
-            'linkedAt': new Date().toISOString()
-        }
-
-        await ConfigStore.writeGlobalConfig( { config: globalConfig } )
-
-        const { sources } = await SchemaSource.listSources()
-        const linked = sources
-            .find( ( source ) => source[ 'name' ] === name )
-
-        const result = {
-            'status': true,
-            'linked': name,
-            'path': absolutePath,
-            'schemaCount': linked ? linked[ 'schemaCount' ] : 0
-        }
-
-        return { result }
-    }
-
-
-    static async catalogUnlink( { name } ) {
-        const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
-        if( !initialized ) {
-            const result = CliOutput.error( { 'error': initError, 'fix': initFix } )
-
-            return { result }
-        }
-
-        if( typeof name !== 'string' || name.trim().length === 0 ) {
-            const result = CliOutput.error( {
-                'error': 'Missing source name.',
-                'fix': `Provide: ${appConfig[ 'cliCommand' ]} catalog unlink <name>`
-            } )
-
-            return { result }
-        }
-
-        const globalConfigPath = ConfigStore.globalConfigPath()
-        const { data: existingConfig } = await FsUtils.readJson( { filePath: globalConfigPath } )
-        const globalConfig = existingConfig || {}
-        const localSources = globalConfig[ 'localSources' ]
-
-        if( !localSources || typeof localSources !== 'object' || localSources[ name ] === undefined ) {
-            const result = CliOutput.error( {
-                'error': `Local source "${name}" is not linked.`,
-                'fix': `Run ${appConfig[ 'cliCommand' ]} catalog sources to see linked sources.`
-            } )
-
-            return { result }
-        }
-
-        delete localSources[ name ]
-        await ConfigStore.writeGlobalConfig( { config: globalConfig } )
-
-        const result = {
-            'status': true,
-            'unlinked': name
-        }
-
-        return { result }
-    }
-
+    // Memo 152 / PRD-020 (G-12) — the catalog link/unlink writers were deleted with the
+    // legacy local-source fallback. schemaFolders[] is the single source of truth
+    // (Memo 099 Kap 4/9); a folder is added by editing ~/.flowmcp/config.json.
 
     // Memo 152 / PRD-019 (D-08 cluster "catalog-skill") — catalogSources + validateCatalog
     // moved to src/commands/CatalogCommand.mjs. These stay as public delegations (index.mjs +
-    // the catalog test call them). generateSkill/generateCatalog stay here; catalogLink/Unlink
-    // stay here untouched (link/unlink deletion is PRD-020 G-12).
+    // the catalog test call them). generateSkill/generateCatalog stay here.
     static async catalogSources() {
         return CatalogCommand.catalogSources()
     }
