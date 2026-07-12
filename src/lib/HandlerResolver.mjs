@@ -4,6 +4,7 @@ import { FlowMCP, LibraryLoader } from 'flowmcp'
 
 import { CliBase } from './CliBase.mjs'
 import { CliOutput } from './CliOutput.mjs'
+import { OrgInternalLibs } from './OrgInternalLibs.mjs'
 import { ListsCommand } from '../commands/ListsCommand.mjs'
 import { AllowlistCommand } from '../commands/AllowlistCommand.mjs'
 
@@ -65,10 +66,15 @@ class HandlerResolver {
                 const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
                 const { resolveBase } = CliBase.resolveBase()
                 const schemaBase = dirname( resolve( filePath ) )
+                // Memo 152 / PRD-027 (doctor gap b) — hand core the per-lib install tokens so a
+                // LIB-001 throw shows `github:FlowMCP/<repo>` for org-internal libs (not on npm),
+                // never a bare `npm install <name>` that would 404.
+                const { installTargets } = OrgInternalLibs.buildInstallTargets( { libs: requiredLibraries } )
                 const resolved = await LibraryLoader.resolveExternal( {
                     'requiredLibraries': requiredLibraries,
                     'resolveBases': [ allowedLibrariesBase, resolveBase, schemaBase ],
                     'installHintBase': allowedLibrariesBase,
+                    'installTargets': installTargets,
                     'emit': ( { code, location, err } ) => CliOutput.emitCoded( { code, location, err } )
                 } )
                 libraries = resolved[ 'libraries' ]

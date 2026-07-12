@@ -1,8 +1,7 @@
-import { createRequire } from 'node:module'
-import { join, basename } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 
-import { FlowMCP } from 'flowmcp'
+import { FlowMCP, LibraryLoader } from 'flowmcp'
 
 import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { CliOutput } from '../lib/CliOutput.mjs'
@@ -11,6 +10,7 @@ import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
 import { CliBase } from '../lib/CliBase.mjs'
 import { EnvResolver } from '../lib/EnvResolver.mjs'
+import { OrgInternalLibs } from '../lib/OrgInternalLibs.mjs'
 import { AllowlistCommand } from './AllowlistCommand.mjs'
 import { ListsCommand } from './ListsCommand.mjs'
 
@@ -73,14 +73,13 @@ class DoctorCommand {
         const sharedListFailures = []
         const libraryFailures = []
         const missingLibs = new Set()
+        const bindingLibs = new Set()
         const envKeysNeeded = new Set()
         // Memo 150 — measure the SAME resolution chain the real load path uses (allowed-libraries
-        // first, then the CLI base), so doctor reflects runtime reality and its install hint points
-        // at the user-owned folder.
+        // first, then the CLI base, then the schema dir), so doctor reflects runtime reality and its
+        // install hint points at the user-owned folder.
         const { allowedLibrariesBase } = await AllowlistCommand.resolveAllowedLibrariesBase()
         const { resolveBase } = CliBase.resolveBase()
-        const allowedRequire = createRequire( join( allowedLibrariesBase, 'noop.cjs' ) )
-        const baseRequire = createRequire( join( resolveBase, 'index.js' ) )
 
         await schemas
             .reduce( ( promise, entry ) => promise.then( async () => {
@@ -117,25 +116,30 @@ class DoctorCommand {
                 }
 
                 if( requiredLibraries.length > 0 ) {
-                    requiredLibraries
+                    // Memo 152 / PRD-027 (doctor gap a) — do the REAL load (import/dlopen), not just
+                    // require.resolve. LibraryLoader.probe classifies each lib the way the runtime
+                    // (#loadOneFromBases) does: a native lib that resolves but fails to dlopen lands in
+                    // loadFailed (LIB-BINDING, needs a rebuild) instead of falsely reporting green.
+                    const { filePath } = await SchemaSource.resolveSchemaFilePath( { schemaRef: file } )
+                    const schemaBase = filePath ? dirname( resolve( filePath ) ) : resolveBase
+                    const { notInstalled, loadFailed } = await LibraryLoader.probe( {
+                        requiredLibraries,
+                        resolveBases: [ allowedLibrariesBase, resolveBase, schemaBase ]
+                    } )
+
+                    notInstalled
                         .forEach( ( lib ) => {
-                            const resolvable = [ allowedRequire, baseRequire ]
-                                .some( ( req ) => {
-                                    try {
-                                        req.resolve( lib )
+                            // LIB-001 — requiredLibrary not resolvable from any base (needs install).
+                            libraryFailures.push( `${namespace}: LIB-001 ${lib}` )
+                            missingLibs.add( lib )
+                        } )
 
-                                        return true
-                                    } catch( err ) {
-                                        return false
-                                    }
-                                } )
-
-                            if( resolvable === false ) {
-                                // LIB-001 — requiredLibrary not resolvable from allowed-libraries nor
-                                // the CLI base (aggregated into module-present + the install hint below).
-                                libraryFailures.push( `${namespace}: LIB-001 ${lib}` )
-                                missingLibs.add( lib )
-                            }
+                    loadFailed
+                        .forEach( ( entry ) => {
+                            // LIB-BINDING — installed but fails to load (native binding missing / ABI
+                            // mismatch). Reported distinctly so doctor tells the runtime truth.
+                            libraryFailures.push( `${namespace}: LIB-BINDING ${entry[ 'lib' ]}` )
+                            bindingLibs.add( entry[ 'lib' ] )
                         } )
                 }
             } ), Promise.resolve() )
@@ -154,10 +158,12 @@ class DoctorCommand {
             'check': 'module-present',
             'severity': 'ERROR',
             'ok': libraryFailures.length === 0,
-            'code': libraryFailures.length === 0 ? null : 'LIB-001',
+            // Prefer LIB-001 (missing) as the headline code; fall back to LIB-BINDING when the only
+            // failures are installed-but-unloadable native bindings.
+            'code': libraryFailures.length === 0 ? null : ( missingLibs.size > 0 ? 'LIB-001' : 'LIB-BINDING' ),
             'detail': libraryFailures.length === 0
-                ? 'all requiredLibraries resolvable from allowed-libraries or the CLI base'
-                : `${libraryFailures.length} unresolvable: ${libraryFailures.slice( 0, 8 ).join( '; ' )}`
+                ? 'all requiredLibraries load from allowed-libraries or the CLI base'
+                : `${libraryFailures.length} unloadable: ${libraryFailures.slice( 0, 8 ).join( '; ' )}`
         } )
 
         // Check 6 — key-coverage (INFO: missing keys disable individual tools, they are
@@ -191,9 +197,22 @@ class DoctorCommand {
         // Memo 150 P2 (F3=B) — SHOW the exact, copy-pasteable install command for missing libraries.
         // The CLI never installs itself; it points at allowed-libraries so the user (or the AI on
         // request) can run it. `npm install --prefix <path>` also scaffolds the folder on first use.
-        const libFix = missingLibs.size > 0
-            ? `Install missing librar${missingLibs.size === 1 ? 'y' : 'ies'} into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${Array.from( missingLibs ).join( ' ' )}`
-            : null
+        // Memo 152 / PRD-027 (doctor gap b) — org-internal FlowMCP libs (time-csv-toolkit,
+        // geo-*-toolkit, …) are NOT on npm, so their install token is `github:FlowMCP/<repo>`, never a
+        // bare name that would 404. A binding failure needs a rebuild, not an install.
+        const fixHints = []
+        if( missingLibs.size > 0 ) {
+            const missingList = Array.from( missingLibs )
+            const { installTargets } = OrgInternalLibs.buildInstallTargets( { libs: missingList } )
+            const tokens = missingList
+                .map( ( lib ) => installTargets[ lib ] )
+            fixHints.push( `Install missing librar${missingLibs.size === 1 ? 'y' : 'ies'} into allowed-libraries: npm install --prefix ${allowedLibrariesBase} ${tokens.join( ' ' )}` )
+        }
+        if( bindingLibs.size > 0 ) {
+            const bindingList = Array.from( bindingLibs )
+            fixHints.push( `Rebuild unloadable native librar${bindingLibs.size === 1 ? 'y' : 'ies'} (installed but failed to load): npm rebuild ${bindingList.join( ' ' )}` )
+        }
+        const libFix = fixHints.length > 0 ? fixHints.join( ' | ' ) : null
 
         const result = DoctorCommand.#result( { cliName, cliVersion, checks, 'fix': libFix } )
 
