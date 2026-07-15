@@ -110,11 +110,13 @@ class PrivateCommand {
             return { result }
         }
 
-        const { main, handlerMap } = loaded
+        const { main, handlerMap, resourceHandlerMap } = loaded
 
-        // --- resolve the requested tool against the loaded schema via the public
-        //     v4 buildToolName API (wire-name), also accepting the raw route name ---
-        const { routeName, wireToolName, error: toolError, fix: toolFix } = PrivateCommand.#matchTool( { main, toolName } )
+        // --- resolve the requested tool against the loaded schema. Memo 157 Kap 2/3:
+        //     match a `main.tools` route (wire-name / raw route name) OR a resource
+        //     query `${queryName}_${namespace}` — one convention, search == call == serve.
+        //     No silent guessing; a miss stays PRV-007 and lists both tools and queries. ---
+        const { kind, routeName, wireToolName, resourceName, queryName, error: toolError, fix: toolFix } = PrivateCommand.#matchTool( { main, toolName } )
         if( toolError !== null ) {
             const result = CliOutput.error( { 'error': toolError, 'fix': toolFix } )
 
@@ -142,7 +144,21 @@ class PrivateCommand {
 
         const { serverParams } = EnvResolver.buildServerParams( { envObject, requiredServerParams } )
 
-        // --- execute on the v4 surface ---
+        // --- Memo 157 Kap 2/3: a resource-query call executes on the resource surface
+        //     (initializeResourceDbs + executeResource), not FlowMCP.fetch. ---
+        if( kind === 'resource' ) {
+            return await PrivateCommand.#executeResourceQuery( {
+                main,
+                resourceHandlerMap,
+                resourceName,
+                queryName,
+                userParams,
+                schemaDir,
+                wireToolName
+            } )
+        }
+
+        // --- execute a tool on the v4 surface ---
         let struct
         try {
             struct = await FlowMCP.fetch( { main, handlerMap, userParams, serverParams, routeName } )
@@ -163,6 +179,60 @@ class PrivateCommand {
                 'toolName': wireToolName,
                 'error': `PRV-009 privateCall: ${detail}`,
                 'code': 'PRV-009',
+                messages
+            }
+
+            return { result }
+        }
+
+        const result = {
+            'status': true,
+            'toolName': wireToolName,
+            'content': struct[ 'data' ]
+        }
+
+        return { result }
+    }
+
+
+    // Memo 157 Kap 2/3 — execute a resource query on the v4 resource surface. Mirrors
+    // CallCommand.#callResourceQuery (the proven reference), but reuses the resourceHandlerMap
+    // that Pipeline.load already returned. Custom resource handlers are honoured; a pure-SQL
+    // resource (no handler) runs via the injected runSql path with an empty handler map.
+    static async #executeResourceQuery( { main, resourceHandlerMap, resourceName, queryName, userParams, schemaDir, wireToolName } ) {
+        const schemaRef = main[ 'namespace' ] || 'unknown'
+        const resourceDefinition = main[ 'resources' ][ resourceName ]
+
+        let struct
+        try {
+            await FlowMCP.initializeResourceDbs( { 'resources': main[ 'resources' ], schemaRef, schemaDir } )
+            const queryHandlerMap = ( resourceHandlerMap && resourceHandlerMap[ resourceName ] ) || {}
+            const executed = await FlowMCP.executeResource( {
+                resourceDefinition,
+                resourceName,
+                queryName,
+                userParams,
+                'handlerMap': queryHandlerMap,
+                schemaRef
+            } )
+            struct = executed[ 'struct' ]
+        } catch( err ) {
+            const result = CliOutput.error( {
+                'error': `PRV-010 privateCall: Resource query "${wireToolName}" failed: ${err.message}`,
+                'fix': 'Check that the resource database exists and is accessible, and that the query parameters are valid.'
+            } )
+
+            return { result }
+        }
+
+        if( struct[ 'status' ] === false ) {
+            const messages = Array.isArray( struct[ 'messages' ] ) ? struct[ 'messages' ] : []
+            const detail = messages.length > 0 ? messages.join( '; ' ) : 'Resource query failed'
+            const result = {
+                'status': false,
+                'toolName': wireToolName,
+                'error': `PRV-010 privateCall: ${detail}`,
+                'code': 'PRV-010',
                 messages
             }
 
@@ -271,32 +341,73 @@ class PrivateCommand {
         const routes = main[ 'tools' ] || {}
         const routeNames = Object.keys( routes )
 
-        const candidates = routeNames
+        const toolCandidates = routeNames
             .map( ( routeName ) => {
                 const { toolName: wireToolName } = FlowMCP.buildToolName( { routeName, namespace } )
 
                 return { routeName, wireToolName }
             } )
 
-        // Match on the wire-name (public v4 buildToolName), or the raw route name
-        // as a convenience — both are explicit, no silent guessing.
-        const matched = candidates
+        // Match a tool on the wire-name (public v4 buildToolName), or the raw route
+        // name as a convenience — both are explicit, no silent guessing.
+        const matchedTool = toolCandidates
             .find( ( entry ) => entry[ 'wireToolName' ] === toolName || entry[ 'routeName' ] === toolName )
 
-        if( matched === undefined ) {
-            const available = candidates
-                .map( ( entry ) => entry[ 'wireToolName' ] )
-                .join( ', ' )
-
+        if( matchedTool !== undefined ) {
             return {
-                'routeName': null,
-                'wireToolName': null,
-                'error': `PRV-007 privateCall: Tool "${toolName}" not found in schema "${namespace}".`,
-                'fix': available.length > 0 ? `Available tool(s): ${available}` : 'The schema declares no tools.'
+                'kind': 'tool',
+                'routeName': matchedTool[ 'routeName' ],
+                'wireToolName': matchedTool[ 'wireToolName' ],
+                'resourceName': null,
+                'queryName': null,
+                'error': null,
+                'fix': null
             }
         }
 
-        return { 'routeName': matched[ 'routeName' ], 'wireToolName': matched[ 'wireToolName' ], 'error': null, 'fix': null }
+        // Memo 157 Kap 2 — resource-query resolution. Mirrors CallCommand.#callResourceQuery
+        // and ServeCommand: the advertised, call-resolvable AND serve-registered name is
+        // `${queryName}_${namespace}` (search == call == serve). The raw query name is also
+        // accepted as a convenience.
+        const resources = main[ 'resources' ] || {}
+        const resourceCandidates = Object.entries( resources )
+            .reduce( ( acc, [ resourceName, resourceDef ] ) => {
+                Object.keys( resourceDef[ 'queries' ] || {} )
+                    .forEach( ( queryName ) => {
+                        acc.push( { resourceName, queryName, 'wireToolName': `${queryName}_${namespace}` } )
+                    } )
+
+                return acc
+            }, [] )
+
+        const matchedResource = resourceCandidates
+            .find( ( entry ) => entry[ 'wireToolName' ] === toolName || entry[ 'queryName' ] === toolName )
+
+        if( matchedResource !== undefined ) {
+            return {
+                'kind': 'resource',
+                'routeName': null,
+                'wireToolName': matchedResource[ 'wireToolName' ],
+                'resourceName': matchedResource[ 'resourceName' ],
+                'queryName': matchedResource[ 'queryName' ],
+                'error': null,
+                'fix': null
+            }
+        }
+
+        const available = [ ...toolCandidates, ...resourceCandidates ]
+            .map( ( entry ) => entry[ 'wireToolName' ] )
+            .join( ', ' )
+
+        return {
+            'kind': null,
+            'routeName': null,
+            'wireToolName': null,
+            'resourceName': null,
+            'queryName': null,
+            'error': `PRV-007 privateCall: Tool "${toolName}" not found in schema "${namespace}".`,
+            'fix': available.length > 0 ? `Available tool(s)/quer(y|ies): ${available}` : 'The schema declares no tools or resource queries.'
+        }
     }
 
 

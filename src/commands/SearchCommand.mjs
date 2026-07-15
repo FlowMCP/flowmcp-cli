@@ -242,21 +242,30 @@ class SearchCommand {
                         if( main && main[ 'resources' ] ) {
                             Object.entries( main[ 'resources' ] )
                                 .forEach( ( [ resourceName, resourceConfig ] ) => {
-                                    const resourceDescription = resourceConfig[ 'description' ] || ''
-                                    const toolRef = `${schemaRef}::resource::${resourceName}`
-                                    const toolName = `${resourceName}_${effectiveNamespace}`
+                                    // Memo 157 Kap 2 — advertise per QUERY as `${queryName}_${namespace}`,
+                                    // the SAME name call resolves and serve registers (search == call ==
+                                    // serve). Resources without queries (markdown `about` docs) are not
+                                    // callable tools and are skipped — not listed as `${resourceName}_…`.
+                                    const queries = resourceConfig[ 'queries' ] || {}
 
-                                    tools.push( {
-                                        toolRef,
-                                        toolName,
-                                        schemaRef,
-                                        'routeName': resourceName,
-                                        'namespace': effectiveNamespace,
-                                        'description': resourceDescription,
-                                        'tags': main[ 'tags' ] || [],
-                                        'schemaName': main[ 'name' ] || '',
-                                        'type': 'resource'
-                                    } )
+                                    Object.entries( queries )
+                                        .forEach( ( [ queryName, queryDef ] ) => {
+                                            const queryDescription = queryDef[ 'description' ] || resourceConfig[ 'description' ] || ''
+                                            const toolRef = `${schemaRef}::resource::${resourceName}::${queryName}`
+                                            const toolName = `${queryName}_${effectiveNamespace}`
+
+                                            tools.push( {
+                                                toolRef,
+                                                toolName,
+                                                schemaRef,
+                                                'routeName': queryName,
+                                                'namespace': effectiveNamespace,
+                                                'description': queryDescription,
+                                                'tags': main[ 'tags' ] || [],
+                                                'schemaName': main[ 'name' ] || '',
+                                                'type': 'resource'
+                                            } )
+                                        } )
                                 } )
                         }
 

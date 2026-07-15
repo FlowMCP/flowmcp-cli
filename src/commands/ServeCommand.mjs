@@ -1,4 +1,4 @@
-import { FlowMCP } from 'flowmcp'
+import { FlowMCP, ZodBuilder } from 'flowmcp'
 
 import { appConfig } from '../data/config.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
@@ -188,7 +188,11 @@ class ServeCommand {
                                         return
                                     }
 
-                                    server.tool( toolName, description, {}, async ( args ) => {
+                                    // Memo 157 Kap 2 — real Zod from the query's parameters (was an
+                                    // empty `{}`, leaving the MCP host with no input schema).
+                                    const queryZod = ServeCommand.buildResourceQueryZod( { queryDef } )
+
+                                    server.tool( toolName, description, queryZod, async ( args ) => {
                                         const queryHandlerMap = ( resourceHandlerMap[ resourceName ] ) || {}
                                         const { struct } = await FlowMCP.executeResource( {
                                             'resourceDefinition': resourceDef,
@@ -293,6 +297,25 @@ class ServeCommand {
         }
 
         return { 'finalName': baseName, 'skip': true, 'note': `duplicate tool name "${baseName}" cannot be disambiguated (same source) — skipped.` }
+    }
+
+
+    // Memo 157 Kap 2 — build the real Zod input shape for a resource query from its
+    // `parameters` (was: an empty `{}`, leaving the MCP host blind to the query inputs).
+    // Reuses the same core ZodBuilder the tool path uses (FlowMCP.prepareServerTool ->
+    // ZodBuilder.getZodSchema). Public because a unit test exercises it directly.
+    static buildResourceQueryZod( { queryDef } ) {
+        const parameters = queryDef !== undefined && queryDef !== null && Array.isArray( queryDef[ 'parameters' ] )
+            ? queryDef[ 'parameters' ]
+            : []
+
+        if( parameters.length === 0 ) {
+            return {}
+        }
+
+        const zod = ZodBuilder.getZodSchema( { 'route': { parameters } } )
+
+        return zod
     }
 
 

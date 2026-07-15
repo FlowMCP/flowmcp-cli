@@ -69,6 +69,20 @@ class CallCommand {
                             } )
                         }
                     } )
+
+                // Memo 157 Kap 2 — resource-query schemas were omitted here entirely. Enumerate
+                // each `resources[].queries` as `${queryName}_${namespace}` (== call == serve == search).
+                // Resources without queries (markdown `about` docs) carry no callable name and are skipped.
+                Object.entries( main[ 'resources' ] || {} )
+                    .forEach( ( [ resourceName, resourceDef ] ) => {
+                        Object.entries( resourceDef[ 'queries' ] || {} )
+                            .forEach( ( [ queryName, queryDef ] ) => {
+                                const toolName = `${queryName}_${namespace}`
+                                const description = queryDef[ 'description' ] || ''
+
+                                tools.push( { toolName, namespace, 'routeName': queryName, description, 'source': source || null, 'type': 'resource' } )
+                            } )
+                    } )
             } )
 
         const result = {
