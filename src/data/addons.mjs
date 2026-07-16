@@ -53,11 +53,13 @@ const ADDON_REGISTRY = {
         'urlMode': true
     },
     'geo-overpass': {
-        // Live-Query add-on (Memo 100). New repo, already named to the geo-*
-        // standard, so `name` matches the published package directly (no held
-        // legacy name). Live HTTP source — not url/file based, urlMode false.
-        'name': 'geo-overpass-toolkit',
-        'source': 'github:FlowMCP/geo-overpass-toolkit',
+        // Live-Query add-on (Memo 100). Renamed repo geo-overpass-toolkit ->
+        // geo-osm-toolkit (Memo 155 F10=A): one OpenStreetMap repo, two backends
+        // (live Overpass + local DuckDB). Registry KEY stays `geo-overpass`
+        // (logical addon id referenced by resources[].source); only the package
+        // name/source follow the rename. Live HTTP source — urlMode false.
+        'name': 'geo-osm-toolkit',
+        'source': 'github:FlowMCP/geo-osm-toolkit',
         'defaultVersion': 'main',
         'urlMode': false
     }

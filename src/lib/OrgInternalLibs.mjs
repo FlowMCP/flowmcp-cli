@@ -18,7 +18,7 @@ class OrgInternalLibs {
         'geo-dzt-toolkit',
         'geo-zhv-toolkit',
         'geo-idbridge-toolkit',
-        'geo-overpass-toolkit',
+        'geo-osm-toolkit',
         'time-csv-toolkit',
         'rpc-benchmark',
         'flowmcp-grading',
