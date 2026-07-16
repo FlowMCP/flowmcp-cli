@@ -365,10 +365,9 @@ class PrivateCommand {
             }
         }
 
-        // Memo 157 Kap 2 — resource-query resolution. Mirrors CallCommand.#callResourceQuery
-        // and ServeCommand: the advertised, call-resolvable AND serve-registered name is
-        // `${queryName}_${namespace}` (search == call == serve). The raw query name is also
-        // accepted as a convenience.
+        // Memo 157 Kap 2 — resource-query resolution. Mirrors CallCommand.#callResourceQuery:
+        // the advertised, call-resolvable name is `${queryName}_${namespace}` (search == call).
+        // The raw query name is also accepted as a convenience.
         const resources = main[ 'resources' ] || {}
         const resourceCandidates = Object.entries( resources )
             .reduce( ( acc, [ resourceName, resourceDef ] ) => {

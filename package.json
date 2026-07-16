@@ -27,7 +27,6 @@
     "test:isolation": "bash scripts/friction-test-isolation.sh"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^12.6.2",
     "chalk": "^5.6.2",
     "ethers": "^6.16.0",

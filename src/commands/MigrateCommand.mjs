@@ -7,16 +7,35 @@ import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { CliOutput } from '../lib/CliOutput.mjs'
 import { FsUtils } from '../lib/FsUtils.mjs'
 import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
-import { ServeCommand } from './ServeCommand.mjs'
 
 
 // Memo 152 / PRD-019 (D-08 cluster "validate-migrate") — `flowmcp migrate` (legacy schema file
 // conversion: routes->tools, version 2.x->3.0.0, 3.x->4.0.0, strip main.skills) and
 // `flowmcp migrate-config` (rewrite a config's group tool refs to v4 spec-ids), extracted from
-// FlowMcpCli. migrateConfig delegates tool-ref parsing to ServeCommand.parseToolRef (F18=A move).
-// FlowMcpCli.migrate / validationMigrate / migrateConfig stay public delegations (index.mjs +
-// tests call them). No back-reference to FlowMcpCli.
+// FlowMcpCli. migrateConfig parses tool refs via MigrateCommand.parseToolRef (Memo 158: relocated
+// here from the removed ServeCommand). FlowMcpCli.migrate / validationMigrate / migrateConfig stay
+// public delegations (index.mjs + tests call them). No back-reference to FlowMcpCli.
 class MigrateCommand {
+    // Memo 158 — relocated here from the removed ServeCommand. Splits a "schemaRef::routeName"
+    // tool reference into its parts; a ref without "::" is a bare schemaRef (routeName null).
+    static #parseToolRefImpl( { toolRef } ) {
+        const separatorIndex = toolRef.indexOf( '::' )
+        if( separatorIndex === -1 ) {
+            return { 'schemaRef': toolRef, 'routeName': null }
+        }
+
+        const schemaRef = toolRef.slice( 0, separatorIndex )
+        const routeName = toolRef.slice( separatorIndex + 2 )
+
+        return { schemaRef, routeName }
+    }
+
+
+    static parseToolRef( { toolRef } ) {
+        return MigrateCommand.#parseToolRefImpl( { toolRef } )
+    }
+
+
     static async migrate( { schemaPath, cwd, all = false, dryRun = false } ) {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
@@ -334,7 +353,7 @@ class MigrateCommand {
                             return
                         }
 
-                        const { schemaRef, routeName } = ServeCommand.parseToolRef( { 'toolRef': toolRef } )
+                        const { schemaRef, routeName } = MigrateCommand.parseToolRef( { 'toolRef': toolRef } )
                         const filePath = join( schemasBaseDir, schemaRef )
                         const { main, error: loadError } = await SchemaLoaderBridge.loadSchema( { filePath } )
 

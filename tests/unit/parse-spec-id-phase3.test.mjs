@@ -1,25 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 
 import { FlowMCP, IdResolver } from 'flowmcp'
-import { ServeCommand } from '../../src/commands/ServeCommand.mjs'
-
-
-// Local re-implementation of the former __testOnly_planServeToolNames hook: plans
-// the pre-serve dedup over a list of tool entries exactly like the serve loop,
-// using the public core FlowMCP.buildToolName + ServeCommand.disambiguateToolName.
-function planServeToolNames( { entries } ) {
-    const registeredToolNames = new Set()
-    const plan = entries
-        .map( ( entry ) => {
-            const { routeName, namespace, source } = entry
-            const { toolName: baseName } = FlowMCP.buildToolName( { routeName, namespace } )
-            const decided = ServeCommand.disambiguateToolName( { baseName, routeName, namespace, source, registeredToolNames } )
-
-            return { baseName, 'finalName': decided.finalName, 'skip': decided.skip, 'note': decided.note }
-        } )
-
-    return { plan, 'registeredNames': [ ...registeredToolNames ] }
-}
 
 
 // ─── PRD-007 — bare namespace (slashCount === 0) ─────────────────────────────
@@ -184,53 +165,7 @@ describe( 'PRD-008 — #buildToolName source coordinate', () => {
 } )
 
 
-// ─── PRD-008 MUST-HAVE — two same-provider folders produce NO duplicate ───────
-
-describe( 'PRD-008 — pre-serve dedup (serve must start without throw)', () => {
-    it( 'two schemaFolders with the same provider register distinct tool names', () => {
-        const entries = [
-            { 'routeName': 'getBalance', 'namespace': 'etherscan', 'source': 'Development' },
-            { 'routeName': 'getBalance', 'namespace': 'etherscan', 'source': 'Production' }
-        ]
-
-        const { plan, registeredNames } = planServeToolNames( { entries } )
-
-        // No skips: both can coexist because the source disambiguates them.
-        expect( plan.every( ( p ) => p.skip === false ) ).toBe( true )
-        // The registered names are UNIQUE — the SDK would otherwise throw.
-        expect( new Set( registeredNames ).size ).toBe( registeredNames.length )
-        expect( registeredNames.length ).toBe( 2 )
-        // First wins the lean name; the second gets the source-qualified name.
-        expect( plan[ 0 ][ 'finalName' ] ).toBe( 'get_balance_etherscan' )
-        expect( plan[ 1 ][ 'finalName' ] ).toBe( 'get_balance_etherscan_production' )
-    } )
-
-    it( 'a non-colliding tool keeps its lean name (no regression)', () => {
-        const entries = [
-            { 'routeName': 'getBalance', 'namespace': 'etherscan', 'source': 'Development' },
-            { 'routeName': 'getPrice', 'namespace': 'moralis', 'source': 'Development' }
-        ]
-
-        const { plan } = planServeToolNames( { entries } )
-
-        expect( plan[ 0 ][ 'finalName' ] ).toBe( 'get_balance_etherscan' )
-        expect( plan[ 1 ][ 'finalName' ] ).toBe( 'get_price_moralis' )
-        expect( plan.every( ( p ) => p.skip === false ) ).toBe( true )
-    } )
-
-    it( 'a duplicate with NO source coordinate is skipped, never throws', () => {
-        // No source -> the second occurrence cannot be disambiguated, so it is
-        // skipped (with a note) instead of crashing the SDK.
-        const entries = [
-            { 'routeName': 'getBalance', 'namespace': 'etherscan', 'source': null },
-            { 'routeName': 'getBalance', 'namespace': 'etherscan', 'source': null }
-        ]
-
-        const { plan, registeredNames } = planServeToolNames( { entries } )
-
-        expect( plan[ 0 ][ 'skip' ] ).toBe( false )
-        expect( plan[ 1 ][ 'skip' ] ).toBe( true )
-        expect( plan[ 1 ][ 'note' ] ).toMatch( /cannot be disambiguated/ )
-        expect( registeredNames.length ).toBe( 1 )
-    } )
-} )
+// Memo 158 — the "PRD-008 pre-serve dedup" describe block was removed together with the serve
+// path (ServeCommand.disambiguateToolName). The underlying core primitive FlowMCP.buildToolName
+// (incl. the disambiguate=true source append) is still covered above in "PRD-008 — #buildToolName
+// source coordinate".

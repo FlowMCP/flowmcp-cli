@@ -6,7 +6,9 @@ Command-line tool for developing, validating, and managing FlowMCP schemas.
 
 ## Description
 
-FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI reads schemas directly from the folders you list in `schemaFolders[]` (one global config), makes every tool immediately callable (no activation step), provides schema validation, live API testing, and an MCP server mode for integration with AI agent frameworks like Claude Code.
+FlowMCP CLI is a developer tool for working with FlowMCP schemas — structured API definitions that enable AI agents to interact with external services. The CLI reads schemas directly from the folders you list in `schemaFolders[]` (one global config), makes every tool immediately callable (no activation step), and provides schema validation and live API testing.
+
+> **MCP server:** `flowmcp run` (the stdio MCP server) and the `@modelcontextprotocol/sdk` dependency have been removed. To serve schemas over MCP, use [`mcp-agent-server`](https://github.com/FlowMCP/mcp-agent-server) or embed the core v4 facade in-process (`FlowMCP.loadSchema()` + `FlowMCP.prepareServerTool()`).
 
 ## Architecture
 
@@ -238,7 +240,6 @@ flowmcp grading export providers/defillama
 | `flowmcp call <tool-name> [json]` | Call a tool with optional JSON input (no activation needed) |
 | `flowmcp call <tool-name> [json] --no-cache` | Call a tool bypassing cache |
 | `flowmcp call <tool-name> [json] --refresh` | Call a tool and refresh cache |
-| `flowmcp run` | Start MCP server (stdio transport) |
 
 ### Diagnostics
 
@@ -456,10 +457,9 @@ flowmcp list
 # 4. Use tools directly
 flowmcp call list-tools
 flowmcp call simple_price_coingecko '{"ids":"bitcoin","vs_currencies":"usd"}'
-
-# 5. Run as MCP server
-flowmcp run
 ```
+
+> To serve schemas over MCP, use [`mcp-agent-server`](https://github.com/FlowMCP/mcp-agent-server) — `flowmcp run` was removed (see note at the top).
 
 ### Schema Development
 

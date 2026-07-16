@@ -183,15 +183,13 @@ describe( 'index.mjs dispatch — diagnostics (status / doctor)', () => {
 } )
 
 
-describe( 'index.mjs dispatch — serve (run) + D-12 --group rejection', () => {
-    it( 'routes `run --group x` to ServeCommand and rejects the removed flag (GRP-001)', async () => {
-        const { stdout, code } = await runCli( { 'args': [ 'run', '--group', 'x' ] } )
+describe( 'index.mjs dispatch — run (stdio MCP server) removed (Memo 158)', () => {
+    it( 'the removed `run` command falls through to the Unknown-command surface', async () => {
+        const { stdout } = await runCli( { 'args': [ 'run' ] } )
         const parsed = JSON.parse( stdout )
 
         expect( parsed[ 'status' ] ).toBe( false )
-        expect( parsed[ 'error' ] ).toContain( 'GRP-001' )
-        expect( parsed[ 'fix' ] ).toContain( 'selection' )
-        expect( code ).toBe( 1 )
+        expect( parsed[ 'error' ] ).toContain( 'Unknown command' )
     } )
 } )
 

@@ -755,17 +755,8 @@ const tree = {
                 output( { result } )
             }
         },
-        'run': {
-            'description': 'Start the MCP server over the configured schemaFolders[] (exits 1 on failure).',
-            'execute': async () => {
-                const { result } = await FlowMcpCli.run( { cwd } )
-
-                if( !result[ 'status' ] ) {
-                    output( { result } )
-                    process.exit( 1 )
-                }
-            }
-        },
+        // Memo 158 — `run` (stdio MCP server) removed together with the MCP SDK. For MCP, use
+        // mcp-agent-server or the in-process core v4 facade (FlowMCP.loadSchema + prepareServerTool).
         // Memo 099 Kap 7 — `import`/`import-registry` removed (no registry/internet sync).
         // Memo 152 / PRD-020 (G-11) — the stranded agent-manifest command was removed (its
         // recovery text pointed at the removed `import-registry`, so it could never succeed).

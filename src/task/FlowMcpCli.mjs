@@ -42,7 +42,6 @@ import { SearchCommand } from '../commands/SearchCommand.mjs'
 import { ListCommand } from '../commands/ListCommand.mjs'
 import { CallCommand } from '../commands/CallCommand.mjs'
 import { PrivateCommand } from '../commands/PrivateCommand.mjs'
-import { ServeCommand } from '../commands/ServeCommand.mjs'
 import { ValidateCommand } from '../commands/ValidateCommand.mjs'
 import { MigrateCommand } from '../commands/MigrateCommand.mjs'
 import { InitCommand } from '../commands/InitCommand.mjs'
@@ -213,12 +212,9 @@ class FlowMcpCli {
     }
 
 
-    // Memo 152 / PRD-019 (D-09 cluster "serve-mcp") — run moved to src/commands/ServeCommand.mjs.
-    // Memo 152 / PRD-020 (D-12 / F18=A) — the --group concept is gone; run serves the whole
-    // configured schemaFolders[] catalog. run stays a public delegation (index.mjs + tests call it).
-    static async run( { cwd } ) {
-        return ServeCommand.run( { cwd } )
-    }
+    // Memo 158 — `flowmcp run` (the stdio MCP server) and ServeCommand were removed together
+    // with the @modelcontextprotocol/sdk dependency. For MCP, use mcp-agent-server or the
+    // in-process core v4 facade (FlowMCP.loadSchema + FlowMCP.prepareServerTool).
 
 
     // Memo 152 / PRD-019 (D-09 cluster "call") — callListTools + callTool (and the private
@@ -362,12 +358,13 @@ class FlowMcpCli {
     // no facade delegation needed (no test binds these private members).
     // ---------------------------------------------------------------------
 
-    // Memo 152 / PRD-019 (D-09) — #parseToolRef moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-019 (D-09) — #parseToolRef moved to ServeCommand; Memo 158 relocated it to
+    // src/commands/MigrateCommand.mjs (MigrateCommand.parseToolRef) when ServeCommand was removed.
 
 
     // Memo 152 / PRD-019 (D-09 cluster "call") — #isSpecId moved to CallCommand.
 
-    // Memo 152 / PRD-019 (D-09) — #filterMainRoutes moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-019 (D-09) — #filterMainRoutes was a serve helper; removed with ServeCommand (Memo 158).
 
 
     // Memo 152 / PRD-019 (D-09 cluster "search-list") — #listAvailableTools /
@@ -382,7 +379,7 @@ class FlowMcpCli {
     // (schemaFolders[] name) is appended ONLY when `disambiguate === true`. Tool
     // names are a Wire-Contract — no silent rename.
 
-    // Memo 152 / PRD-019 (D-09) — #disambiguateToolName moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-019 (D-09) — #disambiguateToolName was a serve helper; removed with ServeCommand (Memo 158).
 
 
     // Memo 152 / PRD-019 (D-08) — #createDemoSchema moved to src/commands/InitCommand.mjs.
@@ -416,8 +413,8 @@ class FlowMcpCli {
 
     // Memo 152 / PRD-020 (D-12 / F18=A) — the group-resolution helpers (default/named group +
     // tool-ref resolution) were deleted: the --group concept is gone (Memo 099, selection
-    // replaces groups). `run` serves the whole schemaFolders[] catalog; `schema-check` requires
-    // a path. parseToolRef + disambiguateToolName remain public in ServeCommand.
+    // replaces groups). `schema-check` requires a path. Memo 158 — `run`/ServeCommand were removed;
+    // parseToolRef now lives in MigrateCommand, disambiguateToolName was serve-only and is gone.
 
 
 
@@ -621,7 +618,7 @@ Note: Run "${cmd} init" first. This is the only interactive command.
     // Memo 152 / PRD-019 (D-08) — #verifyModules moved to src/commands/InitCommand.mjs.
 
 
-    // Memo 152 / PRD-019 (D-09) — #validateEnvParams moved to src/commands/ServeCommand.mjs.
+    // Memo 152 / PRD-019 (D-09) — #validateEnvParams was a serve helper; removed with ServeCommand (Memo 158).
 
 
 

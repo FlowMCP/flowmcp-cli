@@ -1,3 +1,4 @@
+import { appConfig } from '../data/config.mjs'
 import { ADDON_REGISTRY } from '../data/addons.mjs'
 import { ConfigStore } from '../lib/ConfigStore.mjs'
 import { CliOutput } from '../lib/CliOutput.mjs'
@@ -5,7 +6,6 @@ import { SchemaSource } from '../lib/SchemaSource.mjs'
 import { SchemaLoaderBridge } from '../lib/SchemaLoaderBridge.mjs'
 import { ModuleRegistry } from '../lib/ModuleRegistry.mjs'
 import { SqliteGtfsResourceValidator } from '../validators/SqliteGtfsResourceValidator.mjs'
-import { ServeCommand } from './ServeCommand.mjs'
 
 
 // Memo 152 / PRD-019 (D-08 cluster "validate-migrate") — `flowmcp validate` (aka schema-check)
@@ -15,9 +15,28 @@ import { ServeCommand } from './ServeCommand.mjs'
 // it (shared validate-single family). The v4 core surface is read via ModuleRegistry.getV4()
 // (the old #v4Module was a thin delegation to it). Memo 152 / PRD-020 (D-12): the default-group
 // path is gone (a schema path is required); a removed `--group` routes to selection via
-// ServeCommand.legacyGroupResult(). FlowMcpCli.validate / schemas / validationValidate stay
+// ValidateCommand.legacyGroupResult(). FlowMcpCli.validate / schemas / validationValidate stay
 // public delegations (index.mjs + tests call them). No back-reference to FlowMcpCli.
 class ValidateCommand {
+    // Memo 158 — relocated here from the removed ServeCommand (serve/MCP-Server deleted). A
+    // removed `--group` on the argv is rejected fail-loud with a selection hint (Memo 099).
+    static legacyGroupResult() {
+        const hasGroupFlag = process.argv
+            .some( ( arg ) => arg === '--group' || arg.startsWith( '--group=' ) )
+
+        if( hasGroupFlag === false ) {
+            return { 'legacy': false, 'result': null }
+        }
+
+        const result = CliOutput.error( {
+            'error': 'GRP-001 run: the --group flag was removed — groups were replaced by named selections (Memo 099).',
+            'fix': `Use a named selection instead: ${appConfig[ 'cliCommand' ]} dev selection list | show <name>`
+        } )
+
+        return { 'legacy': true, result }
+    }
+
+
     static async schemas() {
         const { initialized, error: initError, fix: initFix } = await ConfigStore.requireInit()
         if( !initialized ) {
@@ -46,7 +65,7 @@ class ValidateCommand {
 
     static async validate( { schemaPath, cwd } ) {
         // Memo 152 / PRD-020 (D-12 / F18=A) — a removed `--group` is rejected with a selection hint.
-        const { legacy, result: legacyResult } = ServeCommand.legacyGroupResult()
+        const { legacy, result: legacyResult } = ValidateCommand.legacyGroupResult()
         if( legacy === true ) {
             return { result: legacyResult }
         }
